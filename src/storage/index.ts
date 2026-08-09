@@ -14,6 +14,7 @@ import { nullMemoryAdapter, type QueryFilter, type ScopedStorage, type Storage, 
 export * from './types.js';
 export * from './sqlite.js';
 export * from './memory.js';
+export * from './chatlog.js';
 
 export interface CreateStorageOptions {
   /** Project root used to resolve a relative storage path. */

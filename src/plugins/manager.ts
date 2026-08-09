@@ -15,7 +15,8 @@ import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
 import type { Registries } from '../core/registries.js';
 import type { Registry, RegisterOptions } from '../core/registry.js';
-import type { MohoMessage, OutboundMessage } from '../core/types.js';
+import type { EmbedCard, MohoMessage, OutboundMessage } from '../core/types.js';
+import type { SessionManagerLike } from '../session/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { ScopedStorage } from '../storage/types.js';
 import type {
@@ -44,6 +45,14 @@ export interface PluginManagerOptions {
   botConfig: ResolvedBotConfig;
   /** Extension registries plugins may add to; entries are reaped on unload. */
   registries: Registries;
+  /**
+   * Optional re-feed into the live pipeline. When supplied, plugins can push a
+   * synthetic message through the real pipeline (persona + session + commands).
+   * Devtools `!act` uses this to inject messages as if from a real user.
+   */
+  pipelineHandle?: (message: MohoMessage) => Promise<void>;
+  /** Optional session store, exposed read-only so plugins can inspect context (e.g. !记忆). */
+  sessions?: SessionManagerLike;
 }
 
 interface LoadedPlugin {
@@ -278,7 +287,7 @@ export class PluginManager {
     return current;
   }
 
-  async executeCommand(name: string, ctx: CommandContext, skip: string[] = []): Promise<string | void> {
+  async executeCommand(name: string, ctx: CommandContext, skip: string[] = []): Promise<string | EmbedCard | void> {
     for (const entry of this.#active(skip)) {
       const command = entry.commands.get(name);
       if (!command) continue;
@@ -364,6 +373,10 @@ export class PluginManager {
       // Registry proxy that stamps every entry with this plugin's id as the
       // source, so #teardown can reap them precisely on unload/reload.
       registry: this.#scopedRegistries(id),
+      pipeline: this.#opts.pipelineHandle
+        ? { handle: (message) => this.#opts.pipelineHandle!(message) }
+        : undefined,
+      sessions: this.#opts.sessions,
     };
   }
 

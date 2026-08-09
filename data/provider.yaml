@@ -1,0 +1,10 @@
+# MohoBot AI provider configuration (AstrBot-style).
+# Provider-level AI settings live here instead of inside each bot config.
+# Secrets use ${ENV_VAR} placeholders resolved from the environment at load.
+# Priority: defaults < this file < global.yaml ai < per-bot ai < env vars.
+
+provider: kilo
+model: stepfun/step-3.7-flash:free
+baseUrl: https://api.kilo.ai/api/gateway/v1
+apiKey: ${KILO_API_KEY}
+temperature: 0.8

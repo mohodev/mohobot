@@ -15,14 +15,54 @@
  * line. Nothing here may throw to the caller.
  */
 
+import { persistChat } from './persist.js';
+import { join } from 'node:path';
+
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
-import type { ChatMessage, MohoMessage, OutboundMessage } from '../core/types.js';
+import type { ChatMessage, EmbedCard, EmbedField, MohoMessage, OutboundMessage } from '../core/types.js';
 import type { AIProvider } from '../ai/types.js';
 import { AIError } from '../ai/types.js';
 import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
+
+/** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
+const EMBED_THEME_COLOR = 0x6a5acd;
+
+/**
+ * Live time + context anchor injected as a second system message on every
+ * AI call. The static systemPrompt (persona) never changes; this carries the
+ * current wall-clock so the model is never temporally disoriented and can
+ * reference "today", "this afternoon", relative times correctly.
+ *
+ * Timezone is Asia/Shanghai (UTC+8) - the bot's primary audience. If you need
+ * per-user timezone, resolve it from the session and pass it in here.
+ */
+export function buildContextAnchor(): string {
+  const now = new Date();
+  const fmt = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  const date = `${get('year')}年${get('month')}${get('day')}日`;
+  const weekday = get('weekday');
+  const time = `${get('hour')}:${get('minute')}`;
+  return [
+    '[上下文锚点 - 系统注入，非用户发言]',
+    `当前时间：${date} ${weekday} ${time}（北京时间 UTC+8）`,
+    '你不知道确切时间，除非用户明确告知或本锚点提供。涉及时间请以上述为准，不要臆测日期或时刻。',
+    '对话历史已按时间顺序提供，请基于上下文连贯回应，记得用户刚才说过的内容。',
+  ].join('\n');
+}
 
 export interface PipelineDeps {
   config: ResolvedBotConfig;
@@ -96,6 +136,8 @@ export class MessagePipeline {
 
   /** Entry point. Never throws, never rejects. */
   async handle(message: MohoMessage): Promise<void> {
+    // Persist to physical chat log first - fire-and-forget, error swallowed.
+    void persistChat(message).catch(() => {});
     try {
       await this.#handleInner(message);
     } catch (error) {
@@ -156,20 +198,36 @@ export class MessagePipeline {
 
     const key = { botId: cfg.id, channelId: message.channel.id, userId: message.author.id };
 
-    let messages: ChatMessage[];
+    // Persist the user turn BEFORE building context, so the model sees its
+    // own prior replies in the right order (no "echo bot" / repetition bugs).
     try {
-      await this.#deps.sessions.append(key, { role: 'user', content: prompt, name: message.author.username });
-      messages = await this.#deps.sessions.buildContext(key, cfg.systemPrompt);
+      await this.#deps.sessions.append(key, {
+        role: 'user',
+        content: prompt,
+        name: message.author.username,
+      });
     } catch (error) {
-      log.error(
-        { err: error instanceof Error ? error.message : String(error) },
-        'session build failed; using bare prompt',
-      );
-      messages = [
-        { role: 'system', content: cfg.systemPrompt },
-        { role: 'user', content: prompt },
-      ];
+      this.#logger.warn({ err: String(error) }, 'failed to persist user turn');
     }
+
+    // Build the context window.
+    let messages: ChatMessage[] = [];
+    let ctxCount = 0;
+    try {
+      messages = await this.#deps.sessions.buildContext(key, cfg.systemPrompt);
+      ctxCount = messages.length;
+    } catch (error) {
+      this.#logger.warn({ channelId: message.channel.id, error: String(error) }, 'session context build failed; using empty context');
+    }
+
+    // Inject a live time/context anchor so the model is never temporally
+    // disoriented. Appended to (not replacing) the static system prompt.
+    const anchor = buildContextAnchor();
+    messages = [
+      { role: 'system', content: cfg.systemPrompt },
+      { role: 'system', content: anchor },
+      ...messages.filter((m) => m.role !== 'system'),
+    ];
 
     if (this.#deps.plugins) {
       await this.#deps.plugins.runBeforeAI(message, messages, cfg.disabledPlugins);
@@ -194,7 +252,6 @@ export class MessagePipeline {
       const kind = error instanceof AIError ? error.kind : 'unknown';
       const detail = error instanceof Error ? error.message : String(error);
       log.error({ kind, err: detail }, 'AI request failed; replying with fallback');
-      // The bot keeps running - the user just gets a friendly notice.
       await this.#reply(message, this.#friendlyError(kind, cfg.ai.fallbackReply));
       return;
     }
@@ -206,8 +263,6 @@ export class MessagePipeline {
     try {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
-      // completeExchange also feeds the long-term MemoryAdapter. Implementations
-      // without one fall back to a plain append.
       if (typeof sessions.completeExchange === 'function') {
         await sessions.completeExchange(key, { role: 'user', content: prompt, name: message.author.username }, assistantTurn);
       } else {
@@ -223,7 +278,7 @@ export class MessagePipeline {
 
   #parseCommand(content: string): { name: string; args: string[] } | undefined {
     const trimmed = content.trim();
-    if (!trimmed.startsWith('!') || trimmed.length < 2) return undefined;
+    if (!trimmed.startsWith('?') || trimmed.length < 2) return undefined;
     const parts = trimmed.slice(1).split(/\s+/);
     const name = parts[0]?.toLowerCase();
     if (!name) return undefined;
@@ -232,34 +287,55 @@ export class MessagePipeline {
 
   async #dispatchCommand(name: string, args: string[], message: MohoMessage, raw: string): Promise<boolean> {
     const cfg = this.#deps.config;
-    const reply = async (text: string) => this.#reply(message, text);
+    const reply = (text: string | EmbedCard): Promise<void> => this.#reply(message, text);
 
-    // Built-ins first so a plugin cannot hijack them.
     if (name === 'reset' || name === 'clear') {
       await this.#deps.sessions
         .clear({ botId: cfg.id, channelId: message.channel.id, userId: message.author.id })
         .catch(() => {});
-      await reply('Context cleared.');
+      await reply({ description: 'Context cleared.', color: EMBED_THEME_COLOR, footer: cfg.name });
       return true;
     }
     if (name === 'help') {
       const pluginCommands = this.#deps.plugins ? [...this.#deps.plugins.commands().keys()] : [];
-      const lines = [
-        '**Built-in commands**',
-        '`!help` help / `!reset` clear context / `!status` runtime status',
-        pluginCommands.length > 0
-          ? `**Plugin commands**\n${pluginCommands.map((c) => `\`!${c}\``).join(' / ')}`
-          : '',
-      ].filter(Boolean);
-      await reply(lines.join('\n'));
+      const fields: EmbedField[] = [
+        { name: '基础', value: '`?help` 帮助 · `?reset` 清上下文 · `?status` 运行状态', inline: false },
+      ];
+      if (pluginCommands.length > 0) {
+        // one field per command group, 25 fields max
+        const cmds = pluginCommands.map((c) => '`!' + c + '`');
+        for (let i = 0; i < cmds.length; i += 6) {
+          fields.push({
+            name: i === 0 ? '插件命令' : '\u200b',
+            value: cmds.slice(i, i + 6).join('  '),
+            inline: false,
+          });
+        }
+      }
+      await reply({
+        title: '墨染荷韵 · 指令帮助',
+        description: '发送 `!` 开头的指令与我交互。',
+        color: EMBED_THEME_COLOR,
+        fields,
+      });
       return true;
     }
     if (name === 'status') {
       const s = this.stats();
-      await reply(
-        `bot: ${cfg.name} / model: ${this.#deps.provider.model} / sessions: ${this.#deps.sessions.size()}\n` +
-          `handled ${s.handled} / replied ${s.replied} / ai failures ${s.aiFailures} / rate limited ${s.rateLimited}`,
-      );
+      await reply({
+        title: 'Status',
+        color: EMBED_THEME_COLOR,
+        fields: [
+          { name: 'Bot', value: cfg.name, inline: true },
+          { name: 'Model', value: this.#deps.provider.model, inline: true },
+          { name: 'Sessions', value: String(this.#deps.sessions.size()), inline: true },
+          { name: 'Handled', value: String(s.handled), inline: true },
+          { name: 'Replied', value: String(s.replied), inline: true },
+          { name: 'AI failures', value: String(s.aiFailures), inline: true },
+          { name: 'Rate limited', value: String(s.rateLimited), inline: true },
+        ],
+        footer: cfg.name,
+      });
       return true;
     }
 
@@ -268,15 +344,23 @@ export class MessagePipeline {
     if (!known.has(name)) return false;
 
     const result = await this.#deps.plugins.executeCommand(name, { message, args, raw, reply }, cfg.disabledPlugins);
-    if (typeof result === 'string' && result.length > 0) await reply(result);
+    if (typeof result === 'string') {
+      if (result.length > 0) await reply(result);
+    } else if (result !== undefined && result !== null) {
+      await reply(result);
+    }
     return true;
   }
 
-  async #reply(message: MohoMessage, content: string): Promise<void> {
+  async #reply(message: MohoMessage, content: string | EmbedCard): Promise<void> {
+    const embed = typeof content === 'object' ? content : undefined;
+    const text = typeof content === 'object' ? '' : content;
+    const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
     try {
       await this.#deps.send({
         channelId: message.channel.id,
-        content,
+        content: safeContent,
+        embed,
         replyToId: message.channel.dm ? undefined : message.id,
         suppressMentions: true,
       });

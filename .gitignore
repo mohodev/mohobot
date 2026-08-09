@@ -1,7 +1,16 @@
 node_modules/
 dist/
-data/
+# runtime data: database + chat logs (contains user conversations)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/chat.migrated/
+# keep persona prompts versioned
+!data/prompts/
+!data/prompts/**
+# secrets
 .env
 .env.local
 *.log
+logs/
 .DS_Store

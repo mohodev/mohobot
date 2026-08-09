@@ -200,7 +200,7 @@ export class ConfigLoader {
       const message = errText(error);
       this.#log.error({ error: message }, 'config reload failed');
       this.#events?.emit('config:reload:failed', { path: this.configDir, error: message });
-      return this.#last ?? this.#fallback();
+      return this.#last ?? (await this.#fallback());
     }
   }
 
@@ -236,12 +236,12 @@ export class ConfigLoader {
         continue;
       }
       seen.add(parsed.data.id);
-      bots.push(this.#resolveBot(parsed.data, global));
+      bots.push(await this.#resolveBot(parsed.data, global));
     }
 
     if (found === 0) {
       this.#log.warn({ dir: this.botsDir }, 'no bot config files found - synthesizing default bot "main"');
-      bots.push(this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global));
+      bots.push(await this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global));
     } else if (bots.length === 0) {
       this.#log.error({ dir: this.botsDir, files: found }, 'every bot config failed validation - no bots loaded');
     }
@@ -255,11 +255,11 @@ export class ConfigLoader {
     };
   }
 
-  #fallback(): ResolvedConfig {
+  async #fallback(): Promise<ResolvedConfig> {
     const global = this.#applyGlobalEnv(GlobalConfigSchema.parse({}));
     return {
       global,
-      bots: [this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global)],
+      bots: [await this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global)],
       rootDir: this.#rootDir,
     };
   }
@@ -321,6 +321,12 @@ export class ConfigLoader {
       };
     }
 
+    // AstrBot-style provider overrides from data/provider.yaml.
+    const providerOverrides = await this.#loadProviderOverrides();
+    if (Object.keys(providerOverrides).length > 0) {
+      data.ai = { ...(data.ai as Record<string, unknown>), ...providerOverrides };
+    }
+
     this.#warnYamlSecrets(file, data);
 
     const parsed = GlobalConfigSchema.safeParse(data);
@@ -375,7 +381,7 @@ export class ConfigLoader {
     return { found: files.length, entries };
   }
 
-  #resolveBot(bot: BotConfig, global: GlobalConfig): ResolvedBotConfig {
+  async #resolveBot(bot: BotConfig, global: GlobalConfig): Promise<ResolvedBotConfig> {
     const prefix = botEnvPrefix(bot.id);
 
     const mergedAi = this.#parseOr(
@@ -416,7 +422,26 @@ export class ConfigLoader {
       else this.#log.warn({ MOHO_ADAPTER: adapterEnv }, 'ignoring empty MOHO_ADAPTER value');
     }
 
-    return { ...bot, adapter, discord, ai, session, memory };
+    // A bot may keep its system prompt in a file (systemPromptFile) instead of
+    // inline YAML - better for large prompts and hot reload. If the file is
+    // missing or unreadable we fall back to the inline/ default systemPrompt.
+    let systemPrompt = bot.systemPrompt;
+    if (bot.systemPromptFile) {
+      try {
+        const promptPath = path.isAbsolute(bot.systemPromptFile)
+          ? bot.systemPromptFile
+          : path.join(this.#rootDir, bot.systemPromptFile);
+        systemPrompt = (await readFile(promptPath, 'utf8')).trimEnd();
+        this.#log.debug({ file: bot.systemPromptFile }, 'loaded system prompt from file');
+      } catch (error) {
+        this.#log.warn(
+          { file: bot.systemPromptFile, error: errText(error) },
+          'systemPromptFile unreadable - using inline systemPrompt',
+        );
+      }
+    }
+
+    return { ...bot, adapter, discord, ai, session, memory, systemPrompt };
   }
 
   #applyGlobalEnv(global: GlobalConfig): GlobalConfig {
@@ -496,5 +521,34 @@ export class ConfigLoader {
       if (bot.ai.apiKey.length > 0) registerSecret(bot.ai.apiKey);
       if (bot.discord.token.length > 0) registerSecret(bot.discord.token);
     }
+  }
+
+  /**
+   * Optional AstrBot-style data/provider.yaml. Merged into the global AI config
+   * (below per-bot ai and environment variables). ${ENV_VAR} placeholders in
+   * any value are resolved from process.env at load time.
+   */
+  async #loadProviderOverrides(): Promise<Record<string, unknown>> {
+    const file = path.join(this.#rootDir, 'data', 'provider.yaml');
+    let text: string;
+    try {
+      text = await readFile(file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      this.#log.warn({ file, error: errText(error) }, 'unable to read provider.yaml - skipping');
+      return {};
+    }
+    const data = parseYaml(text);
+    if (!isRecord(data)) return {};
+    const resolved: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (typeof value === 'string') {
+        resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => process.env[name] ?? '');
+      } else {
+        resolved[key] = value;
+      }
+    }
+    this.#log.debug({ file }, 'loaded provider overrides from data/provider.yaml');
+    return resolved;
   }
 }

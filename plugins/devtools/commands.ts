@@ -16,6 +16,10 @@ import type { AIProvider, AIUsage } from '../../src/ai/types.js';
 import { AIError } from '../../src/ai/types.js';
 import type { Registries } from '../../src/core/registries.js';
 import { scrub } from '../../src/core/logger.js';
+import type { EmbedCard, EmbedField, MohoMessage } from '../../src/core/types.js';
+import type { Session, SessionManagerLike } from '../../src/session/types.js';
+import { readdirSync } from 'node:fs';
+import path from 'node:path';
 
 /** Hard cap on `!bench` iterations - a debug command must not become a load test. */
 export const MAX_BENCH_RUNS = 5;
@@ -23,6 +27,15 @@ export const MAX_BENCH_RUNS = 5;
 export const DEFAULT_REPLY_LIMIT = 1500;
 
 export const REDACTED = '[REDACTED]';
+
+/** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
+const CARD_COLOR = 0x6a5acd;
+const CARD_FOOTER = 'devtools';
+
+/** Wrap a block of text into a themed EmbedCard. */
+function card(description: string, extra: Partial<EmbedCard> = {}): EmbedCard {
+  return { description, color: CARD_COLOR, footer: CARD_FOOTER, ...extra };
+}
 
 export interface DevtoolsDeps {
   /**
@@ -37,6 +50,10 @@ export interface DevtoolsDeps {
   now?: () => number;
   /** Max characters of an AI reply echoed back. */
   replyLimit?: number;
+  /** Live session store, exposed read-only for inspect commands (e.g. !记忆). */
+  sessions?: SessionManagerLike;
+  /** Live pipeline handle, used to re-feed a synthetic command (e.g. !清空 -> !clear). */
+  pipeline?: { handle(message: MohoMessage): Promise<void> };
 }
 
 const SENSITIVE_HEADERS = new Set([
@@ -121,9 +138,9 @@ function clock(deps: DevtoolsDeps): () => number {
  * This is the whole point of the plugin: the reply you see came from one
  * isolated call with no context, so a bad answer cannot be blamed on history.
  */
-export async function cmdAi(deps: DevtoolsDeps, args: string[]): Promise<string> {
+export async function cmdAi(deps: DevtoolsDeps, args: string[]): Promise<EmbedCard> {
   const prompt = args.join(' ').trim();
-  if (prompt.length === 0) return 'usage: !ai <prompt>  (single request, no session history)';
+  if (prompt.length === 0) return card('usage: !ai <prompt>  (single request, no session history)');
 
   const ai = deps.botConfig.ai;
   const now = clock(deps);
@@ -132,7 +149,7 @@ export async function cmdAi(deps: DevtoolsDeps, args: string[]): Promise<string>
   try {
     provider = await deps.getProvider();
   } catch (error) {
-    return `[ai] provider unavailable: ${describeError(error)}`;
+    return card(`[ai] provider unavailable: ${describeError(error)}`);
   }
 
   const started = now();
@@ -144,24 +161,24 @@ export async function cmdAi(deps: DevtoolsDeps, args: string[]): Promise<string>
     });
     const elapsed = now() - started;
     const body = truncate(scrub(response.content.trim()), deps.replyLimit ?? DEFAULT_REPLY_LIMIT);
-    return [
+    return card([
       `[ai] provider=${provider.name} model=${response.model} ${elapsed}ms ` +
         `(provider ${response.ms}ms) finish=${response.finishReason ?? 'n/a'} ${formatUsage(response.usage)}`,
       body.length > 0 ? body : '(empty reply)',
-    ].join('\n');
+    ].join('\n'));
   } catch (error) {
     const elapsed = now() - started;
-    return `[ai] failed after ${elapsed}ms - ${describeError(error)}`;
+    return card(`[ai] failed after ${elapsed}ms - ${describeError(error)}`);
   }
 }
 
 /** `!models` - what the provider registry currently holds. */
-export function cmdModels(deps: DevtoolsDeps): string {
+export function cmdModels(deps: DevtoolsDeps): EmbedCard {
   try {
     const ai = deps.botConfig.ai;
     const active = isMockMode(ai) ? 'mock' : (ai.provider || 'openai-compatible').toLowerCase();
     const entries = deps.registries.providers.list().sort((a, b) => a.name.localeCompare(b.name));
-    if (entries.length === 0) return '[models] no AI providers registered';
+    if (entries.length === 0) return card('[models] no AI providers registered');
 
     const lines = entries.map((entry) => {
       const marker = entry.name === active ? ' <- active' : '';
@@ -171,14 +188,14 @@ export function cmdModels(deps: DevtoolsDeps): string {
     const note = isMockMode(ai)
       ? `  note: running in MOCK mode (${ai.apiKey.trim().length === 0 ? 'no API key' : 'model=mock'})`
       : '';
-    return scrub([`[models] ${entries.length} registered, bot model=${ai.model}`, ...lines, note].filter(Boolean).join('\n'));
+    return card(scrub([`[models] ${entries.length} registered, bot model=${ai.model}`, ...lines, note].filter(Boolean).join('\n')));
   } catch (error) {
-    return `[models] failed: ${describeError(error)}`;
+    return card(`[models] failed: ${describeError(error)}`);
   }
 }
 
 /** `!diag` - one snapshot of every extension point plus this bot's wiring. */
-export function cmdDiag(deps: DevtoolsDeps): string {
+export function cmdDiag(deps: DevtoolsDeps): EmbedCard {
   try {
     const bot = deps.botConfig;
     const ai = bot.ai;
@@ -198,7 +215,7 @@ export function cmdDiag(deps: DevtoolsDeps): string {
       .map(([k, v]) => `${k}: ${v}`)
       .join(' | ');
 
-    return scrub(
+    return card(scrub(
       [
         '[diag] registries',
         section('providers', reg.providers.list()),
@@ -214,9 +231,9 @@ export function cmdDiag(deps: DevtoolsDeps): string {
         '[diag] request headers (redacted)',
         `  ${headers}`,
       ].join('\n'),
-    );
+    ));
   } catch (error) {
-    return `[diag] failed: ${describeError(error)}`;
+    return card(`[diag] failed: ${describeError(error)}`);
   }
 }
 
@@ -269,13 +286,13 @@ export async function benchmark(deps: DevtoolsDeps, runs: number, prompt: string
 }
 
 /** `!bench <n> <prompt>` - latency spread and success rate over n requests. */
-export async function cmdBench(deps: DevtoolsDeps, args: string[]): Promise<string> {
+export async function cmdBench(deps: DevtoolsDeps, args: string[]): Promise<EmbedCard> {
   const rawCount = args[0] ?? '';
   const parsed = Number.parseInt(rawCount, 10);
   const prompt = args.slice(1).join(' ').trim();
 
   if (!Number.isFinite(parsed) || parsed < 1 || prompt.length === 0) {
-    return `usage: !bench <n> <prompt>  (n between 1 and ${MAX_BENCH_RUNS})`;
+    return card(`usage: !bench <n> <prompt>  (n between 1 and ${MAX_BENCH_RUNS})`);
   }
 
   const runs = Math.min(parsed, MAX_BENCH_RUNS);
@@ -285,7 +302,7 @@ export async function cmdBench(deps: DevtoolsDeps, args: string[]): Promise<stri
   try {
     result = await benchmark(deps, runs, prompt);
   } catch (error) {
-    return `[bench] failed: ${describeError(error)}`;
+    return card(`[bench] failed: ${describeError(error)}`);
   }
 
   const rate = result.runs > 0 ? Math.round((result.ok / result.runs) * 1000) / 10 : 0;
@@ -294,5 +311,105 @@ export async function cmdBench(deps: DevtoolsDeps, args: string[]): Promise<stri
     `  latency min=${result.minMs}ms max=${result.maxMs}ms avg=${result.avgMs.toFixed(1)}ms`,
   ];
   if (result.firstError) lines.push(`  first error: ${result.firstError}`);
-  return scrub(lines.join('\n'));
+  return card(scrub(lines.join('\n')));
+}
+
+
+/**
+ * `!清空` - clear the current user's session context.
+ *
+ * Reuses the pipeline's built-in `!clear` command rather than touching the
+ * session store directly: we re-feed a synthetic `!clear` message through the
+ * REAL pipeline, so the exact same clear path (and its "Context cleared."
+ * reply) runs. One source of truth for clearing.
+ */
+export async function cmdClear(deps: DevtoolsDeps, message: MohoMessage): Promise<string | void> {
+  if (!deps.pipeline) return '[清空] pipeline unavailable (bot not fully started)';
+  const pipe = deps.pipeline;
+  const src = message;
+  const synthetic: MohoMessage = {
+    id: src.id,
+    platform: src.platform,
+    botId: src.botId,
+    channel: src.channel,
+    author: src.author,
+    content: '!clear',
+    mentionsBot: false,
+    attachments: [],
+    createdAt: Date.now(),
+  };
+  await pipe.handle(synthetic);
+  // The re-fed !clear replies "Context cleared." itself; stay silent here.
+  return undefined;
+}
+
+/**
+ * `!记忆` - show the current session's recent history: message count plus a
+ * short summary of the latest turns. Pure read against the session store.
+ */
+export async function cmdMemory(deps: DevtoolsDeps, message: MohoMessage): Promise<EmbedCard> {
+  if (!deps.sessions) return card('[记忆] session store unavailable (bot not fully started)');
+  const key = {
+    botId: deps.botConfig.id,
+    channelId: message.channel.id,
+    userId: message.author.id,
+  };
+  let session: Session;
+  try {
+    session = await deps.sessions.get(key);
+  } catch (error) {
+    return card(`[记忆] failed to read session: ${describeError(error)}`);
+  }
+  const messages = session.messages ?? [];
+  const count = messages.length;
+  const limit = deps.botConfig.session.maxMessages;
+  if (count === 0) {
+    return card(`[记忆] 当前会话为空（还没有对话记录）。上下文上限 ${limit} 条。`, { title: '记忆' });
+  }
+  const recent = messages.slice(-5);
+  const fields: EmbedField[] = recent.map((m, i) => ({
+    name: `[${m.role}] #${count - recent.length + i + 1}`,
+    value: m.content.replace(/\s+/g, ' ').trim().slice(0, 120) || '(empty)',
+    inline: false,
+  }));
+  return card(`当前会话共 ${count} 条（上下文上限 ${limit} 条）。最近 ${recent.length} 条：`, {
+    title: '记忆',
+    fields,
+  });
+}
+
+/**
+ * `!换人` - list the available personas (data/prompts/*.md) and the active one.
+ *
+ * A full runtime persona switch needs per-user persona infrastructure + hot
+ * reload, which is out of scope for this MVP; here we surface the choices and
+ * explain what switching would require. `!换人 <file>` notes the requested one.
+ */
+export function cmdSwitchPersona(deps: DevtoolsDeps, args: string[]): EmbedCard {
+  const current = deps.botConfig.systemPromptFile ?? '(inline systemPrompt - 未使用文件)';
+  let files: string[] = [];
+  try {
+    const dir = path.join(process.cwd(), 'data', 'prompts');
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith('.md'))
+      .sort();
+  } catch {
+    files = [];
+  }
+  if (files.length === 0) {
+    return card(`[换人] 可用人格目录 data/prompts/ 为空或不可读。当前人格：${current}`, { title: '换人' });
+  }
+  const activeIdx = files.findIndex((f) => f === current || `data/prompts/${f}` === current);
+  const list = files
+    .map((f, i) => `  ${i + 1}. ${f}${i === activeIdx ? '  <- 当前' : ''}`)
+    .join('\n');
+  if (args.length > 0) {
+    const want = args.join(' ').trim();
+    const match = files.find((f) => f === want || f === `${want}.md`);
+    const note = match
+      ? `  请求切换到 "${match}"。注意：完整运行时切换需多人基础设施（每用户人格 + 热重载），当前版本仅列出可用项，不会真正改写人格。`
+      : `  未找到人格 "${want}"。可用：${files.join(', ')}`;
+    return card(scrub(`[换人] 当前人格：${current}\n可用人格：\n${list}\n${note}`), { title: '换人' });
+  }
+  return card(scrub(`[换人] 当前人格：${current}\n可用人格：\n${list}\n切换：!换人 <文件名>（完整切换需多人基础设施，当前仅列出）`), { title: '换人' });
 }

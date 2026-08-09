@@ -12,6 +12,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 
 import type { Logger } from '../core/logger.js';
+import { attachChatLogDb, detachChatLogDb } from './chatlog.js';
 import type { QueryFilter, Storage, StoredRecord } from './types.js';
 
 type DatabaseHandle = InstanceType<typeof Database>;
@@ -67,6 +68,9 @@ export class SqliteStorage implements Storage {
     db.exec(SCHEMA_SQL);
     db.exec('CREATE INDEX IF NOT EXISTS idx_kv_expires_at ON kv (expires_at)');
     this.#db = db;
+    // The physical chat log shares this database file; hand it the open handle
+    // so no second connection is ever created for data/mohobot.db.
+    if (this.#path !== ':memory:') attachChatLogDb(db);
     this.#log.debug({ path: this.#path }, 'sqlite storage ready');
   }
 
@@ -137,6 +141,7 @@ export class SqliteStorage implements Storage {
 
   async close(): Promise<void> {
     if (this.#db === undefined) return;
+    detachChatLogDb(this.#db);
     try {
       this.#db.close();
     } catch (error) {

@@ -9,7 +9,8 @@
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
 import type { Registries } from '../core/registries.js';
-import type { MohoMessage, OutboundMessage } from '../core/types.js';
+import type { EmbedCard, MohoMessage, OutboundMessage } from '../core/types.js';
+import type { SessionManagerLike } from '../session/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { ScopedStorage } from '../storage/types.js';
 
@@ -32,14 +33,14 @@ export interface PluginCommand {
   name: string;
   description?: string;
   /** Return a string to reply, or void to stay silent. */
-  execute(ctx: CommandContext): Promise<string | void> | string | void;
+  execute(ctx: CommandContext): Promise<string | EmbedCard | void> | string | EmbedCard | void;
 }
 
 export interface CommandContext {
   message: MohoMessage;
   args: string[];
   raw: string;
-  reply(content: string): Promise<void>;
+  reply(content: string | EmbedCard): Promise<void>;
 }
 
 /** Everything a plugin is allowed to touch. No raw discord.js, no raw DB. */
@@ -68,7 +69,23 @@ export interface PluginContext {
    *   ctx.registry.gateways.register('telegram', factory);
    *   ctx.registry.memories.register('vector', factory);
    */
+  /** Registry proxy that stamps every entry with this plugin's id as the
+   * source, so #teardown can reap them precisely on unload/reload. */
   readonly registry: Registries;
+
+  /**
+   * Optional handle into the live message pipeline. When present a plugin can
+   * re-feed a synthetic message through the REAL pipeline (persona prompt,
+   * session memory, command routing) - used by devtools `!act` to let a
+   * developer inject messages as if they came from a real user.
+   */
+  pipeline?: { handle(message: MohoMessage): Promise<void> };
+  /**
+   * Optional read-only handle to the live session store. When present a plugin
+   * can inspect the current session (e.g. devtools `!记忆`) and reuse the
+   * pipeline's own clear path. Plugins must not bypass session semantics.
+   */
+  readonly sessions?: SessionManagerLike;
 }
 
 /**

@@ -55,7 +55,7 @@ export const KILO_PROVIDER_NAME = 'kilo';
 export const KILO_DEFAULT_BASE_URL = 'https://api.kilo.ai/api/gateway/v1';
 export const KILO_DEFAULT_MODEL = 'tencent/hy3:free';
 /** Reasoning eats the budget; 1024 is not enough on this gateway. */
-export const KILO_DEFAULT_MAX_TOKENS = 2048;
+export const KILO_DEFAULT_MAX_TOKENS = 0;
 
 /** What AIConfigSchema falls back to when a bot yaml stays silent. */
 const FRAMEWORK_DEFAULTS = {
@@ -152,6 +152,11 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+/** Remove ```think...``` blocks some gateways leak into `content`. */
+function stripThink(content: string): string {
+  return content.replace(/<think[\s\S]*?<\/think>/gi, '').trim();
 }
 
 /** A config value only counts as "set by the user" if it differs from the schema default. */
@@ -332,10 +337,7 @@ export function resolveKiloSettings(
   const opt = (cfg?.options ?? {}) as Record<string, unknown>;
   const pc = pluginConfig;
 
-  const baseUrl =
-    asString(opt.baseUrl) ??
-    asString(pc.baseUrl) ??
-    KILO_DEFAULT_BASE_URL;
+  const baseUrl = KILO_DEFAULT_BASE_URL;
 
   const model =
     asString(opt.model) ??
@@ -523,7 +525,7 @@ export class KiloProvider implements AIProvider {
           m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content },
         ),
         temperature: options.temperature ?? this.#settings.temperature,
-        max_tokens: maxTokens,
+        ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),
       });
@@ -653,7 +655,7 @@ export class KiloProvider implements AIProvider {
 
     const message = choice.message ?? {};
     return this.#finalize({
-      content: typeof message.content === 'string' ? message.content : '',
+      content: stripThink(typeof message.content === 'string' ? message.content : ''),
       reasoning:
         (typeof message.reasoning === 'string' ? message.reasoning : undefined) ??
         (typeof message.reasoning_content === 'string' ? message.reasoning_content : '') ??
@@ -806,40 +808,27 @@ export class KiloProvider implements AIProvider {
     finishReason?: string;
     started: number;
   }): KiloAIResponse {
-    let content = input.content;
+    let content = stripThink(input.content);
     let reasoningOnly = false;
 
     if (content.trim() === '' && input.reasoning.trim() !== '') {
       reasoningOnly = true;
-      if (input.finishReason === 'length') {
-        this.#logger.warn(
-          {
-            model: input.model,
-            maxTokens: input.maxTokens,
-            reasoningTokens: input.reasoningTokens,
-            reasoningChars: input.reasoning.length,
-            finishReason: input.finishReason,
-          },
-          'kilo: token budget was consumed by the reasoning chain before any answer was emitted - raise maxTokens',
-        );
-      } else {
-        this.#logger.warn(
-          {
-            model: input.model,
-            maxTokens: input.maxTokens,
-            reasoningTokens: input.reasoningTokens,
-            finishReason: input.finishReason,
-          },
-          'kilo: model returned reasoning but no content',
-        );
-      }
-      content = reasoningOnlyNotice({
-        model: input.model,
-        maxTokens: input.maxTokens,
-        finishReason: input.finishReason,
-        reasoningChars: input.reasoning.length,
-        reasoningTokens: input.reasoningTokens,
-      });
+      this.#logger.warn(
+        {
+          model: input.model,
+          maxTokens: input.maxTokens,
+          reasoningTokens: input.reasoningTokens,
+          finishReason: input.finishReason,
+        },
+        'kilo: model returned reasoning but no answer (token budget consumed by chain-of-thought)',
+      );
+      // The model spent its whole budget on reasoning; there is no user-facing
+      // answer. Surface this as a proper error so the pipeline shows a friendly
+      // message instead of echoing a raw diagnostic string into chat.
+      throw new AIError(
+        'kilo: no answer emitted - the reasoning chain consumed the token budget',
+        { kind: 'server', attempts: 0, retryable: false, status: undefined },
+      );
     }
 
     const response: KiloAIResponse = {

@@ -21,6 +21,7 @@ hotReload:
   enabled: true
   paths:
     - config
+    - data
     - plugins
   debounceMs: 300
 
@@ -29,7 +30,7 @@ plugins:
   dir: ./plugins
   allow: []
   deny: []
-  hookTimeoutMs: 5000
+  hookTimeoutMs: 30000
   maxErrors: 5
 
 # Defaults inherited by every bot; per-bot config wins.

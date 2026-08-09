@@ -13,6 +13,7 @@ import {
   Partials,
   type ClientEvents,
   type Interaction,
+  type APIEmbed,
   type Message,
   type MessageCreateOptions,
   type SendableChannels,
@@ -21,9 +22,10 @@ import {
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
-import type { BotId, OutboundMessage } from '../core/types.js';
+import type { BotId, EmbedCard, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
 import type { Gateway, GatewayStatus } from './types.js';
+import { persistChat } from '../pipeline/persist.js';
 
 export interface DiscordGatewayOptions {
   botId: BotId;
@@ -34,6 +36,14 @@ export interface DiscordGatewayOptions {
 
 const LOGIN_TIMEOUT_MS = 30_000;
 const CHUNK_DELAY_MS = 250;
+
+// Discord Embed hard limits (see discord.js EmbedBuilder source).
+const EMBED_TITLE_LIMIT = 256;
+const EMBED_DESCRIPTION_LIMIT = 4096;
+const EMBED_FOOTER_LIMIT = 2048;
+const EMBED_FIELD_NAME_LIMIT = 256;
+const EMBED_FIELD_VALUE_LIMIT = 1024;
+const EMBED_FIELD_COUNT = 25;
 
 function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -264,6 +274,25 @@ export class DiscordGateway implements Gateway {
 
     const cfg = this.#config.discord;
 
+    // Physical chat log: record every inbound message before any filtering,
+    // so the transcript is complete (including messages the bot does not reply to).
+    const content = typeof message.content === 'string' ? message.content : '';
+    void persistChat({
+      id: message.id,
+      platform: 'discord',
+      botId: this.botId,
+      channel: { id: message.channelId, dm: message.channel.type === ChannelType.DM },
+      author: {
+        id: message.author.id,
+        username: message.author.username,
+        bot: message.author.bot,
+      },
+      content,
+      mentionsBot: message.mentions.users.has(self.id),
+      attachments: [],
+      createdAt: message.createdTimestamp ?? Date.now(),
+    }).catch(() => {});
+
     // Cheapest filters first.
     if (message.author.id === self.id) return;
     if (cfg.ignoreBots && message.author.bot) return;
@@ -280,11 +309,10 @@ export class DiscordGateway implements Gateway {
 
     if (isDM) {
       if (!cfg.respondToDM) return;
-    } else if (cfg.respondToMentionsOnly && !mentionsBot) {
+    } else if (cfg.respondToMentionsOnly && !mentionsBot && !content.startsWith('?')) {
       return;
     }
 
-    const content = typeof message.content === 'string' ? message.content : '';
     if (content.trim().length === 0 && message.attachments.size === 0) return;
 
     const channel = message.channel;
@@ -389,6 +417,29 @@ export class DiscordGateway implements Gateway {
     if (!client) throw new Error(`[${this.botId}] gateway is not started`);
 
     const suppress = out.suppressMentions === true;
+
+    // Embed path: render a rich card when present and within Discord's hard limits.
+    if (out.embed && this.#embedFits(out.embed)) {
+      try {
+        const channel = await this.#resolveSendable(out.channelId);
+        const payload: MessageCreateOptions = { embeds: [this.#toApiEmbed(out.embed)] };
+        if (out.replyToId) {
+          payload.reply = { messageReference: out.replyToId, failIfNotExists: false };
+        }
+        if (suppress) {
+          payload.allowedMentions = { parse: [], repliedUser: false };
+        }
+        await channel.send(payload);
+        return;
+      } catch (error) {
+        const reason = describeError(error);
+        this.#lastError = reason;
+        this.#logger.error({ err: error, channelId: out.channelId }, 'discord embed send failed');
+        throw new Error(`[${this.botId}] failed to send embed to channel ${out.channelId}: ${reason}`);
+      }
+    }
+
+    // Plain text path - also the fallback when an embed would overflow the limits.
     const text = sanitizeOutbound(out.content, { suppressMentions: suppress });
     const chunks = chunkContent(text, this.#config.discord.maxReplyLength);
     if (chunks.length === 0) return;
@@ -413,6 +464,44 @@ export class DiscordGateway implements Gateway {
       this.#logger.error({ err: error, channelId: out.channelId }, 'discord send failed');
       throw new Error(`[${this.botId}] failed to send to channel ${out.channelId}: ${reason}`);
     }
+  }
+
+  /** Translate a platform-agnostic EmbedCard into a Discord REST embed. */
+  #toApiEmbed(card: EmbedCard): APIEmbed {
+    const self = this.#client?.user;
+    const embed: APIEmbed = {};
+    if (card.title !== undefined) embed.title = card.title;
+    if (card.description !== undefined) embed.description = card.description;
+    if (card.color !== undefined) embed.color = card.color;
+    if (card.footer !== undefined) embed.footer = { text: card.footer };
+    // Auto-stamp author (bot identity) + timestamp so every card has a consistent header.
+    embed.author = {
+      name: self?.username ?? this.botId,
+      icon_url: self?.displayAvatarURL({ size: 64 }),
+    };
+    embed.timestamp = new Date().toISOString();
+    if (card.fields && card.fields.length > 0) {
+      embed.fields = card.fields.map((f) => ({
+        name: f.name,
+        value: f.value,
+        inline: f.inline === true,
+      }));
+    }
+    return embed;
+  }
+
+  /** True when every part of the card fits Discord's hard embed limits. */
+  #embedFits(card: EmbedCard): boolean {
+    if (card.title !== undefined && card.title.length > EMBED_TITLE_LIMIT) return false;
+    if (card.description !== undefined && card.description.length > EMBED_DESCRIPTION_LIMIT) return false;
+    if (card.footer !== undefined && card.footer.length > EMBED_FOOTER_LIMIT) return false;
+    const fields = card.fields ?? [];
+    if (fields.length > EMBED_FIELD_COUNT) return false;
+    for (const f of fields) {
+      if (f.name.length > EMBED_FIELD_NAME_LIMIT) return false;
+      if (f.value.length > EMBED_FIELD_VALUE_LIMIT) return false;
+    }
+    return true;
   }
 
   /** Best effort typing indicator. Never throws. */
