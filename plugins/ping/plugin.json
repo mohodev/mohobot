@@ -1,0 +1,9 @@
+{
+  "name": "ping",
+  "version": "1.0.0",
+  "description": "Reference plugin: !ping command, message hook, and storage usage.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 100
+}

@@ -1,0 +1,500 @@
+/**
+ * Configuration loader: YAML files + environment -> ResolvedConfig.
+ *
+ * Design rules:
+ *  - Booting must never be blocked by a bad config file. Anything unreadable is
+ *    logged and skipped; the runtime falls back to schema defaults.
+ *  - Environment variables ALWAYS win over YAML (per-bot env wins over global env).
+ *  - Secrets found in YAML are accepted but loudly warned about, and every
+ *    resolved secret is registered with the logger so it can never be printed.
+ */
+
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { parse as parseYaml } from 'yaml';
+import type { z } from 'zod';
+
+import type { EventBus } from '../core/event.js';
+import { registerSecret, type Logger } from '../core/logger.js';
+import {
+  AIConfigSchema,
+  BotConfigSchema,
+  GlobalConfigSchema,
+  LogLevelSchema,
+  MemoryConfigSchema,
+  SessionConfigSchema,
+  type AIConfig,
+  type BotConfig,
+  type GlobalConfig,
+  type ResolvedBotConfig,
+  type ResolvedConfig,
+} from './schema.js';
+
+const BOT_FILE_RE = /\.ya?ml$/i;
+
+export interface ConfigLoaderOptions {
+  /** Project root. `config/` and `.env` are resolved against it. */
+  rootDir: string;
+  logger: Logger;
+  events?: EventBus;
+}
+
+interface RawBotFile {
+  file: string;
+  stem: string;
+  data: Record<string, unknown>;
+}
+
+interface GlobalLoad {
+  global: GlobalConfig;
+  /** Set when global.yaml exists but is unusable (syntax or schema failure). */
+  fatal?: string;
+  fatalPath?: string;
+}
+
+interface BuildResult {
+  config: ResolvedConfig;
+  fatal?: string;
+  fatalPath?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function pruneUndefined(input: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!isRecord(input)) return out;
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function errText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatIssues(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const where = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+    return `${where}: ${issue.message}`;
+  });
+}
+
+/** MOHO_BOT_<ID>_ prefix, non-alphanumerics folded to underscore. */
+export function botEnvPrefix(id: string): string {
+  return `MOHO_BOT_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`;
+}
+
+/** Reads process.env, treating blank values as unset. */
+function envValue(key: string): string | undefined {
+  const raw = process.env[key];
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** Minimal KEY=VALUE .env parser - no dotenv dependency. */
+export function parseEnvFile(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq <= 0) continue;
+    let key = trimmed.slice(0, eq).trim();
+    if (key.startsWith('export ')) key = key.slice('export '.length).trim();
+    if (key.length === 0) continue;
+    let value = trimmed.slice(eq + 1).trim();
+    const quoted =
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+    if (quoted) {
+      value = value.slice(1, -1);
+    } else {
+      // Strip a trailing ` # comment` from unquoted values.
+      const comment = value.search(/\s#/);
+      if (comment >= 0) value = value.slice(0, comment).trimEnd();
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+export class ConfigLoader {
+  readonly #rootDir: string;
+  readonly #log: Logger;
+  readonly #events: EventBus | undefined;
+  #last: ResolvedConfig | undefined;
+
+  constructor(opts: ConfigLoaderOptions) {
+    this.#rootDir = path.resolve(opts.rootDir);
+    this.#log = opts.logger.child({ mod: 'config' });
+    this.#events = opts.events;
+  }
+
+  get rootDir(): string {
+    return this.#rootDir;
+  }
+
+  get configDir(): string {
+    return path.join(this.#rootDir, 'config');
+  }
+
+  get globalFile(): string {
+    return path.join(this.configDir, 'global.yaml');
+  }
+
+  get botsDir(): string {
+    return path.join(this.configDir, 'bots');
+  }
+
+  /** Last successfully resolved config, if any. */
+  current(): ResolvedConfig | undefined {
+    return this.#last;
+  }
+
+  async load(): Promise<ResolvedConfig> {
+    const built = await this.#build();
+    if (built.fatal !== undefined) {
+      this.#log.warn(
+        { file: built.fatalPath, error: built.fatal },
+        'global config unusable - falling back to defaults',
+      );
+    }
+    this.#last = built.config;
+    return built.config;
+  }
+
+  /**
+   * Re-read everything. Never throws. On failure the previously good config is
+   * returned unchanged and `config:reload:failed` is emitted.
+   */
+  async reload(): Promise<ResolvedConfig> {
+    try {
+      const built = await this.#build();
+      if (built.fatal !== undefined && this.#last !== undefined) {
+        this.#log.error(
+          { file: built.fatalPath, error: built.fatal },
+          'config reload rejected - keeping previous config',
+        );
+        this.#events?.emit('config:reload:failed', {
+          path: built.fatalPath ?? this.configDir,
+          error: built.fatal,
+        });
+        return this.#last;
+      }
+      if (built.fatal !== undefined) {
+        this.#log.warn(
+          { file: built.fatalPath, error: built.fatal },
+          'global config unusable - falling back to defaults',
+        );
+      }
+      this.#last = built.config;
+      this.#log.info({ bots: built.config.bots.length }, 'config reloaded');
+      this.#events?.emit('config:reload', { path: this.configDir });
+      return built.config;
+    } catch (error) {
+      const message = errText(error);
+      this.#log.error({ error: message }, 'config reload failed');
+      this.#events?.emit('config:reload:failed', { path: this.configDir, error: message });
+      return this.#last ?? this.#fallback();
+    }
+  }
+
+  // ---------------------------------------------------------------- internals
+
+  async #build(): Promise<BuildResult> {
+    await this.#loadEnvFile();
+
+    const loaded = await this.#loadGlobal();
+    const global = loaded.global;
+
+    const { found, entries } = await this.#readBotFiles();
+    const bots: ResolvedBotConfig[] = [];
+    const seen = new Set<string>();
+
+    for (const entry of entries) {
+      const data: Record<string, unknown> = { ...entry.data };
+      const rawId = data['id'];
+      if (typeof rawId !== 'string' || rawId.trim().length === 0) data['id'] = entry.stem;
+
+      this.#warnYamlSecrets(entry.file, data);
+
+      const parsed = BotConfigSchema.safeParse(data);
+      if (!parsed.success) {
+        this.#log.error(
+          { file: entry.file, issues: formatIssues(parsed.error) },
+          'invalid bot config - skipping this bot',
+        );
+        continue;
+      }
+      if (seen.has(parsed.data.id)) {
+        this.#log.error({ file: entry.file, id: parsed.data.id }, 'duplicate bot id - skipping');
+        continue;
+      }
+      seen.add(parsed.data.id);
+      bots.push(this.#resolveBot(parsed.data, global));
+    }
+
+    if (found === 0) {
+      this.#log.warn({ dir: this.botsDir }, 'no bot config files found - synthesizing default bot "main"');
+      bots.push(this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global));
+    } else if (bots.length === 0) {
+      this.#log.error({ dir: this.botsDir, files: found }, 'every bot config failed validation - no bots loaded');
+    }
+
+    this.#registerSecrets(global, bots);
+
+    return {
+      config: { global, bots, rootDir: this.#rootDir },
+      fatal: loaded.fatal,
+      fatalPath: loaded.fatalPath,
+    };
+  }
+
+  #fallback(): ResolvedConfig {
+    const global = this.#applyGlobalEnv(GlobalConfigSchema.parse({}));
+    return {
+      global,
+      bots: [this.#resolveBot(BotConfigSchema.parse({ id: 'main' }), global)],
+      rootDir: this.#rootDir,
+    };
+  }
+
+  async #loadEnvFile(): Promise<void> {
+    const envPath = path.join(this.#rootDir, '.env');
+    let text: string;
+    try {
+      text = await readFile(envPath, 'utf8');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, 'unable to read .env');
+      return;
+    }
+    let applied = 0;
+    for (const [key, value] of Object.entries(parseEnvFile(text))) {
+      // A real environment variable always beats the .env file.
+      if (process.env[key] !== undefined) continue;
+      process.env[key] = value;
+      applied += 1;
+    }
+    if (applied > 0) this.#log.debug({ file: envPath, keys: applied }, 'loaded .env');
+  }
+
+  async #loadGlobal(): Promise<GlobalLoad> {
+    const file = this.globalFile;
+    let text: string;
+    try {
+      text = await readFile(file, 'utf8');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        this.#log.warn({ file }, 'global.yaml not found - using schema defaults');
+        return { global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})) };
+      }
+      return {
+        global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})),
+        fatal: errText(error),
+        fatalPath: file,
+      };
+    }
+
+    let data: unknown;
+    try {
+      data = parseYaml(text) ?? {};
+    } catch (error) {
+      return {
+        global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})),
+        fatal: `invalid YAML: ${errText(error)}`,
+        fatalPath: file,
+      };
+    }
+
+    if (!isRecord(data)) {
+      return {
+        global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})),
+        fatal: 'global.yaml must contain a mapping',
+        fatalPath: file,
+      };
+    }
+
+    this.#warnYamlSecrets(file, data);
+
+    const parsed = GlobalConfigSchema.safeParse(data);
+    if (!parsed.success) {
+      return {
+        global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})),
+        fatal: formatIssues(parsed.error).join('; '),
+        fatalPath: file,
+      };
+    }
+    return { global: this.#applyGlobalEnv(parsed.data) };
+  }
+
+  async #readBotFiles(): Promise<{ found: number; entries: RawBotFile[] }> {
+    let names: string[];
+    try {
+      names = await readdir(this.botsDir);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        this.#log.warn({ dir: this.botsDir, error: errText(error) }, 'unable to read bots directory');
+      }
+      return { found: 0, entries: [] };
+    }
+
+    const files = names.filter((name) => BOT_FILE_RE.test(name)).sort();
+    const entries: RawBotFile[] = [];
+
+    for (const name of files) {
+      const file = path.join(this.botsDir, name);
+      let text: string;
+      try {
+        text = await readFile(file, 'utf8');
+      } catch (error) {
+        this.#log.error({ file, error: errText(error) }, 'unable to read bot config - skipping');
+        continue;
+      }
+      let data: unknown;
+      try {
+        data = parseYaml(text) ?? {};
+      } catch (error) {
+        this.#log.error({ file, error: errText(error) }, 'invalid YAML in bot config - skipping');
+        continue;
+      }
+      if (!isRecord(data)) {
+        this.#log.error({ file }, 'bot config must contain a mapping - skipping');
+        continue;
+      }
+      entries.push({ file, stem: name.replace(BOT_FILE_RE, ''), data });
+    }
+
+    return { found: files.length, entries };
+  }
+
+  #resolveBot(bot: BotConfig, global: GlobalConfig): ResolvedBotConfig {
+    const prefix = botEnvPrefix(bot.id);
+
+    const mergedAi = this.#parseOr(
+      AIConfigSchema,
+      { ...global.ai, ...pruneUndefined(bot.ai) },
+      global.ai,
+      `bot ${bot.id} ai`,
+    );
+    // Global env first, per-bot env last: the most specific source wins.
+    const withEnv = this.#applyAiEnv(this.#applyAiEnv(mergedAi, ''), prefix);
+    const ai = this.#parseOr(AIConfigSchema, withEnv, mergedAi, `bot ${bot.id} ai (env)`);
+
+    const session = this.#parseOr(
+      SessionConfigSchema,
+      { ...global.session, ...pruneUndefined(bot.session) },
+      global.session,
+      `bot ${bot.id} session`,
+    );
+
+    const memory = this.#parseOr(
+      MemoryConfigSchema,
+      { ...global.memory, ...pruneUndefined(bot.memory) },
+      global.memory,
+      `bot ${bot.id} memory`,
+    );
+
+    const discord = { ...bot.discord };
+    const token = envValue(`${prefix}DISCORD_TOKEN`) ?? envValue('DISCORD_TOKEN');
+    if (token !== undefined) discord.token = token;
+
+    // `adapter` is an open registry name, so env can select any registered
+    // gateway (e.g. MOHO_ADAPTER=telegram) without a schema change.
+    let adapter = bot.adapter;
+    const adapterEnv = envValue('MOHO_ADAPTER');
+    if (adapterEnv !== undefined) {
+      const trimmed = adapterEnv.trim().toLowerCase();
+      if (trimmed.length > 0) adapter = trimmed;
+      else this.#log.warn({ MOHO_ADAPTER: adapterEnv }, 'ignoring empty MOHO_ADAPTER value');
+    }
+
+    return { ...bot, adapter, discord, ai, session, memory };
+  }
+
+  #applyGlobalEnv(global: GlobalConfig): GlobalConfig {
+    const next: GlobalConfig = {
+      ...global,
+      storage: { ...global.storage },
+      ai: { ...global.ai },
+      session: { ...global.session },
+      memory: { ...global.memory },
+    };
+
+    const level = envValue('LOG_LEVEL');
+    if (level !== undefined) {
+      const parsed = LogLevelSchema.safeParse(level.toLowerCase());
+      if (parsed.success) next.logLevel = parsed.data;
+      else this.#log.warn({ LOG_LEVEL: level }, 'ignoring invalid LOG_LEVEL value');
+    }
+
+    const storagePath = envValue('MOHO_STORAGE_PATH');
+    if (storagePath !== undefined) next.storage.path = storagePath;
+
+    next.ai = this.#applyAiEnv(next.ai, '');
+    return next;
+  }
+
+  #applyAiEnv(ai: AIConfig, prefix: string): AIConfig {
+    const out: AIConfig = { ...ai };
+
+    const apiKey = envValue(`${prefix}AI_API_KEY`);
+    if (apiKey !== undefined) out.apiKey = apiKey;
+
+    const model = envValue(`${prefix}AI_MODEL`);
+    if (model !== undefined) out.model = model;
+
+    const baseUrl = envValue(`${prefix}AI_BASE_URL`);
+    if (baseUrl !== undefined) {
+      const parsed = AIConfigSchema.shape.baseUrl.safeParse(baseUrl);
+      if (parsed.success) out.baseUrl = parsed.data;
+      else this.#log.warn({ key: `${prefix}AI_BASE_URL`, value: baseUrl }, 'ignoring invalid base URL');
+    }
+
+    return out;
+  }
+
+  #parseOr<S extends z.ZodTypeAny>(schema: S, value: unknown, fallback: z.output<S>, label: string): z.output<S> {
+    const parsed = schema.safeParse(value);
+    if (parsed.success) return parsed.data as z.output<S>;
+    this.#log.warn({ section: label, issues: formatIssues(parsed.error) }, 'invalid config section - using inherited values');
+    return fallback;
+  }
+
+  #warnYamlSecrets(file: string, data: Record<string, unknown>): void {
+    const ai = data['ai'];
+    if (isRecord(ai)) {
+      const apiKey = ai['apiKey'];
+      if (typeof apiKey === 'string' && apiKey.trim().length > 0) {
+        registerSecret(apiKey);
+        this.#log.warn({ file, field: 'ai.apiKey' }, 'API key found in YAML - move it to the environment (AI_API_KEY)');
+      }
+    }
+    const discord = data['discord'];
+    if (isRecord(discord)) {
+      const token = discord['token'];
+      if (typeof token === 'string' && token.trim().length > 0) {
+        registerSecret(token);
+        this.#log.warn(
+          { file, field: 'discord.token' },
+          'Discord token found in YAML - move it to the environment (DISCORD_TOKEN)',
+        );
+      }
+    }
+  }
+
+  #registerSecrets(global: GlobalConfig, bots: ResolvedBotConfig[]): void {
+    if (global.ai.apiKey.length > 0) registerSecret(global.ai.apiKey);
+    for (const bot of bots) {
+      if (bot.ai.apiKey.length > 0) registerSecret(bot.ai.apiKey);
+      if (bot.discord.token.length > 0) registerSecret(bot.discord.token);
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "//": "The root tsconfig.json deliberately excludes plugins/, so `npx tsc --noEmit` never sees this plugin. This config type-checks it with the exact same strict options: npx tsc -p plugins/kilo-provider/tsconfig.json",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}
