@@ -29,7 +29,7 @@ import type { Storage } from './storage/types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
-const ROOT_DIR = process.env.MOHO_ROOT ?? path.resolve(here, '..');
+const ROOT_DIR = process.env.MOHO_ROOT ?? process.cwd();
 
 class Runtime {
   #logger: Logger;

@@ -89,6 +89,13 @@ export const BotConfigSchema = z.object({
    */
   adapter: z.string().default('discord'),
   systemPrompt: z.string().default('You are MohoBot, a helpful Discord assistant. Answer concisely.'),
+  /**
+   * Alternative to systemPrompt: load the system prompt from a file relative
+   * to the project root (e.g. 'prompts/moho-system.md'). Enables large prompts
+   * to live outside YAML and be hot-reloaded by editing the file. If both are
+   * set, systemPromptFile wins.
+   */
+  systemPromptFile: z.string().optional(),
   discord: DiscordConfigSchema.default({}),
   ai: AIConfigSchema.partial().default({}),
   session: SessionConfigSchema.partial().default({}),

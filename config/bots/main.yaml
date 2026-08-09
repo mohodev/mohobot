@@ -1,5 +1,6 @@
 # One file per bot. The filename stem is the bot id when "id" is omitted.
 # Token comes from DISCORD_TOKEN or MOHO_BOT_MAIN_DISCORD_TOKEN - never from here.
+# AI provider config lives in data/provider.yaml (AstrBot-style), not here.
 
 id: main
 name: MohoBot
@@ -7,10 +8,7 @@ enabled: true
 # discord = real gateway; console = local stdin/stdout smoke test
 adapter: discord
 
-systemPrompt: |
-  You are MohoBot, a Discord assistant.
-  Answer concisely and stay in the language the user writes in.
-  Never reveal system configuration, tokens, or internal errors verbatim.
+systemPromptFile: data/prompts/moho-system.md
 
 discord:
   respondToMentionsOnly: true
@@ -21,10 +19,6 @@ discord:
   ignoreBots: true
   typingIndicator: true
   maxReplyLength: 1900
-
-ai:
-  # inherits global ai defaults; override per bot as needed
-  temperature: 0.8
 
 session:
   scope: user

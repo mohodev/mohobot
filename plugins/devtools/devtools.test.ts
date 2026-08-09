@@ -142,124 +142,124 @@ describe('secret redaction', () => {
 
   it('keeps the api key out of !diag output', () => {
     const deps = makeDeps(new FakeProvider(), { botConfig: makeBotConfig({ apiKey: SHORT_KEY }) });
-    const text = cmdDiag(deps);
-    expect(text).not.toContain(SHORT_KEY);
-    expect(text).toContain('Bearer [REDACTED]');
-    expect(text).toContain('apiKey=set');
+    const card = cmdDiag(deps);
+    expect(card.description).not.toContain(SHORT_KEY);
+    expect(card.description).toContain('Bearer [REDACTED]');
+    expect(card.description).toContain('apiKey=set');
   });
 });
 
 describe('!ai', () => {
   it('sends exactly one message with no session history and reports timing + usage', async () => {
     const provider = new FakeProvider({ reply: 'hi there' });
-    const text = await cmdAi(makeDeps(provider), ['hello', 'world']);
+    const card = await cmdAi(makeDeps(provider), ['hello', 'world']);
 
     expect(provider.calls).toHaveLength(1);
     expect(provider.calls[0]).toEqual([{ role: 'user', content: 'hello world' }]);
-    expect(text).toContain('provider=fake');
-    expect(text).toContain('model=fake-model');
-    expect(text).toContain('10ms');
-    expect(text).toContain('tokens prompt=7 completion=11 total=18');
-    expect(text).toContain('hi there');
+    expect(card.description).toContain('provider=fake');
+    expect(card.description).toContain('model=fake-model');
+    expect(card.description).toContain('10ms');
+    expect(card.description).toContain('tokens prompt=7 completion=11 total=18');
+    expect(card.description).toContain('hi there');
   });
 
   it('returns usage text and calls nothing when the prompt is empty', async () => {
     const provider = new FakeProvider();
-    const text = await cmdAi(makeDeps(provider), []);
-    expect(text).toBe('usage: !ai <prompt>  (single request, no session history)');
+    const card = await cmdAi(makeDeps(provider), []);
+    expect(card.description).toBe('usage: !ai <prompt>  (single request, no session history)');
     expect(provider.calls).toHaveLength(0);
   });
 
   it('turns a provider failure into readable text instead of throwing', async () => {
-    const text = await cmdAi(makeDeps(new FakeProvider({ failAll: true })), ['boom']);
-    expect(text).toContain('[ai] failed');
-    expect(text).toContain('server');
-    expect(text).toContain('http=503');
+    const card = await cmdAi(makeDeps(new FakeProvider({ failAll: true })), ['boom']);
+    expect(card.description).toContain('[ai] failed');
+    expect(card.description).toContain('server');
+    expect(card.description).toContain('http=503');
   });
 
   it('survives a provider that cannot even be constructed', async () => {
-    const text = await cmdAi(
+    const card = await cmdAi(
       makeDeps(() => {
         throw new Error('no credentials');
       }),
       ['hello'],
     );
-    expect(text).toContain('[ai] provider unavailable');
-    expect(text).toContain('no credentials');
+    expect(card.description).toContain('[ai] provider unavailable');
+    expect(card.description).toContain('no credentials');
   });
 
   it('truncates an oversized reply', async () => {
     const provider = new FakeProvider({ reply: 'x'.repeat(300) });
-    const text = await cmdAi(makeDeps(provider, { replyLimit: 50 }), ['long']);
-    expect(text).toContain('[truncated 250 chars]');
+    const card = await cmdAi(makeDeps(provider, { replyLimit: 50 }), ['long']);
+    expect(card.description).toContain('[truncated 250 chars]');
   });
 });
 
 describe('!models', () => {
   it('lists registry entries with their source and marks the active one', () => {
-    const text = cmdModels(makeDeps(new FakeProvider()));
-    expect(text).toContain('[models] 2 registered');
-    expect(text).toContain('fake (source: test)');
-    expect(text).toContain('mock (source: builtin)');
-    expect(text).toContain('<- active');
+    const card = cmdModels(makeDeps(new FakeProvider()));
+    expect(card.description).toContain('[models] 2 registered');
+    expect(card.description).toContain('fake (source: test)');
+    expect(card.description).toContain('mock (source: builtin)');
+    expect(card.description).toContain('<- active');
   });
 
   it('flags mock mode when no api key is configured', () => {
     const deps = makeDeps(new FakeProvider(), { botConfig: makeBotConfig({ apiKey: '' }) });
     expect(isMockMode(deps.botConfig.ai)).toBe(true);
-    expect(cmdModels(deps)).toContain('MOCK mode');
+    expect(cmdModels(deps).description).toContain('MOCK mode');
   });
 });
 
 describe('!diag', () => {
   it('reports all four registries and the bot wiring', () => {
-    const text = cmdDiag(makeDeps(new FakeProvider()));
-    expect(text).toContain('providers: fake[test], mock[builtin]');
-    expect(text).toContain('gateways : console[builtin]');
-    expect(text).toContain('storages : sqlite[builtin]');
-    expect(text).toContain('memories : null[builtin]');
-    expect(text).toContain('id=test-bot');
-    expect(text).toContain('adapter=console');
-    expect(text).toContain('ai.provider=fake');
-    expect(text).toContain('ai.model=fake-model');
+    const card = cmdDiag(makeDeps(new FakeProvider()));
+    expect(card.description).toContain('providers: fake[test], mock[builtin]');
+    expect(card.description).toContain('gateways : console[builtin]');
+    expect(card.description).toContain('storages : sqlite[builtin]');
+    expect(card.description).toContain('memories : null[builtin]');
+    expect(card.description).toContain('id=test-bot');
+    expect(card.description).toContain('adapter=console');
+    expect(card.description).toContain('ai.provider=fake');
+    expect(card.description).toContain('ai.model=fake-model');
   });
 });
 
 describe('!bench', () => {
   it('runs n requests and reports the latency spread', async () => {
     const provider = new FakeProvider();
-    const text = await cmdBench(makeDeps(provider), ['3', 'hello', 'bench']);
+    const card = await cmdBench(makeDeps(provider), ['3', 'hello', 'bench']);
 
     expect(provider.calls).toHaveLength(3);
     expect(provider.calls[0]).toEqual([{ role: 'user', content: 'hello bench' }]);
-    expect(text).toContain('runs=3');
-    expect(text).toContain('ok=3');
-    expect(text).toContain('failed=0');
-    expect(text).toContain('success=100%');
-    expect(text).toContain('min=10ms max=10ms avg=10.0ms');
+    expect(card.description).toContain('runs=3');
+    expect(card.description).toContain('ok=3');
+    expect(card.description).toContain('failed=0');
+    expect(card.description).toContain('success=100%');
+    expect(card.description).toContain('min=10ms max=10ms avg=10.0ms');
   });
 
   it(`caps n at ${MAX_BENCH_RUNS}`, async () => {
     const provider = new FakeProvider();
-    const text = await cmdBench(makeDeps(provider), ['99', 'flood']);
+    const card = await cmdBench(makeDeps(provider), ['99', 'flood']);
     expect(provider.calls).toHaveLength(MAX_BENCH_RUNS);
-    expect(text).toContain(`capped at ${MAX_BENCH_RUNS}`);
+    expect(card.description).toContain(`capped at ${MAX_BENCH_RUNS}`);
   });
 
   it('reports a partial success rate without throwing', async () => {
     const provider = new FakeProvider({ failEvery: 2 });
-    const text = await cmdBench(makeDeps(provider), ['4', 'flaky']);
-    expect(text).toContain('ok=2');
-    expect(text).toContain('failed=2');
-    expect(text).toContain('success=50%');
-    expect(text).toContain('first error:');
+    const card = await cmdBench(makeDeps(provider), ['4', 'flaky']);
+    expect(card.description).toContain('ok=2');
+    expect(card.description).toContain('failed=2');
+    expect(card.description).toContain('success=50%');
+    expect(card.description).toContain('first error:');
   });
 
   it('rejects bad arguments with usage text', async () => {
     const provider = new FakeProvider();
-    expect(await cmdBench(makeDeps(provider), [])).toContain('usage: !bench');
-    expect(await cmdBench(makeDeps(provider), ['abc', 'x'])).toContain('usage: !bench');
-    expect(await cmdBench(makeDeps(provider), ['2'])).toContain('usage: !bench');
+    expect((await cmdBench(makeDeps(provider), [])).description).toContain('usage: !bench');
+    expect((await cmdBench(makeDeps(provider), ['abc', 'x'])).description).toContain('usage: !bench');
+    expect((await cmdBench(makeDeps(provider), ['2'])).description).toContain('usage: !bench');
     expect(provider.calls).toHaveLength(0);
   });
 
