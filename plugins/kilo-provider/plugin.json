@@ -1,0 +1,19 @@
+{
+  "name": "kilo-provider",
+  "version": "1.0.0",
+  "description": "Registers the 'kilo' AI provider (Kilo gateway, reasoning-aware, tolerates errors returned as HTTP 200).",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 50,
+  "config": {
+    "baseUrl": "https://api.kilo.ai/api/gateway/v1",
+    "defaultModel": "tencent/hy3:free",
+    "maxTokens": 2048,
+    "temperature": 0.8,
+    "timeoutMs": 90000,
+    "retries": 2,
+    "retryBaseDelayMs": 500,
+    "stream": false
+  }
+}

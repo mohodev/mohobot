@@ -1,0 +1,11 @@
+{
+  "//": "Typecheck for this plugin only. The root tsconfig deliberately excludes plugins/ (rootDir is src), so devtools ships its own project file instead of editing shared config that other work is touching. Run: npx tsc -p plugins/devtools/tsconfig.json",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["../../node_modules", "../../dist"]
+}

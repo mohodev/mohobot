@@ -1,0 +1,12 @@
+{
+  "name": "devtools",
+  "version": "1.0.0",
+  "description": "External AI debugging interface: !ai / !models / !diag / !bench plus a standalone CLI.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 50,
+  "config": {
+    "replyLimit": 1500
+  }
+}

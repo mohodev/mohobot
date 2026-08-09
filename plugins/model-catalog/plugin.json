@@ -1,0 +1,20 @@
+{
+  "name": "model-catalog",
+  "version": "1.0.0",
+  "description": "Kilo gateway model directory: free-model listing, per-model metadata and a catalog metadata linter.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 120,
+  "config": {
+    "baseUrl": "https://api.kilo.ai/api/gateway/v1",
+    "apiKeyEnv": "KILO_API_KEY",
+    "cacheTtlSeconds": 3600,
+    "requestTimeoutMs": 15000,
+    "lintPreviewCount": 10,
+    "probeEnabled": true,
+    "probeTimeoutMs": 20000,
+    "probeBudgetMs": 90000,
+    "probeLimit": 10
+  }
+}

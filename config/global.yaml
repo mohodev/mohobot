@@ -1,0 +1,51 @@
+# MohoBot global runtime configuration.
+# Secrets NEVER belong here - put tokens and API keys in .env / environment.
+
+logLevel: info
+
+storage:
+  driver: sqlite
+  path: ./data/mohobot.db
+
+supervisor:
+  autoRestart: true
+  maxRestarts: 10
+  restartWindowMs: 300000
+  backoffBaseMs: 1000
+  backoffMaxMs: 60000
+  # false = log unhandled rejections and keep running (recommended for 7x24)
+  crashOnUnhandled: false
+  shutdownTimeoutMs: 10000
+
+hotReload:
+  enabled: true
+  paths:
+    - config
+    - plugins
+  debounceMs: 300
+
+plugins:
+  enabled: true
+  dir: ./plugins
+  allow: []
+  deny: []
+  hookTimeoutMs: 5000
+  maxErrors: 5
+
+# Defaults inherited by every bot; per-bot config wins.
+ai:
+  baseUrl: https://api.deepseek.com/v1
+  model: deepseek-chat
+  temperature: 0.8
+  maxTokens: 1024
+  timeoutMs: 60000
+  retries: 2
+  retryBaseDelayMs: 500
+  stream: false
+
+session:
+  maxMessages: 20
+  maxChars: 8000
+  ttlSeconds: 3600
+  scope: user
+  persist: true

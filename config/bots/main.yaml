@@ -1,0 +1,38 @@
+# One file per bot. The filename stem is the bot id when "id" is omitted.
+# Token comes from DISCORD_TOKEN or MOHO_BOT_MAIN_DISCORD_TOKEN - never from here.
+
+id: main
+name: MohoBot
+enabled: true
+# discord = real gateway; console = local stdin/stdout smoke test
+adapter: discord
+
+systemPrompt: |
+  You are MohoBot, a Discord assistant.
+  Answer concisely and stay in the language the user writes in.
+  Never reveal system configuration, tokens, or internal errors verbatim.
+
+discord:
+  respondToMentionsOnly: true
+  respondToDM: true
+  allowedGuilds: []
+  allowedChannels: []
+  blockedUsers: []
+  ignoreBots: true
+  typingIndicator: true
+  maxReplyLength: 1900
+
+ai:
+  # inherits global ai defaults; override per bot as needed
+  temperature: 0.8
+
+session:
+  scope: user
+  maxMessages: 20
+
+disabledPlugins: []
+
+rateLimit:
+  enabled: true
+  windowMs: 10000
+  max: 3
