@@ -2,24 +2,28 @@
 
 > 可长期运行、可扩展、故障隔离的 Discord AI Runtime。
 
-MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 与 Kilo Provider、SQLite 会话持久化、插件热加载、多 Bot、短期会话记忆、长期记忆适配器接口、运行监督与离线测试。
+MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供应商路由、SQLite 会话持久化、Outbox、Embedding/Rerank 语义记忆、世界/设备/关系状态、插件热加载、多 Bot、运行监督、管理 WebUI 和首次启动向导。
 
-> **状态说明：** `webui/` 目前是产品规格，不是已经可用的管理后台。角色系统、世界模拟器、行为引擎、MCP、向量记忆和完整 WebUI 尚未实现。详见 [`webui/index.md`](webui/index.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
+> **状态说明：** MySQL/Redis/Kafka 是可选扩展，远程同步契约已定义但不应在未配置时阻塞本地运行。模型目录是动态参考快照，不把 NVIDIA Free Endpoint 数量写死。详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/IMMERSION.md`](docs/IMMERSION.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
 
 ## 快速开始
 
 ```bash
 npm install
-cp .env.example .env
-# 在 .env 填 DISCORD_TOKEN 和所选 Provider 的 API Key
+npm run setup -- --non-interactive
+# 编辑 .env.local：DISCORD_TOKEN 和所选 Provider 的 API Key
 npm start
 ```
 
-没有凭据也能离线跑通完整消息管线：
+首次启动向导会创建 `.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖。管理 WebUI 默认在 `127.0.0.1:3210`，使用 `MOHO_ADMIN_TOKEN` 登录。
+
+没有凭据也能离线跑通完整自然语言管线：
 
 ```bash
-printf '!help\nhello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
+printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 ```
+
+角色 Bot 不执行 `!` 文本命令；管理 Bot 只接受已鉴权的 `/status`、`?status` 等管理入口。
 
 ## 常用命令
 
@@ -72,7 +76,9 @@ Extension registries: Provider / Gateway / Storage / Memory
 | `MOHO_STORAGE_PATH` | SQLite 路径 |
 | `LOG_LEVEL` | 日志级别 |
 
-`config/global.yaml` 保存运行参数；`data/provider.yaml` 保存 Provider 默认项；密钥不得写进 YAML，哪怕只是注释。
+`config/global.yaml` 保存运行参数；`data/provider.yaml` 保存 Provider 默认项；密钥不得写进 YAML，哪怕只是注释。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
+
+可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
 
 ## 插件
 
@@ -90,11 +96,11 @@ const plugin: Plugin = {
 export default plugin;
 ```
 
-`devtools` 含 `!ai`、`!bench`、`!say` 等管理能力，**默认关闭**。如果要启用，先增加管理员 allowlist，不要直接暴露给公开频道。
+`devtools` 含开发/诊断能力，**默认关闭**。启用后仍只能通过管理员 allowlist、鉴权 Interaction 或本地 WebUI 使用，不会恢复公开 `!` 命令。
 
-## 内置命令
+## 交互入口
 
-`!help` · `!reset` / `!clear` · `!status`
+角色 Bot 不执行 `!` 文本命令。普通 Bot 不注册管理 Slash；墨染荷韵仅对授权管理员注册 `/status`，并支持 WebUI 管理入口。插件命令只能通过经过鉴权的 Interaction 或管理面板触发。
 
 ## 安全提示
 
