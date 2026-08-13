@@ -1,42 +1,10 @@
-# MohoBot global runtime configuration.
-# Secrets NEVER belong here - put tokens and API keys in .env / environment.
+# MohoBot Kilo.ai Provider Configuration
 
-logLevel: info
-
-storage:
-  driver: sqlite
-  path: ./data/mohobot.db
-
-supervisor:
-  autoRestart: true
-  maxRestarts: 10
-  restartWindowMs: 300000
-  backoffBaseMs: 1000
-  backoffMaxMs: 60000
-  # false = log unhandled rejections and keep running (recommended for 7x24)
-  crashOnUnhandled: false
-  shutdownTimeoutMs: 10000
-
-hotReload:
-  enabled: true
-  paths:
-    - config
-    - data
-    - plugins
-  debounceMs: 300
-
-plugins:
-  enabled: true
-  dir: ./plugins
-  allow: []
-  deny: []
-  hookTimeoutMs: 30000
-  maxErrors: 5
-
-# Defaults inherited by every bot; per-bot config wins.
+# 切换到 Kilo.ai 提供商（已对接完成）
 ai:
-  baseUrl: https://api.deepseek.com/v1
-  model: deepseek-chat
+  provider: kilo
+  baseUrl: https://api.kilo.ai/api/gateway/
+  model: tencent/hy3:free
   temperature: 0.8
   maxTokens: 1024
   timeoutMs: 60000
@@ -44,9 +12,13 @@ ai:
   retryBaseDelayMs: 500
   stream: false
 
-session:
-  maxMessages: 20
-  maxChars: 8000
-  ttlSeconds: 3600
-  scope: user
-  persist: true
+# API Key（已完成对接）
+# 建议：放入 .env 文件中
+# MOHO_BOT_MAIN_AI_API_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjE5YWMyZmRhLTM5NjItNGU4My1iZjdlLTdmODcwMWI4ZmRlMCIsImFwaVRva2VuUGVwcGVyIjoiMTRjM2RmZDktNDZiMC00YjliLWIwMTYtMzY1NWJlNDgzMDBlIiwidmVyc2lvbiI6MywiaWF0IjoxNzg2NjAzMjIwLCJleHAiOjE5NDQyODMyMjB9.omYByNZre1ib6TSyhcqwPuoKABgFlbV5QpzpoDoxDx4
+
+# 备用提供商（可选）
+# ai:
+#   provider: openai
+#   baseUrl: https://api.openai.com/v1
+#   model: gpt-4o-mini
+#   apiKey: sk-...

@@ -309,7 +309,7 @@ export class DiscordGateway implements Gateway {
 
     if (isDM) {
       if (!cfg.respondToDM) return;
-    } else if (cfg.respondToMentionsOnly && !mentionsBot && !content.startsWith('?')) {
+    } else if (cfg.respondToMentionsOnly && !mentionsBot && !content.startsWith('!')) {
       return;
     }
 

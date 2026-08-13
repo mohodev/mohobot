@@ -278,7 +278,7 @@ export class MessagePipeline {
 
   #parseCommand(content: string): { name: string; args: string[] } | undefined {
     const trimmed = content.trim();
-    if (!trimmed.startsWith('?') || trimmed.length < 2) return undefined;
+    if (!trimmed.startsWith('!') || trimmed.length < 2) return undefined;
     const parts = trimmed.slice(1).split(/\s+/);
     const name = parts[0]?.toLowerCase();
     if (!name) return undefined;
@@ -299,7 +299,7 @@ export class MessagePipeline {
     if (name === 'help') {
       const pluginCommands = this.#deps.plugins ? [...this.#deps.plugins.commands().keys()] : [];
       const fields: EmbedField[] = [
-        { name: '基础', value: '`?help` 帮助 · `?reset` 清上下文 · `?status` 运行状态', inline: false },
+        { name: '基础', value: '`!help` 帮助 · `!reset` 清上下文 · `!status` 运行状态', inline: false },
       ];
       if (pluginCommands.length > 0) {
         // one field per command group, 25 fields max
