@@ -54,6 +54,63 @@ export interface MohoMessage {
   raw?: unknown;
 }
 
+/** Stable location metadata for Discord lifecycle events. */
+export interface MohoMessageLocation {
+  /** The actual message container. Threads and forum posts keep their own id. */
+  channelId: string;
+  /** Parent text/forum/media channel when the container is a thread/post. */
+  parentChannelId?: string;
+  guildId?: string;
+  kind: 'dm' | 'guild-text' | 'thread' | 'forum-post' | 'unknown';
+}
+
+/** Storage/session signal only. It is never sent through the AI pipeline. */
+export interface MohoMessageUpdate {
+  botId: BotId;
+  platform: Platform;
+  messageId: string;
+  location: MohoMessageLocation;
+  content?: string;
+  authorId?: string;
+  editedAt: number;
+  partial: boolean;
+}
+
+/** Storage/session signal only. Partial deletes may contain ids and location only. */
+export interface MohoMessageDelete {
+  botId: BotId;
+  platform: Platform;
+  messageId: string;
+  location: MohoMessageLocation;
+  authorId?: string;
+  deletedAt: number;
+  partial: boolean;
+}
+
+export interface MohoThreadLifecycle {
+  botId: BotId;
+  platform: Platform;
+  action: 'create' | 'update' | 'delete';
+  /** Thread/forum post id. This is also the channelId used by its messages. */
+  channelId: string;
+  parentChannelId?: string;
+  guildId?: string;
+  name?: string;
+  forumPost: boolean;
+  archived?: boolean;
+  locked?: boolean;
+  partial: boolean;
+  occurredAt: number;
+}
+
+declare module './event.js' {
+  interface MohoEventMap {
+    'message:update': MohoMessageUpdate;
+    'message:delete': MohoMessageDelete;
+    'thread:lifecycle': MohoThreadLifecycle;
+  }
+}
+
 /** A single field row in an embed card. */
 export interface EmbedField {
   name: string;

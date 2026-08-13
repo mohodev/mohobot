@@ -18,6 +18,7 @@ import {
   type Interaction,
   type APIEmbed,
   type Message,
+  type ThreadChannel,
   type MessageCreateOptions,
   type SendableChannels,
 } from 'discord.js';
@@ -25,7 +26,7 @@ import {
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
-import type { BotId, EmbedCard, OutboundMessage } from '../core/types.js';
+import type { BotId, EmbedCard, MohoMessageDelete, MohoMessageLocation, MohoMessageUpdate, MohoThreadLifecycle, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
 import type { Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
@@ -65,6 +66,30 @@ function describeError(error: unknown): string {
   } catch {
     return String(error);
   }
+}
+
+export function discordMessageLocation(message: Pick<Message, 'channelId' | 'guildId' | 'channel'>): MohoMessageLocation {
+  const channel = message.channel;
+  if (channel.isThread()) {
+    const parent = channel.parent;
+    const forumPost = parent?.type === ChannelType.GuildForum || parent?.type === ChannelType.GuildMedia;
+    return { channelId: message.channelId, parentChannelId: channel.parentId ?? undefined, guildId: message.guildId ?? undefined, kind: forumPost ? 'forum-post' : 'thread' };
+  }
+  if (channel.type === ChannelType.DM) return { channelId: message.channelId, kind: 'dm' };
+  return { channelId: message.channelId, guildId: message.guildId ?? undefined, kind: message.guildId ? 'guild-text' : 'unknown' };
+}
+
+export function toMessageUpdateEvent(botId: BotId, message: Message | import('discord.js').PartialMessage, now = Date.now()): MohoMessageUpdate {
+  return { botId, platform: 'discord', messageId: message.id, location: discordMessageLocation(message as Message), content: typeof message.content === 'string' ? message.content : undefined, authorId: message.author?.id, editedAt: message.editedTimestamp ?? now, partial: message.partial };
+}
+
+export function toMessageDeleteEvent(botId: BotId, message: Message | import('discord.js').PartialMessage, now = Date.now()): MohoMessageDelete {
+  return { botId, platform: 'discord', messageId: message.id, location: discordMessageLocation(message as Message), authorId: message.author?.id, deletedAt: now, partial: message.partial };
+}
+
+export function toThreadLifecycleEvent(botId: BotId, action: MohoThreadLifecycle['action'], thread: ThreadChannel, now = Date.now()): MohoThreadLifecycle {
+  const parent = thread.parent;
+  return { botId, platform: 'discord', action, channelId: thread.id, parentChannelId: thread.parentId ?? undefined, guildId: thread.guildId, name: thread.name, forumPost: parent?.type === ChannelType.GuildForum || parent?.type === ChannelType.GuildMedia, archived: thread.archived ?? undefined, locked: thread.locked ?? undefined, partial: false, occurredAt: now };
 }
 
 export class DiscordGateway implements Gateway {
@@ -269,6 +294,26 @@ export class DiscordGateway implements Gateway {
       await this.#onMessage(message);
     });
 
+    this.#on(client, 'messageUpdate', (_oldMessage, newMessage) => {
+      this.#onMessageUpdate(newMessage);
+    });
+
+    this.#on(client, 'messageDelete', (message) => {
+      this.#onMessageDelete(message);
+    });
+
+    this.#on(client, 'threadCreate', (thread) => {
+      this.#onThread('create', thread);
+    });
+
+    this.#on(client, 'threadUpdate', (_oldThread, newThread) => {
+      this.#onThread('update', newThread);
+    });
+
+    this.#on(client, 'threadDelete', (thread) => {
+      this.#onThread('delete', thread);
+    });
+
     this.#on(client, 'interactionCreate', (interaction) => {
       this.#onInteraction(interaction);
     });
@@ -376,6 +421,18 @@ export class DiscordGateway implements Gateway {
     // Persist only messages that passed the bot's access and response filters.
     void persistChat(moho).catch(() => {});
     this.#events.emit('message:create', { message: moho });
+  }
+
+  #onMessageUpdate(message: Message | import('discord.js').PartialMessage): void {
+    this.#events.emit('message:update', toMessageUpdateEvent(this.botId, message));
+  }
+
+  #onMessageDelete(message: Message | import('discord.js').PartialMessage): void {
+    this.#events.emit('message:delete', toMessageDeleteEvent(this.botId, message));
+  }
+
+  #onThread(action: MohoThreadLifecycle['action'], thread: ThreadChannel): void {
+    this.#events.emit('thread:lifecycle', toThreadLifecycleEvent(this.botId, action, thread));
   }
 
   async #isReplyToBot(message: Message, selfId: string): Promise<boolean> {
