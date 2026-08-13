@@ -1,6 +1,7 @@
 {
   "name": "mohobot",
   "version": "1.0.0",
+  "private": true,
   "description": "Multi-Character-AI-Runtime - 拟人化多角色 Discord AI Runtime",
   "type": "module",
   "engines": {

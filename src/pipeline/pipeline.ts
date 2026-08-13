@@ -15,9 +15,6 @@
  * line. Nothing here may throw to the caller.
  */
 
-import { persistChat } from './persist.js';
-import { join } from 'node:path';
-
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
@@ -26,6 +23,11 @@ import type { AIProvider } from '../ai/types.js';
 import { AIError } from '../ai/types.js';
 import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
+import { decodeReplyPlan, deliverySegments, planText, type ReplyPlan } from './reply-plan.js';
+import { TopicBuffer } from './topic-buffer.js';
+import { decideSocially } from './social-decision.js';
+import { DeviceStore } from '../admin/device.js';
+import { WorldStore } from '../admin/world.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -118,11 +120,18 @@ export class MessagePipeline {
   readonly #deps: PipelineDeps;
   readonly #logger: Logger;
   readonly #limiter: RateLimiter;
+  readonly #topics = new TopicBuffer();
+  readonly #device: DeviceStore;
+  readonly #world: WorldStore;
+  readonly #queues = new Map<string, Promise<void>>();
   readonly #stats: PipelineStats = { handled: 0, replied: 0, skipped: 0, aiFailures: 0, rateLimited: 0 };
 
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
     this.#logger = deps.logger.child({ component: 'pipeline' });
+    const root = process.env.MOHO_ROOT || process.cwd();
+    this.#device = new DeviceStore(root);
+    this.#world = new WorldStore(root);
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
   }
 
@@ -134,18 +143,41 @@ export class MessagePipeline {
     this.#limiter.sweep();
   }
 
-  /** Entry point. Never throws, never rejects. */
+  stop(): void { this.#topics.clear(); }
+
+  /** Entry point. Messages sharing one session run in arrival order. Never rejects. */
   async handle(message: MohoMessage): Promise<void> {
-    // Persist to physical chat log first - fire-and-forget, error swallowed.
-    void persistChat(message).catch(() => {});
+    const key = this.#queueKey(message);
+    const merged = await this.#topics.push(key, message);
+    // Earlier callers share the same merged turn; only the newest invocation
+    // owns processing it, so a burst produces one model call and one reply.
+    if (merged.id !== message.id) return;
+    message = merged;
+    const queueKey = this.#queueKey(message);
+    const previous = this.#queues.get(queueKey) ?? Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(async () => {
+        try {
+          await this.#handleInner(message);
+        } catch (error) {
+          this.#logger.error(
+            { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
+            'pipeline crashed (contained)',
+          );
+        }
+      });
+    this.#queues.set(queueKey, current);
     try {
-      await this.#handleInner(message);
-    } catch (error) {
-      this.#logger.error(
-        { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
-        'pipeline crashed (contained)',
-      );
+      await current;
+    } finally {
+      if (this.#queues.get(queueKey) === current) this.#queues.delete(queueKey);
     }
+  }
+
+  #queueKey(message: MohoMessage): string {
+    const user = this.#deps.config.session.scope === 'user' ? `:${message.author.id}` : '';
+    return `${message.botId}:${message.channel.id}${user}`;
   }
 
   async #handleInner(message: MohoMessage): Promise<void> {
@@ -173,19 +205,37 @@ export class MessagePipeline {
       }
     }
 
-    // Built-in + plugin commands, prefix "!".
-    const command = this.#parseCommand(content);
-    if (command) {
-      const handled = await this.#dispatchCommand(command.name, command.args, message, content);
-      if (handled) {
-        this.#stats.replied += 1;
+    // `?` belongs only to the configured administrator bot and allowlisted
+    // people. Everybody else sees it as ordinary text and gets no command
+    // response, preventing privilege probing in public channels.
+    const adminCommand = this.#parseCommand(content, '?');
+    if (adminCommand) {
+      if (cfg.admin.enabled && cfg.admin.userIds.includes(message.author.id)) {
+        const handled = await this.#dispatchAdminCommand(adminCommand.name, adminCommand.args, message);
+        if (handled) { this.#stats.replied += 1; return; }
+      } else {
+        this.#stats.skipped += 1;
         return;
       }
     }
 
+    // Persona bots intentionally have no text command prefix. `!foo` is an
+    // ordinary chat message; operational actions live behind authenticated
+    // admin UI/Discord interactions, never in public text command parsing.
     const prompt = content.trim();
     if (prompt.length === 0) {
       this.#stats.skipped += 1;
+      return;
+    }
+
+    const [device, world] = await Promise.all([this.#device.get(), this.#world.get()]);
+    const social = decideSocially(
+      { ...message, content: prompt },
+      { recentReplies: 0, energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2, deviceDelay: this.#device.shouldDelay(device) },
+    );
+    if (social.action === 'ignore') {
+      this.#stats.skipped += 1;
+      log.debug({ reason: social.reason }, 'social decision skipped model call');
       return;
     }
 
@@ -222,20 +272,16 @@ export class MessagePipeline {
 
     // Inject a live time/context anchor so the model is never temporally
     // disoriented. Appended to (not replacing) the static system prompt.
-    const anchor = buildContextAnchor();
+    const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context()]);
     messages = [
       { role: 'system', content: cfg.systemPrompt },
       { role: 'system', content: anchor },
+      { role: 'system', content: worldContext },
       ...messages.filter((m) => m.role !== 'system'),
     ];
 
     if (this.#deps.plugins) {
       await this.#deps.plugins.runBeforeAI(message, messages, cfg.disabledPlugins);
-    }
-
-    // Typing indicator is best-effort and must not delay or break the reply.
-    if (cfg.discord.typingIndicator && this.#deps.typing) {
-      void this.#deps.typing(message.channel.id).catch(() => {});
     }
 
     let reply: string;
@@ -259,6 +305,12 @@ export class MessagePipeline {
     if (this.#deps.plugins) {
       reply = await this.#deps.plugins.runAfterAI(message, reply, cfg.disabledPlugins);
     }
+    const plan = decodeReplyPlan(reply);
+    if (plan.action === 'ignore') {
+      this.#stats.skipped += 1;
+      return;
+    }
+    reply = planText(plan);
 
     try {
       const sessions = this.#deps.sessions;
@@ -272,19 +324,36 @@ export class MessagePipeline {
       log.warn({ err: error instanceof Error ? error.message : String(error) }, 'failed to persist assistant turn');
     }
 
-    await this.#reply(message, reply);
+    await this.#replyPlan(message, plan);
     this.#stats.replied += 1;
   }
 
-  #parseCommand(content: string): { name: string; args: string[] } | undefined {
+  #parseCommand(content: string, prefix: '?'): { name: string; args: string[] } | undefined {
     const trimmed = content.trim();
-    if (!trimmed.startsWith('!') || trimmed.length < 2) return undefined;
+    if (!trimmed.startsWith(prefix) || trimmed.length < 2) return undefined;
     const parts = trimmed.slice(1).split(/\s+/);
     const name = parts[0]?.toLowerCase();
     if (!name) return undefined;
     return { name, args: parts.slice(1) };
   }
 
+  async #dispatchAdminCommand(name: string, args: string[], message: MohoMessage): Promise<boolean> {
+    if (name === 'admin-help') {
+      await this.#reply(message, '管理指令：`?admin-help` · `?status`。危险操作只能通过本地管理面板二次确认。');
+      return true;
+    }
+    if (name === 'status') {
+      const stats = this.stats();
+      await this.#reply(message, `管理状态：已处理 ${stats.handled}，已回复 ${stats.replied}，AI 失败 ${stats.aiFailures}，限流 ${stats.rateLimited}`);
+      return true;
+    }
+    // Unknown ? commands are intentionally silent, including for admins.
+    return true;
+  }
+
+  /* Text command dispatch is deliberately removed for persona bots. Plugin
+   * commands remain registered for future authenticated Discord interactions
+   * and local admin UI controls, not public `!` messages. */
   async #dispatchCommand(name: string, args: string[], message: MohoMessage, raw: string): Promise<boolean> {
     const cfg = this.#deps.config;
     const reply = (text: string | EmbedCard): Promise<void> => this.#reply(message, text);
@@ -352,7 +421,22 @@ export class MessagePipeline {
     return true;
   }
 
-  async #reply(message: MohoMessage, content: string | EmbedCard): Promise<void> {
+  async #replyPlan(message: MohoMessage, plan: ReplyPlan): Promise<void> {
+    const segments = deliverySegments(plan, message.channel.dm);
+    for (let i = 0; i < segments.length; i += 1) {
+      const segment = segments[i]!;
+      if (this.#deps.config.discord.typingIndicator && this.#deps.typing && segment.typingMs > 0) {
+        void this.#deps.typing(message.channel.id).catch(() => {});
+        await new Promise<void>((resolve) => setTimeout(resolve, segment.typingMs));
+      }
+      await this.#reply(message, segment.text, plan.quote && i === 0);
+      if (segment.pauseAfterMs > 0 && i < segments.length - 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, segment.pauseAfterMs));
+      }
+    }
+  }
+
+  async #reply(message: MohoMessage, content: string | EmbedCard, quote = true): Promise<void> {
     const embed = typeof content === 'object' ? content : undefined;
     const text = typeof content === 'object' ? '' : content;
     const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
@@ -361,7 +445,7 @@ export class MessagePipeline {
         channelId: message.channel.id,
         content: safeContent,
         embed,
-        replyToId: message.channel.dm ? undefined : message.id,
+        replyToId: !quote || message.channel.dm ? undefined : message.id,
         suppressMentions: true,
       });
     } catch (error) {

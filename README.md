@@ -1,61 +1,112 @@
-# MohoBot WebUI 重构计划
+# MohoBot
 
-**目标**：把前端改用 **MDUI** 写出所有功能，参考 **AstrBot** 的风格，确保能用。
+> 可长期运行、可扩展、故障隔离的 Discord AI Runtime。
 
----
+MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 与 Kilo Provider、SQLite 会话持久化、插件热加载、多 Bot、短期会话记忆、长期记忆适配器接口、运行监督与离线测试。
 
-## 1. MDUI 是什么？
+> **状态说明：** `webui/` 目前是产品规格，不是已经可用的管理后台。角色系统、世界模拟器、行为引擎、MCP、向量记忆和完整 WebUI 尚未实现。详见 [`webui/index.md`](webui/index.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
 
-MDUI 是 **MohoBot 官方设计的一套基于 Markdown 的 WebUI 框架**，特点：
+## 快速开始
 
-- 完全使用 Markdown 描述界面
-- 支持动态组件
-- 轻量级
-- 参考 AstrBot 的插件系统
+```bash
+npm install
+cp .env.example .env
+# 在 .env 填 DISCORD_TOKEN 和所选 Provider 的 API Key
+npm start
+```
 
----
+没有凭据也能离线跑通完整消息管线：
 
-## 2. 所有功能清单
+```bash
+printf '!help\nhello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
+```
 
-以下是当前需要实现的全部功能：
+## 常用命令
 
-1. **登录/配置面板**
-2. **角色管理**（创建、修改人格、导入角色）
-3. **内存管理**（短期、中期、长期记忆）
-4. **世界模拟器**（World Simulator）
-5. **行为引擎**（Behavior Engine）
-6. **日志查看器**
-7. **插件管理器**
-8. **MCP 工具管理**
-9. **测试聊天窗口**
-10. **角色互聊窗口**
-11. **管理Bot 操作面板**
-12. **系统状态监控**
+| 命令 | 用途 |
+|---|---|
+| `npm start` | 启动 Runtime |
+| `npm run dev` | 监听源码并重启 |
+| `npm run typecheck` | TypeScript 类型检查 |
+| `npm test` | Vitest 回归测试 |
+| `npm run build` | 构建到 `dist/` |
+| `npx tsx scripts/verify-hotreload.ts` | 验证插件热加载 |
+| `npx tsx scripts/verify-extensibility.ts` | 验证四类扩展点 |
 
----
+## 架构
 
-## 3. 实现步骤
+```text
+Supervisor
+  └─ BotRuntime (每个 Bot 独立)
+       ├─ Gateway: Discord / Console / 插件扩展
+       ├─ MessagePipeline: 过滤 → 命令 → 会话 → AI → 回复
+       ├─ Provider: OpenAI-compatible / Mock / Kilo 插件
+       ├─ SessionManager: 短期上下文 + 持久化 + MemoryAdapter
+       └─ PluginManager: 隔离、超时、热加载、扩展注册
 
-我将按照以下顺序完成：
+Storage: SQLite / Memory
+Extension registries: Provider / Gateway / Storage / Memory
+```
 
-**第一步**：创建 MDUI 基础框架（`webui/` 目录）
+关键约束：
 
-**第二步**：实现登录/配置面板
+- `discord.js` 只允许出现在 `src/discord/`。
+- 同一会话的消息串行处理，避免 AI 回复乱序污染上下文。
+- 插件异常不会拖垮 Runtime；失败加载会回收已注册扩展。
+- 插件入口必须留在插件目录内，包含符号链接边界检查。
+- 密钥只放 `.env`；日志会结构化和文本化脱敏。
+- 入站聊天日志只记录通过访问控制并进入消息管线的消息。
 
-**第三步**：实现角色管理面板
+## 配置
 
-**第四步**：实现其他所有功能
+优先级：Schema 默认值 < `data/provider.yaml` < `config/global.yaml` < `config/bots/*.yaml` < 环境变量。
 
----
+| 环境变量 | 用途 |
+|---|---|
+| `DISCORD_TOKEN` | Discord Bot Token |
+| `MOHO_BOT_<ID>_DISCORD_TOKEN` | 单 Bot Discord Token |
+| `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` | 通用 AI Provider |
+| `MOHO_BOT_<ID>_AI_API_KEY` | 单 Bot AI Key |
+| `KILO_API_KEY` | Kilo Provider |
+| `MOHO_ADAPTER` | `discord` 或 `console` |
+| `MOHO_STORAGE_PATH` | SQLite 路径 |
+| `LOG_LEVEL` | 日志级别 |
 
-**现在可以开始了吗？**
+`config/global.yaml` 保存运行参数；`data/provider.yaml` 保存 Provider 默认项；密钥不得写进 YAML，哪怕只是注释。
 
-请直接回复 **“开始”** 或 **“1”**，我将：
+## 插件
 
-1. 创建 `webui/` 目录
-2. 实现 MDUI 基础框架
-3. 写出第一个功能：**登录/配置面板**
+插件位于 `plugins/<id>/`，入口由 `plugin.json` 指定。示例：
 
----
+```ts
+import type { Plugin } from '../../src/plugins/types.js';
 
-**回复 “开始” 或 “1”** 即可立即执行！
+const plugin: Plugin = {
+  name: 'hello',
+  onLoad(ctx) {
+    ctx.registerCommand({ name: 'hi', execute: () => 'hey!' });
+  },
+};
+export default plugin;
+```
+
+`devtools` 含 `!ai`、`!bench`、`!say` 等管理能力，**默认关闭**。如果要启用，先增加管理员 allowlist，不要直接暴露给公开频道。
+
+## 内置命令
+
+`!help` · `!reset` / `!clear` · `!status`
+
+## 安全提示
+
+仓库曾提交过疑似真实 Kilo Token。当前工作树已移除，但 Git 历史中的值不会因普通删除而消失：必须在 Kilo 后台撤销并轮换，然后按团队策略清理 Git 历史与缓存副本。
+
+## 路线图
+
+1. 管理 API + 鉴权 + 只读状态面板
+2. 角色模型与角色 CRUD / 导入
+3. 可检索长期记忆实现与管理
+4. 测试聊天、角色互聊
+5. 行为引擎、世界状态与事件
+6. MCP 工具权限与审计
+
+不要把规格页当成功能实现；每一阶段必须有 API、UI、权限边界和自动化测试闭环。

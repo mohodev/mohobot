@@ -1,0 +1,37 @@
+# NVIDIA Build Free Endpoint candidates observed from the live Models page.
+# Availability/RPM can change; verify in your NVIDIA account before publishing.
+profiles:
+  nim-embed:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: nvidia/nemotron-3-embed-1b
+    useFor: [memory, semantic-search, event-dedup]
+  nim-embed-multilingual:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: nvidia/llama-nemotron-embed-1b-v2
+    useFor: [memory, multilingual-search]
+  nim-embed-vl:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: nvidia/llama-nemotron-embed-vl-1b-v2
+    useFor: [image-memory, multimodal-search]
+  nim-embed-code:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: nvidia/nv-embedcode-7b-v1
+    useFor: [plugin-code-search]
+  nim-embedqa:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: nvidia/nv-embedqa-e5-v5
+    useFor: [english-retrieval]
+  bge-m3:
+    baseUrl: https://integrate.api.nvidia.com/v1
+    apiKey: ${NVIDIA_API_KEY}
+    model: baai/bge-m3
+    useFor: [multilingual-retrieval]
+
+# Recommended first choice for MohoBot Chinese/mixed-language memory:
+# nim-embed-multilingual. Embedding is asynchronous and never blocks replies.
+default: nim-embed-multilingual

@@ -26,6 +26,7 @@ import { TaskManager } from './core/task-manager.js';
 import { BotRuntime } from './bot/runtime.js';
 import { createStorage } from './storage/index.js';
 import type { Storage } from './storage/types.js';
+import { AdminServer } from './admin/server.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -41,6 +42,7 @@ class Runtime {
   #config!: ResolvedConfig;
   #bots = new Map<string, BotRuntime>();
   #hotReload?: HotReloader;
+  #admin?: AdminServer;
   #shuttingDown = false;
 
   constructor() {
@@ -131,6 +133,21 @@ class Runtime {
         onReload: (event) => this.#onReload(event),
       });
       await this.#hotReload.start();
+    }
+
+    const adminToken = process.env.MOHO_ADMIN_TOKEN?.trim() ?? '';
+    if (adminToken) {
+      this.#admin = new AdminServer({
+        rootDir: ROOT_DIR,
+        host: process.env.MOHO_ADMIN_HOST?.trim() || '127.0.0.1',
+        port: Number.parseInt(process.env.MOHO_ADMIN_PORT ?? '3210', 10) || 3210,
+        token: adminToken,
+        logger: this.#logger,
+        snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
+      });
+      await this.#admin.start();
+    } else {
+      this.#logger.info('admin WebUI disabled; set MOHO_ADMIN_TOKEN in .env.local to enable it');
     }
 
     this.#installSignalHandlers();
@@ -254,6 +271,7 @@ class Runtime {
     timeout.unref?.();
 
     try {
+      await this.#admin?.stop();
       await this.#hotReload?.stop();
       await this.#tasks?.stopAll(3000);
       await this.#supervisor?.shutdown();

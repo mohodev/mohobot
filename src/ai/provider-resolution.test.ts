@@ -55,6 +55,11 @@ describe('createProvider credential gate', () => {
     expect(p.name).toBe(MOCK_PROVIDER);
   });
 
+  it('falls back cleanly when the configured provider is unknown', () => {
+    const p = createProvider(cfg({ provider: 'does-not-exist', apiKey: '' }), { logger });
+    expect(p.name).toBe(MOCK_PROVIDER);
+  });
+
   it('forces mock when model === mock regardless of key', () => {
     const p = createProvider(cfg({ model: 'mock', apiKey: 'whatever' }), { logger });
     expect(p.name).toBe(MOCK_PROVIDER);

@@ -3,7 +3,19 @@
 # AI provider config lives in data/provider.yaml (AstrBot-style), not here.
 
 id: main
-name: MohoBot
+name: 墨染荷韵
+
+# Only this designated administrator persona may process `?` commands.
+# Put actual Discord user IDs here; everyone else receives no response.
+admin:
+  enabled: false
+  userIds: []
+
+# Optional coarse public activity in Discord, projected from the character
+# world state. It never exposes relationship scores, diary text or exact device data.
+presence:
+  enabled: false
+  updateIntervalSeconds: 300
 enabled: true
 # discord = real gateway; console = local stdin/stdout smoke test
 adapter: discord

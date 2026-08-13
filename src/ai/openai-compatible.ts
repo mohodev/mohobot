@@ -245,7 +245,7 @@ export class OpenAICompatibleProvider implements AIProvider {
           signal: controller.signal,
         });
       } catch (error) {
-        throw this.#transportError(error, external, timedOut);
+        throw this.#transportError(error, external, timedOut, timeoutMs);
       }
 
       if (!res.ok) throw await this.#httpError(res);
@@ -259,12 +259,17 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
   }
 
-  #transportError(error: unknown, external: AbortSignal | undefined, timedOut: boolean): AttemptError {
+  #transportError(
+    error: unknown,
+    external: AbortSignal | undefined,
+    timedOut: boolean,
+    timeoutMs = this.#cfg.timeoutMs,
+  ): AttemptError {
     if (external?.aborted) {
       return new AttemptError('request aborted by caller', { kind: 'aborted', retryable: false, cause: error });
     }
     if (timedOut || isAbortLike(error)) {
-      return new AttemptError(`request timed out after ${this.#cfg.timeoutMs}ms`, {
+      return new AttemptError(`request timed out after ${timeoutMs}ms`, {
         kind: 'timeout',
         retryable: true,
         cause: error,

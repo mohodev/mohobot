@@ -119,6 +119,24 @@ describe('PluginManager', () => {
     expect(ids).not.toContain('bad');
   });
 
+  it('reaps staged registry entries when onLoad fails', async () => {
+    await writePlugin(
+      'leaky',
+      `export default {
+         name: 'leaky',
+         onLoad(ctx) {
+           ctx.registry.providers.register('leaked-provider', () => ({}));
+           throw new Error('after register');
+         },
+       };`,
+    );
+    const registries = createRegistries();
+    const pm = makeManager({ registries });
+
+    await expect(pm.load('leaky')).resolves.toBe(false);
+    expect(registries.providers.has('leaked-provider')).toBe(false);
+  });
+
   it('survives a plugin with a syntax error', async () => {
     await writePlugin('broken', `export default { name: 'broken', ;;; }`);
     await writePlugin('ok', `export default { name: 'ok' };`);
@@ -255,6 +273,50 @@ describe('PluginManager', () => {
 
     expect(await pm.load('missing')).toBe(false);
     expect((await pm.runMessageHooks(makeMessage('x'))).reply).toBe('alive');
+  });
+
+  it('rejects plugin ids that escape the configured plugin directory', async () => {
+    const pm = makeManager();
+
+    await expect(pm.load('../outside')).resolves.toBe(false);
+    await expect(pm.load('..')).resolves.toBe(false);
+    await expect(pm.load('')).resolves.toBe(false);
+    expect(pm.list()).toHaveLength(0);
+  });
+
+  it('rejects manifest entry files that escape the plugin directory', async () => {
+    await writePlugin('escape', `export default { name: 'escape' };`, {
+      name: 'escape',
+      main: '../outside.ts',
+    });
+    await fs.writeFile(path.join(dir, 'outside.ts'), `export default { name: 'outside' };`, 'utf8');
+
+    const pm = makeManager();
+    await expect(pm.load('escape')).resolves.toBe(false);
+    expect(pm.list()).toHaveLength(0);
+  });
+
+  it('passes manifest config into a frozen plugin context', async () => {
+    await writePlugin(
+      'configured',
+      `export default {
+         name: 'configured',
+         onLoad(ctx) {
+           ctx.registerCommand({ name: 'setting', execute: () => String(ctx.config.answer) + ':' + Object.isFrozen(ctx.config) });
+         },
+       };`,
+      { name: 'configured', config: { answer: 42 } },
+    );
+
+    const pm = makeManager();
+    await pm.loadAll();
+    const result = await pm.executeCommand('setting', {
+      message: makeMessage('!setting'),
+      args: [],
+      raw: '!setting',
+      reply: async () => {},
+    });
+    expect(result).toBe('42:true');
   });
 
   it('respects allow and deny lists', async () => {

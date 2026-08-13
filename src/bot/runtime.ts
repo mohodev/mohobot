@@ -22,6 +22,7 @@ import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { scopeStorage } from '../storage/index.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
+import { WorldStore } from '../admin/world.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -61,6 +62,7 @@ export class BotRuntime implements Managed {
   #pipeline?: MessagePipeline;
   #unsubscribe: Array<() => void> = [];
   #sweepTaskId?: string;
+  #worldTickTaskId?: string;
   #running = false;
 
   constructor(deps: BotRuntimeDeps) {
@@ -179,6 +181,11 @@ export class BotRuntime implements Managed {
         if (message.botId !== cfg.id) return;
         void this.#pipeline?.handle(message as MohoMessage);
       }),
+      this.#deps.events.on('interaction:create', ({ botId, name, userId, reply }) => {
+        if (botId !== cfg.id || name !== 'status' || !cfg.admin.enabled || !cfg.admin.userIds.includes(userId)) return;
+        const snapshot = this.snapshot();
+        void reply(`状态：${snapshot.running ? '运行中' : '已停止'}\n网关：${snapshot.gateway.connected ? '已连接' : '未连接'}\n模型：${snapshot.provider} / ${snapshot.model}\n会话：${snapshot.sessions}｜已回复：${snapshot.pipeline.replied}｜AI 失败：${snapshot.pipeline.aiFailures}`);
+      }),
     );
 
     await this.#gateway.start();
@@ -191,6 +198,11 @@ export class BotRuntime implements Managed {
         if (removed > 0) this.#logger.debug({ removed }, 'idle sessions swept');
       },
       { name: `${this.name}:sweep`, intervalMs: 60_000, timeoutMs: 10_000 },
+    );
+
+    this.#worldTickTaskId = this.#deps.tasks.spawn(
+      async () => { await new WorldStore(this.#deps.rootDir).tick(); },
+      { name: `${this.name}:world-tick`, intervalMs: 60_000, timeoutMs: 5_000 },
     );
 
     this.#running = true;
@@ -215,6 +227,10 @@ export class BotRuntime implements Managed {
       this.#deps.tasks.cancel(this.#sweepTaskId);
       this.#sweepTaskId = undefined;
     }
+    if (this.#worldTickTaskId) {
+      this.#deps.tasks.cancel(this.#worldTickTaskId);
+      this.#worldTickTaskId = undefined;
+    }
 
     // Each teardown step is independent - one failure must not skip the rest.
     try {
@@ -234,6 +250,7 @@ export class BotRuntime implements Managed {
       this.#logger.warn({ err: String(error) }, 'gateway stop failed');
     }
 
+    this.#pipeline?.stop();
     this.#gateway = undefined;
     this.#pipeline = undefined;
     this.#plugins = undefined;

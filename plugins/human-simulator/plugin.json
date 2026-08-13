@@ -1,0 +1,13 @@
+{
+  "name": "human-simulator",
+  "version": "0.1.0",
+  "description": "Human-like behavior simulation commands and world state",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 80,
+  "config": {
+    "worldFile": "data/world/state.json",
+    "replyNecessity": true,
+    "activeHours": [8, 24]
+  }
+}

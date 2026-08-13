@@ -103,6 +103,28 @@ describe('ConfigLoader', () => {
     expect(cfg.rootDir).toBe(path.resolve(rootDir));
   });
 
+  it('resolves an opt-in administrator bot allowlist', async () => {
+    await writeBot('main.yaml', ['name: 墨染荷韵', 'admin:', '  enabled: true', '  userIds:', '    - "123"', ''].join('\n'));
+    const cfg = await newLoader().load();
+    expect(cfg.bots[0]?.admin).toEqual({ enabled: true, userIds: ['123'] });
+  });
+
+  it('lets global.yaml override data/provider.yaml defaults', async () => {
+    await mkdir(path.join(rootDir, 'data'), { recursive: true });
+    await writeFile(
+      path.join(rootDir, 'data', 'provider.yaml'),
+      ['provider: kilo', 'model: provider-model', 'temperature: 0.1', ''].join('\n'),
+      'utf8',
+    );
+    await writeGlobal(['ai:', '  model: global-model', '  temperature: 0.7', ''].join('\n'));
+    await writeBot('main.yaml', 'name: Main\n');
+
+    const cfg = await newLoader().load();
+    expect(cfg.global.ai.provider).toBe('kilo');
+    expect(cfg.global.ai.model).toBe('global-model');
+    expect(cfg.global.ai.temperature).toBe(0.7);
+  });
+
   it('lets a bot override inherited global ai/session values', async () => {
     await writeGlobal(
       ['ai:', '  model: global-model', '  temperature: 0.2', 'session:', '  maxMessages: 5', '  ttlSeconds: 60', ''].join('\n'),

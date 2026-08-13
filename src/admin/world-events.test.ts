@@ -1,0 +1,4 @@
+import { describe, expect, it } from 'vitest';
+import { activeScheduledEvent, validateScheduledEvent } from './world-events.js';
+const start='2026-08-13T10:00:00.000Z', end='2026-08-13T12:00:00.000Z';
+describe('scheduled world events',()=>{it('validates and activates only confirmed events',()=>{const candidate=validateScheduledEvent({kind:'concert',title:'Live show',startsAt:start,endsAt:end,location:'Shanghai',trust:'candidate'});expect(activeScheduledEvent([candidate],Date.parse(start)+1)).toBeUndefined();candidate.trust='confirmed';expect(activeScheduledEvent([candidate],Date.parse(start)+1)?.kind).toBe('concert');});it('rejects inverted times and unsafe URLs',()=>{expect(()=>validateScheduledEvent({kind:'trip',title:'trip',startsAt:end,endsAt:start,location:'x'})).toThrow();expect(()=>validateScheduledEvent({kind:'news',title:'x',startsAt:start,endsAt:end,location:'x',sourceUrl:'file:///secret'})).toThrow();});});

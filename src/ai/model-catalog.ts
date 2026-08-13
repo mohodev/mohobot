@@ -1,0 +1,37 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+export type ModelCapability = 'chat'|'reasoning'|'vision'|'video'|'embedding'|'rerank'|'ocr'|'translation'|'tts'|'safety'|'image-generation'|'world';
+export interface CatalogModel { id:string; publisher:string; description:string; capabilities:ModelCapability[]; freeEndpoint:boolean; downloadable:boolean; sourceUrl:string; observedAt:string; }
+export interface ModelCatalogSnapshot { source:string; fetchedAt:string; totalModels?:number; freeEndpointCount?:number; page?:number; models:CatalogModel[]; }
+
+export const OBSERVED_NVIDIA_FREE_MODELS: CatalogModel[] = [
+  {id:'nvidia/nemotron-3.5-lightning-30b-a3b',publisher:'NVIDIA',description:'Fast agentic MoE model',capabilities:['chat','reasoning'],freeEndpoint:true,downloadable:true,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b',observedAt:'2026-08-13'},
+  {id:'meta/muse-glimmer-30b',publisher:'Meta',description:'Multimodal reasoning model',capabilities:['chat','reasoning','vision'],freeEndpoint:true,downloadable:true,sourceUrl:'https://build.nvidia.com/meta/muse-glimmer-30b',observedAt:'2026-08-13'},
+  {id:'nvidia/riva-translate-4b-instruct-v2',publisher:'NVIDIA',description:'Translation in 37 languages',capabilities:['translation'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/riva-translate-4b-instruct-v2',observedAt:'2026-08-13'},
+  {id:'nvidia/nemotron-3-embed-1b',publisher:'NVIDIA',description:'Semantic search and RAG embeddings',capabilities:['embedding'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-3-embed-1b',observedAt:'2026-08-13'},
+  {id:'nvidia/nemotron-ocr-v2',publisher:'NVIDIA',description:'Multilingual OCR',capabilities:['ocr','vision'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-ocr-v2',observedAt:'2026-08-13'},
+  {id:'nvidia/nemotron-3-ultra-550b-a55b',publisher:'NVIDIA',description:'Long-context agentic reasoning',capabilities:['chat','reasoning'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b',observedAt:'2026-08-13'},
+  {id:'nvidia/nemotron-3.5-content-safety',publisher:'NVIDIA',description:'Multilingual multimodal safety',capabilities:['safety','vision'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-3.5-content-safety',observedAt:'2026-08-13'},
+  {id:'nvidia/cosmos3-nano',publisher:'NVIDIA',description:'Physics-aware video generation',capabilities:['world','video'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/cosmos3-nano',observedAt:'2026-08-13'},
+  {id:'nvidia/cosmos3-nano-reasoner',publisher:'NVIDIA',description:'Physical-world reasoning over video/image',capabilities:['world','vision','video','reasoning'],freeEndpoint:true,downloadable:true,sourceUrl:'https://build.nvidia.com/nvidia/cosmos3-nano-reasoner',observedAt:'2026-08-13'},
+  {id:'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',publisher:'NVIDIA',description:'Omni-modal reasoning for image/video/speech/text',capabilities:['chat','reasoning','vision','video'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',observedAt:'2026-08-13'},
+  {id:'nvidia/llama-nemotron-embed-1b-v2',publisher:'NVIDIA',description:'Multilingual cross-lingual embedding',capabilities:['embedding'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/llama-nemotron-embed-1b-v2',observedAt:'2026-08-13'},
+  {id:'nvidia/llama-nemotron-embed-vl-1b-v2',publisher:'NVIDIA',description:'Vision-language embedding',capabilities:['embedding','vision'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2',observedAt:'2026-08-13'},
+  {id:'nvidia/nv-embedcode-7b-v1',publisher:'NVIDIA',description:'Code and hybrid retrieval embeddings',capabilities:['embedding'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nv-embedcode-7b-v1',observedAt:'2026-08-13'},
+  {id:'nvidia/nv-embedqa-e5-v5',publisher:'NVIDIA',description:'English QA retrieval embeddings',capabilities:['embedding'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/nv-embedqa-e5-v5',observedAt:'2026-08-13'},
+  {id:'nvidia/rerank-qa-mistral-4b',publisher:'NVIDIA',description:'Passage relevance scoring for retrieval',capabilities:['rerank'],freeEndpoint:true,downloadable:false,sourceUrl:'https://build.nvidia.com/nvidia/rerank-qa-mistral-4b',observedAt:'2026-08-13'},
+];
+
+export class ModelCatalogStore {
+  readonly #file:string;
+  constructor(rootDir:string){this.#file=path.join(rootDir,'data','models','catalog.json');}
+  async get():Promise<ModelCatalogSnapshot>{try{return JSON.parse(await fs.readFile(this.#file,'utf8')) as ModelCatalogSnapshot;}catch{const snapshot={source:'https://build.nvidia.com/models',fetchedAt:new Date().toISOString(),totalModels:124,freeEndpointCount:57,models:OBSERVED_NVIDIA_FREE_MODELS};await this.save(snapshot);return snapshot;}}
+  async save(snapshot:ModelCatalogSnapshot):Promise<void>{await fs.mkdir(path.dirname(this.#file),{recursive:true});await fs.writeFile(this.#file,JSON.stringify(snapshot,null,2)+'\n','utf8');}
+  async merge(models:CatalogModel[], meta:Partial<ModelCatalogSnapshot>={}):Promise<ModelCatalogSnapshot>{const old=await this.get();const map=new Map(old.models.map(m=>[m.id,m]));for(const model of models)map.set(model.id,model);const next={...old,...meta,fetchedAt:new Date().toISOString(),models:[...map.values()].sort((a,b)=>a.id.localeCompare(b.id))};await this.save(next);return next;}
+}
+
+export interface TaskTuning { primaryCapability: ModelCapability; fallbackCapability?: ModelCapability; maxTokens:number; temperature:number; background:boolean; }
+export const TASK_TUNING: Record<string,TaskTuning>={reply:{primaryCapability:'chat',fallbackCapability:'reasoning',maxTokens:700,temperature:.8,background:false},vision:{primaryCapability:'vision',fallbackCapability:'ocr',maxTokens:500,temperature:.2,background:false},embedding:{primaryCapability:'embedding',maxTokens:0,temperature:0,background:true},rerank:{primaryCapability:'rerank',fallbackCapability:'embedding',maxTokens:0,temperature:0,background:true},planner:{primaryCapability:'reasoning',fallbackCapability:'chat',maxTokens:260,temperature:.7,background:true},reflection:{primaryCapability:'chat',maxTokens:350,temperature:.4,background:true},world:{primaryCapability:'world',fallbackCapability:'reasoning',maxTokens:450,temperature:.7,background:true},translation:{primaryCapability:'translation',fallbackCapability:'chat',maxTokens:300,temperature:.2,background:true},safety:{primaryCapability:'safety',fallbackCapability:'chat',maxTokens:240,temperature:0,background:false}};
+
+export function recommend(snapshot:ModelCatalogSnapshot, task:string):CatalogModel[]{const tuning=TASK_TUNING[task];if(!tuning)return[];return snapshot.models.filter(m=>m.freeEndpoint && (m.capabilities.includes(tuning.primaryCapability) || (tuning.fallbackCapability !== undefined && m.capabilities.includes(tuning.fallbackCapability)))).sort((a,b)=>Number(b.capabilities.includes(tuning.primaryCapability))-Number(a.capabilities.includes(tuning.primaryCapability)));}

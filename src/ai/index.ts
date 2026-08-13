@@ -14,6 +14,8 @@ import { registries, type ProviderFactory } from '../core/registries.js';
 import { MockProvider } from './mock.js';
 import { OpenAICompatibleProvider } from './openai-compatible.js';
 import type { AIProvider } from './types.js';
+import { BudgetedProvider } from './router.js';
+import { isProviderProfiles, MultiProviderRouter, type TaskRoute } from './multi-router.js';
 
 export * from './types.js';
 export * from './openai-compatible.js';
@@ -67,26 +69,48 @@ registerBuiltinProviders();
  * taking the bot down.
  */
 export function createProvider(cfg: AIConfig, deps: CreateProviderDeps): AIProvider {
+  const profiles = cfg.options['profiles'];
+  const routes = cfg.options['taskRoutes'];
+  const defaultProfile = cfg.options['defaultProfile'];
+  if (isProviderProfiles(profiles) && typeof defaultProfile === 'string' && profiles[defaultProfile]) {
+    return new MultiProviderRouter({
+      profiles,
+      routes: (routes && typeof routes === 'object' && !Array.isArray(routes) ? routes : {}) as Partial<Record<import('./router.js').ModelTask, TaskRoute>>,
+      defaultProfile,
+      logger: deps.logger,
+    });
+  }
+
   const requested = (cfg.provider ?? BUILTIN_PROVIDER).trim() || BUILTIN_PROVIDER;
-  const useMock =
-    cfg.model === MOCK_PROVIDER ||
-    registries.providers.needsKey(requested, cfg);
+  const resolved = registries.providers.has(requested) ? requested : BUILTIN_PROVIDER;
+  if (resolved !== requested) {
+    deps.logger.warn(
+      { requested, fallback: BUILTIN_PROVIDER, available: registries.providers.names() },
+      'unknown AI provider; falling back',
+    );
+  }
+
+  const useMock = cfg.model === MOCK_PROVIDER || registries.providers.needsKey(resolved, cfg);
   if (useMock) {
     deps.logger.warn(
       {
         botId: deps.botId,
         model: cfg.model,
-        provider: requested,
+        provider: resolved,
         reason:
           cfg.model === MOCK_PROVIDER
             ? 'model=mock'
-            : `provider ${requested} needs a credential that is not configured`,
+            : `provider ${resolved} needs a credential that is not configured`,
       },
       'AI running in MOCK mode - replies are canned. Configure the provider credential for live completions.',
     );
     return registries.providers.require(MOCK_PROVIDER)(cfg, deps);
   }
 
-  const factory = registries.providers.resolve(requested, BUILTIN_PROVIDER, deps.logger);
-  return factory(cfg, deps);
+  const provider = registries.providers.require(resolved)(cfg, deps);
+  const budget = cfg.options['budget'];
+  if (budget && typeof budget === 'object' && !Array.isArray(budget)) {
+    return new BudgetedProvider(provider, budget as Partial<import('./router.js').ModelBudget>);
+  }
+  return provider;
 }

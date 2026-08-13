@@ -63,6 +63,8 @@ export const DiscordConfigSchema = z.object({
   ignoreBots: z.boolean().default(true),
   /** Show the typing indicator while the AI is thinking. */
   typingIndicator: z.boolean().default(true),
+  /** Remove stale text-command registrations and keep an explicit interaction base. */
+  registerEmptySlash: z.boolean().default(true),
   /** Discord hard limit is 2000; we chunk beyond this. */
   maxReplyLength: z.number().int().positive().max(2000).default(1900),
 });
@@ -102,6 +104,19 @@ export const BotConfigSchema = z.object({
   memory: MemoryConfigSchema.partial().default({}),
   /** Plugin ids disabled for this bot only. */
   disabledPlugins: z.array(z.string()).default([]),
+  /**
+   * Marks this bot as the privileged administrator persona. `?` commands are
+   * ignored by every other bot and by users outside the explicit allowlist.
+   */
+  admin: z.object({
+    enabled: z.boolean().default(false),
+    userIds: z.array(z.string()).default([]),
+  }).default({}),
+  /** Optional public Discord presence projection of coarse character activity. */
+  presence: z.object({
+    enabled: z.boolean().default(false),
+    updateIntervalSeconds: z.number().int().min(60).max(3600).default(300),
+  }).default({}),
   /** Per-user rate limit. */
   rateLimit: z
     .object({

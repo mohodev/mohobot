@@ -1,0 +1,15 @@
+{
+  "source": "https://build.nvidia.com/models?filters=nim_type%3Anim_type_preview",
+  "observedAt": "2026-08-13",
+  "pageNote": "Live catalog showed 124 models total and Free Endpoint filter count 57; current snapshot is an observed seed and must be refreshed page-by-page.",
+  "refreshPolicy": { "enabled": false, "intervalHours": 24, "preserveLastGoodSnapshot": true },
+  "taskTuning": {
+    "reply": { "capability": "chat", "maxTokens": 700, "temperature": 0.8 },
+    "vision": { "capability": "vision", "maxTokens": 500, "temperature": 0.2 },
+    "embedding": { "capability": "embedding", "maxTokens": 0, "temperature": 0 },
+    "rerank": { "capability": "rerank", "maxTokens": 0, "temperature": 0 },
+    "world": { "capability": "world", "maxTokens": 450, "temperature": 0.7 },
+    "translation": { "capability": "translation", "maxTokens": 300, "temperature": 0.2 },
+    "safety": { "capability": "safety", "maxTokens": 240, "temperature": 0 }
+  }
+}

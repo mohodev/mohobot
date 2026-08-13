@@ -8,7 +8,113 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildContextAnchor } from './pipeline.js';
+import { AIConfigSchema, BotConfigSchema, MemoryConfigSchema, SessionConfigSchema } from '../config/schema.js';
+import { EventBus } from '../core/event.js';
+import { createNullLogger } from '../core/logger.js';
+import type { MohoMessage } from '../core/types.js';
+import type { SessionManagerLike } from '../session/types.js';
+import { buildContextAnchor, MessagePipeline } from './pipeline.js';
+
+describe('MessagePipeline ordering', () => {
+  it('serializes concurrent messages in the same user session', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456' }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false, scope: 'user' }),
+      memory: MemoryConfigSchema.parse(base.memory),
+    };
+    const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: history, updatedAt: Date.now() }; },
+      async append(_key, message) { if (message.role !== 'system') history.push({ role: message.role, content: message.content }); },
+      async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }, ...history]; },
+      async clear() { history.length = 0; },
+      async sweep() { return 0; },
+      size() { return 1; },
+    };
+    let releaseFirst: (() => void) | undefined;
+    let markFirstStarted: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+    const calls: string[] = [];
+    const provider = {
+      name: 'test',
+      model: 'test',
+      async chat(messages: Array<{ role: string; content: string }>) {
+        const users = messages.filter((m) => m.role === 'user');
+        const prompt = users.at(-1)?.content ?? '';
+        calls.push(prompt);
+        if (prompt === 'first') {
+          markFirstStarted?.();
+          await firstBlocked;
+        }
+        return { content: `reply:${prompt}`, model: 'test', ms: 0 };
+      },
+      async health() { return { ok: true }; },
+    };
+    const sent: string[] = [];
+    const pipeline = new MessagePipeline({
+      config,
+      provider,
+      sessions,
+      events: new EventBus(),
+      logger: createNullLogger(),
+      send: async (out) => { sent.push(out.content); },
+    });
+    const message = (id: string, content: string): MohoMessage => ({
+      id,
+      platform: 'console',
+      botId: 'main',
+      channel: { id: 'c', dm: true },
+      author: { id: 'u', username: 'user', bot: false },
+      content,
+      mentionsBot: true,
+      attachments: [],
+      createdAt: Date.now(),
+    });
+
+    const first = pipeline.handle(message('1', 'first'));
+    await firstStarted;
+    const second = pipeline.handle(message('2', 'second'));
+    await Promise.resolve();
+    expect(calls).toEqual(['first']);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    expect(calls).toEqual(['first', 'second']);
+    expect(sent).toEqual(['reply:first', 'reply:second']);
+    expect(history.map((m) => m.content)).toEqual(['first', 'reply:first', 'second', 'reply:second']);
+  });
+});
+
+describe('persona messages', () => {
+  it('treats ! text as ordinary chat instead of dispatching a command', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = { ...base, ai: AIConfigSchema.parse(base.ai), session: SessionConfigSchema.parse({ ...base.session, persist: false }), memory: MemoryConfigSchema.parse(base.memory) };
+    const sessions: SessionManagerLike = { async get() { return { key: 'k', botId: 'main', channelId: 'c', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext() { return [{ role: 'user', content: '!help me with this' }]; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } };
+    const sent: string[] = [];
+    const pipeline = new MessagePipeline({ config, provider: { name: 'x', model: 'x', async chat(messages) { return { content: `heard:${messages.filter((m) => m.role === 'user').at(-1)?.content}`, model: 'x', ms: 0 }; }, async health() { return { ok: true }; } }, sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { sent.push(out.content); } });
+    await pipeline.handle({ id: '1', platform: 'console', botId: 'main', channel: { id: 'c', dm: true }, author: { id: 'u', username: 'u', bot: false }, content: '!help me with this', mentionsBot: true, attachments: [], createdAt: 0 });
+    expect(sent).toEqual(['heard:!help me with this']);
+  });
+});
+
+describe('admin ? commands', () => {
+  it('only responds for the enabled administrator bot and allowlisted user', async () => {
+    const base = BotConfigSchema.parse({ id: 'admin', admin: { enabled: true, userIds: ['owner'] }, rateLimit: { enabled: false } });
+    const config = { ...base, ai: AIConfigSchema.parse(base.ai), session: SessionConfigSchema.parse({ ...base.session, persist: false }), memory: MemoryConfigSchema.parse(base.memory) };
+    const sessions: SessionManagerLike = { async get() { return { key: 'k', botId: 'admin', channelId: 'c', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext() { return []; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } };
+    const sent: string[] = [];
+    const pipeline = new MessagePipeline({ config, provider: { name: 'x', model: 'x', async chat() { throw new Error('must not call model'); }, async health() { return { ok: true }; } }, sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { sent.push(out.content); } });
+    const make = (author: string): MohoMessage => ({ id: author, platform: 'console', botId: 'admin', channel: { id: 'c', dm: true }, author: { id: author, username: author, bot: false }, content: '?status', mentionsBot: true, attachments: [], createdAt: 0 });
+    await pipeline.handle(make('guest'));
+    expect(sent).toEqual([]);
+    await pipeline.handle(make('owner'));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('管理状态');
+  });
+});
 
 describe('buildContextAnchor', () => {
   it('emits a Beijing-time anchor carrying date, weekday and time', () => {

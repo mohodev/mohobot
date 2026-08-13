@@ -265,23 +265,26 @@ export class ConfigLoader {
   }
 
   async #loadEnvFile(): Promise<void> {
-    const envPath = path.join(this.#rootDir, '.env');
-    let text: string;
-    try {
-      text = await readFile(envPath, 'utf8');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, 'unable to read .env');
-      return;
+    // Local-only overrides win over the shared .env file, while real process
+    // environment variables still win over both.
+    for (const filename of ['.env.local', '.env']) {
+      const envPath = path.join(this.#rootDir, filename);
+      let text: string;
+      try {
+        text = await readFile(envPath, 'utf8');
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, `unable to read ${filename}`);
+        continue;
+      }
+      let applied = 0;
+      for (const [key, value] of Object.entries(parseEnvFile(text))) {
+        if (process.env[key] !== undefined) continue;
+        process.env[key] = value;
+        applied += 1;
+      }
+      if (applied > 0) this.#log.debug({ file: envPath, keys: applied }, `loaded ${filename}`);
     }
-    let applied = 0;
-    for (const [key, value] of Object.entries(parseEnvFile(text))) {
-      // A real environment variable always beats the .env file.
-      if (process.env[key] !== undefined) continue;
-      process.env[key] = value;
-      applied += 1;
-    }
-    if (applied > 0) this.#log.debug({ file: envPath, keys: applied }, 'loaded .env');
   }
 
   async #loadGlobal(): Promise<GlobalLoad> {
@@ -324,7 +327,7 @@ export class ConfigLoader {
     // AstrBot-style provider overrides from data/provider.yaml.
     const providerOverrides = await this.#loadProviderOverrides();
     if (Object.keys(providerOverrides).length > 0) {
-      data.ai = { ...(data.ai as Record<string, unknown>), ...providerOverrides };
+      data.ai = { ...providerOverrides, ...pruneUndefined(data.ai) };
     }
 
     this.#warnYamlSecrets(file, data);
@@ -540,14 +543,13 @@ export class ConfigLoader {
     }
     const data = parseYaml(text);
     if (!isRecord(data)) return {};
-    const resolved: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (typeof value === 'string') {
-        resolved[key] = value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => process.env[name] ?? '');
-      } else {
-        resolved[key] = value;
-      }
-    }
+    const resolveEnv = (value: unknown): unknown => {
+      if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => process.env[name] ?? '');
+      if (Array.isArray(value)) return value.map(resolveEnv);
+      if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveEnv(item)]));
+      return value;
+    };
+    const resolved = resolveEnv(data) as Record<string, unknown>;
     this.#log.debug({ file }, 'loaded provider overrides from data/provider.yaml');
     return resolved;
   }
