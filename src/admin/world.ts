@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ScheduledWorldEvent } from './world-events.js';
 import { activeScheduledEvent, validateScheduledEvent } from './world-events.js';
 import { TtlCache } from '../core/ttl-cache.js';
+import { atomicWriteJson } from '../core/atomic-json.js';
 
 export interface WorldState {
   clock: string;
@@ -46,8 +47,7 @@ export class WorldStore {
 
   async save(state: WorldState): Promise<void> {
     this.#cache.set(state);
-    await fs.mkdir(path.dirname(this.#file), { recursive: true });
-    await fs.writeFile(this.#file, JSON.stringify(state, null, 2) + '\n', 'utf8');
+    await atomicWriteJson(this.#file, state);
   }
 
   async schedule(input: Partial<ScheduledWorldEvent>): Promise<WorldState> {

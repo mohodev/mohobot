@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TtlCache } from '../core/ttl-cache.js';
+import { atomicWriteJson } from '../core/atomic-json.js';
 
 export type NetworkState = 'wifi' | 'cellular' | 'weak' | 'offline';
 export type DeviceActivity = 'idle' | 'browsing' | 'chatting' | 'gaming' | 'sleeping' | 'charging';
@@ -15,7 +16,7 @@ export class DeviceStore {
   readonly #cache = new TtlCache<DeviceState>(2_000);
   constructor(rootDir: string) { this.#file = path.join(rootDir, 'data', 'world', 'device.json'); }
   async get(): Promise<DeviceState> { const cached=this.#cache.get();if(cached)return cached;try { const value = JSON.parse(await fs.readFile(this.#file, 'utf8')) as Partial<DeviceState>; return this.#cache.set({ ...DEFAULT, ...value, habits: { ...DEFAULT.habits, ...(value.habits ?? {}) } }); } catch { await this.save(DEFAULT); return { ...DEFAULT, habits: { ...DEFAULT.habits, ignoresNotificationsWhile: [...DEFAULT.habits.ignoresNotificationsWhile] } }; } }
-  async save(state: DeviceState): Promise<void> { this.#cache.set(state);await fs.mkdir(path.dirname(this.#file), { recursive: true }); await fs.writeFile(this.#file, JSON.stringify(state, null, 2) + '\n', 'utf8'); }
+  async save(state: DeviceState): Promise<void> { await atomicWriteJson(this.#file, state); this.#cache.set(state); }
   async transition(patch: Partial<DeviceState>): Promise<DeviceState> { const state = await this.get(); const next = { ...state, ...patch, battery: clamp(patch.battery ?? state.battery), lastSeenAt: new Date().toISOString() }; if (next.charging) next.activity = 'charging'; await this.save(next); return next; }
   shouldDelay(state: DeviceState): boolean { return state.doNotDisturb || state.network === 'offline' || (state.charging && !state.habits.checksPhoneWhileCharging) || state.habits.ignoresNotificationsWhile.includes(state.activity); }
 }
