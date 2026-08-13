@@ -10,6 +10,7 @@ import { RuleDayPlanner } from './day-planner.js';
 import { ADMIN_ACTIONS, AuditTrail, healthSnapshot } from './actions.js';
 import { DeviceStore } from './device.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
+import { runtimeMetrics } from '../core/runtime-metrics.js';
 
 export interface AdminServerOptions {
   rootDir: string;
@@ -98,6 +99,7 @@ export class AdminServer {
   }
 
   async #api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    if (req.method === 'GET' && url.pathname === '/api/metrics') return json(res, 200, { ok: true, metrics: runtimeMetrics.snapshot() });
     if (req.method === 'GET' && url.pathname === '/api/models') {
       const catalog = await this.#catalog.get();
       const task = url.searchParams.get('task');

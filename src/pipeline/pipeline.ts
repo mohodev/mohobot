@@ -29,6 +29,7 @@ import { decideSocially } from './social-decision.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
+import { runtimeMetrics } from '../core/runtime-metrics.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -287,6 +288,7 @@ export class MessagePipeline {
     }
 
     let reply: string;
+    const aiStarted = Date.now();
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
@@ -294,8 +296,10 @@ export class MessagePipeline {
         timeoutMs: cfg.ai.timeoutMs,
       });
       reply = response.content.trim();
+      runtimeMetrics.ai.record(Date.now() - aiStarted, true);
       if (reply.length === 0) reply = cfg.ai.fallbackReply;
     } catch (error) {
+      runtimeMetrics.ai.record(Date.now() - aiStarted, false);
       this.#stats.aiFailures += 1;
       const kind = error instanceof AIError ? error.kind : 'unknown';
       const detail = error instanceof Error ? error.message : String(error);
