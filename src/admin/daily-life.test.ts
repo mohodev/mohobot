@@ -1,0 +1,2 @@
+import { describe, expect, it } from 'vitest'; import { DailyLifeSimulator } from './daily-life.js';
+describe('DailyLifeSimulator',()=>{it('generates ordinary life locally without a provider',async()=>{const x=await new DailyLifeSimulator().propose({clock:'2026-08-13T10:00:00Z',weather:'clear',location:'home',activity:'idle',mood:{energy:.7,stress:.2,curiosity:.8},events:[],schedule:[],appliedPhases:[]},'角色');expect(x.source).toBe('rules');expect(x.durationMinutes).toBeGreaterThan(0);});});

@@ -87,6 +87,7 @@ export class HotReloader implements Managed {
   classify(changed: string): ReloadEvent['kind'] {
     const rel = path.relative(this.#rootDir, changed).replaceAll('\\', '/');
     if (rel.startsWith('config/')) return 'config';
+    if (rel.startsWith('data/')) return 'config';
     if (rel.startsWith('plugins/')) return 'plugin';
     if (rel.startsWith('characters/')) return 'character';
     return 'unknown';

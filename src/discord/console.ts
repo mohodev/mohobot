@@ -13,6 +13,7 @@ import type { BotId, OutboundMessage } from '../core/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import { sanitizeOutbound, toMohoMessage } from './adapter.js';
 import type { Gateway, GatewayStatus } from './types.js';
+import { persistChat } from '../pipeline/persist.js';
 
 export const CONSOLE_CHANNEL_ID = 'console';
 export const CONSOLE_USER_ID = 'local-user';
@@ -106,6 +107,7 @@ export class ConsoleGateway implements Gateway {
       raw: { line },
     });
 
+    void persistChat(message).catch(() => {});
     this.#events.emit('message:create', { message });
   }
 

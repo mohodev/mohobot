@@ -175,6 +175,38 @@ describe('SessionManager persistence', () => {
     expect(restored.key).toBe('session:bot1:chan1:user1');
   });
 
+  it('serializes writes so a slow older save cannot overwrite newer context', async () => {
+    const data = new Map<string, unknown>();
+    let releaseFirst: (() => void) | undefined;
+    let saves = 0;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const storage: Storage = {
+      async init() {},
+      async save<T>(key: string, value: T) {
+        saves += 1;
+        if (saves === 1) await firstBlocked;
+        data.set(key, JSON.parse(JSON.stringify(value)) as unknown);
+      },
+      async get<T>(key: string) { return data.get(key) as T | undefined; },
+      async delete(key: string) { data.delete(key); },
+      async query<T>(_filter: QueryFilter): Promise<StoredRecord<T>[]> { return []; },
+      async purgeExpired() { return 0; },
+      async close() {},
+    };
+    const mgr = new SessionManager({ botId: 'bot1', config: config({ persist: true }), logger, storage });
+
+    await mgr.append(input, user('first'));
+    await mgr.append(input, user('second'));
+    expect(saves).toBe(1);
+    releaseFirst?.();
+    await mgr.flush();
+
+    const saved = data.get('session:bot1:chan1:user1') as { messages: ChatMessage[] };
+    expect(saved.messages.map((m) => m.content)).toEqual(['first', 'second']);
+  });
+
   it('does not touch storage when persist is false', async () => {
     const storage = fakeStorage();
     const mgr = new SessionManager({ botId: 'bot1', config: config({ persist: false }), logger, storage });

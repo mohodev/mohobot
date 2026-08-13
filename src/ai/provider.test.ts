@@ -180,6 +180,18 @@ describe('OpenAICompatibleProvider', () => {
     expect(err.retryable).toBe(true);
   });
 
+  it('reports a per-call timeout override in the error message', async () => {
+    const fetchImpl = ((_url: unknown, init: unknown) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = (init as RequestInit).signal;
+        signal?.addEventListener('abort', () => reject(abortError()), { once: true });
+      })) as unknown as typeof fetch;
+    const provider = new OpenAICompatibleProvider(cfg({ timeoutMs: 5000, retries: 0 }), { logger, fetchImpl });
+    const err = (await provider.chat(messages, { timeoutMs: 10 }).catch((e: unknown) => e)) as AIError;
+    expect(err.kind).toBe('timeout');
+    expect(err.message).toContain('10ms');
+  });
+
   it('maps an external abort to kind=aborted and does not retry', async () => {
     const controller = new AbortController();
     let n = 0;

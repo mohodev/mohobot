@@ -1,0 +1,11 @@
+# Optional NVIDIA Cosmos slot. Cosmos 3 is a physical/world foundation model,
+# not a required web search service. Keep ordinary daily-life generation local.
+profiles:
+  cosmos-world:
+    baseUrl: ${COSMOS_BASE_URL}
+    apiKey: ${NVIDIA_API_KEY}
+    model: ${COSMOS_MODEL}
+    budget: { rpm: 0, maxConcurrent: 1, maxTokens: { world: 500, vision: 600 } }
+taskRoutes:
+  world: { primary: cosmos-world, fallback: nim-main }
+  vision: { primary: cosmos-world, fallback: local-vision }

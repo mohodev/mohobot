@@ -11,7 +11,10 @@ import {
   Client,
   GatewayIntentBits,
   Partials,
+  ActivityType,
+  MessageFlags,
   type ClientEvents,
+  type ApplicationCommandDataResolvable,
   type Interaction,
   type APIEmbed,
   type Message,
@@ -26,6 +29,8 @@ import type { BotId, EmbedCard, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
 import type { Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
+import { WorldStore } from '../admin/world.js';
+import { presenceFromWorld } from './presence.js';
 
 export interface DiscordGatewayOptions {
   botId: BotId;
@@ -76,6 +81,7 @@ export class DiscordGateway implements Gateway {
   #starting = false;
   #reconnects = 0;
   #lastError: string | undefined;
+  #presenceTimer?: NodeJS.Timeout;
 
   constructor(opts: DiscordGatewayOptions) {
     this.botId = opts.botId;
@@ -120,6 +126,22 @@ export class DiscordGateway implements Gateway {
       throw error instanceof Error ? error : new Error(describeError(error));
     }
     this.#starting = false;
+    this.#startPresenceProjection();
+  }
+
+  async #registerInteractionBase(client: Client<true>): Promise<void> {
+    if (!this.#config.discord.registerEmptySlash) return;
+    try {
+      const commands: ApplicationCommandDataResolvable[] = this.#config.admin.enabled
+        ? [{ name: 'status', description: '查看当前 Bot 运行状态' }]
+        : [];
+      // Replace, rather than append: old commands must not survive a role
+      // changing from admin to persona.
+      await client.application.commands.set(commands);
+      this.#logger.debug({ botId: this.botId, commands: commands.length }, 'registered interaction base');
+    } catch (error) {
+      this.#logger.warn({ err: error }, 'failed to register interaction base');
+    }
   }
 
   #login(client: Client, token: string): Promise<void> {
@@ -143,6 +165,7 @@ export class DiscordGateway implements Gateway {
           'discord gateway ready',
         );
         this.#events.emit('gateway:ready', { botId: this.botId, username });
+        void this.#registerInteractionBase(readyClient);
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -163,6 +186,8 @@ export class DiscordGateway implements Gateway {
   }
 
   async stop(): Promise<void> {
+    if (this.#presenceTimer) clearInterval(this.#presenceTimer);
+    this.#presenceTimer = undefined;
     const client = this.#client;
     this.#client = null;
     this.#ready = false;
@@ -179,6 +204,24 @@ export class DiscordGateway implements Gateway {
     } catch (error) {
       this.#logger.warn({ err: error }, 'discord client destroy failed');
     }
+  }
+
+  #startPresenceProjection(): void {
+    const config = this.#config.presence;
+    if (!config.enabled) return;
+    const update = async (): Promise<void> => {
+      const user = this.#client?.user;
+      if (!user) return;
+      try {
+        const presence = presenceFromWorld(await new WorldStore(process.env.MOHO_ROOT || process.cwd()).get());
+        user.setPresence({ status: presence.status, afk: presence.afk, activities: [{ name: presence.activity, type: ActivityType.Custom, state: presence.activity }] });
+      } catch (error) {
+        this.#logger.debug({ err: error }, 'presence projection failed');
+      }
+    };
+    void update();
+    this.#presenceTimer = setInterval(() => void update(), config.updateIntervalSeconds * 1000);
+    this.#presenceTimer.unref?.();
   }
 
   status(): GatewayStatus {
@@ -274,24 +317,7 @@ export class DiscordGateway implements Gateway {
 
     const cfg = this.#config.discord;
 
-    // Physical chat log: record every inbound message before any filtering,
-    // so the transcript is complete (including messages the bot does not reply to).
     const content = typeof message.content === 'string' ? message.content : '';
-    void persistChat({
-      id: message.id,
-      platform: 'discord',
-      botId: this.botId,
-      channel: { id: message.channelId, dm: message.channel.type === ChannelType.DM },
-      author: {
-        id: message.author.id,
-        username: message.author.username,
-        bot: message.author.bot,
-      },
-      content,
-      mentionsBot: message.mentions.users.has(self.id),
-      attachments: [],
-      createdAt: message.createdTimestamp ?? Date.now(),
-    }).catch(() => {});
 
     // Cheapest filters first.
     if (message.author.id === self.id) return;
@@ -309,7 +335,7 @@ export class DiscordGateway implements Gateway {
 
     if (isDM) {
       if (!cfg.respondToDM) return;
-    } else if (cfg.respondToMentionsOnly && !mentionsBot && !content.startsWith('!')) {
+    } else if (cfg.respondToMentionsOnly && !mentionsBot) {
       return;
     }
 
@@ -347,6 +373,8 @@ export class DiscordGateway implements Gateway {
       raw: message,
     });
 
+    // Persist only messages that passed the bot's access and response filters.
+    void persistChat(moho).catch(() => {});
     this.#events.emit('message:create', { message: moho });
   }
 
@@ -369,11 +397,14 @@ export class DiscordGateway implements Gateway {
 
   #onInteraction(interaction: Interaction): void {
     if (!interaction.isChatInputCommand()) return;
+    if (interaction.commandName !== 'status') return;
+    if (!this.#config.admin.enabled || !this.#config.admin.userIds.includes(interaction.user.id)) {
+      void interaction.reply({ content: '这个入口只对授权管理员开放。', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
 
     const options: Record<string, unknown> = {};
-    for (const option of interaction.options.data) {
-      options[option.name] = option.value;
-    }
+    for (const option of interaction.options.data) options[option.name] = option.value;
 
     const reply = async (content: string): Promise<void> => {
       try {

@@ -1,0 +1,1 @@
+import { describe, expect, it } from 'vitest';import { TtlCache } from './ttl-cache.js';describe('TtlCache',()=>{it('expires values without timers',async()=>{const c=new TtlCache(5);c.set('x');expect(c.get()).toBe('x');await new Promise(r=>setTimeout(r,8));expect(c.get()).toBeUndefined();});});

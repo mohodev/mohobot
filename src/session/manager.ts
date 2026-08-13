@@ -47,7 +47,7 @@ export class SessionManager implements SessionManagerLike {
   readonly #cache = new Map<string, Session>();
   /** Keys we already tried to hydrate, so a cold miss only hits storage once. */
   readonly #hydrated = new Set<string>();
-  /** Chain of in-flight background writes, awaited by `flush()`. */
+  /** Per-manager write queue, preserving append/delete order in storage. */
   #pending: Promise<void> = Promise.resolve();
 
   constructor(opts: SessionManagerOptions) {
@@ -210,7 +210,7 @@ export class SessionManager implements SessionManagerLike {
     this.#hydrated.delete(key);
     const storage = this.#storage;
     if (!this.#config.persist || !storage) return;
-    this.#track(key, 'session delete failed', async () => {
+    await this.#track(key, 'session delete failed', async () => {
       await storage.delete(key);
     });
   }
@@ -250,23 +250,17 @@ export class SessionManager implements SessionManagerLike {
       messages: session.messages.map((m) => ({ ...m })),
       updatedAt: session.updatedAt,
     };
-    this.#track(session.key, 'session persist failed', async () => {
+    void this.#track(session.key, 'session persist failed', async () => {
       await storage.save(session.key, record, this.#config.ttlSeconds);
     });
   }
 
-  /** Runs `work` in the background; failures are logged, never rethrown. */
-  #track(key: string, message: string, work: () => Promise<void>): void {
-    let started: Promise<void>;
-    try {
-      started = work();
-    } catch (error) {
-      this.#logger.warn({ key, error: describe(error) }, message);
-      return;
-    }
-    const guarded = started.catch((error: unknown) => {
+  /** Queue `work` after prior writes; failures are logged and never rethrown. */
+  #track(key: string, message: string, work: () => Promise<void>): Promise<void> {
+    const queued = this.#pending.then(work).catch((error: unknown) => {
       this.#logger.warn({ key, error: describe(error) }, message);
     });
-    this.#pending = this.#pending.then(() => guarded);
+    this.#pending = queued;
+    return queued;
   }
 }

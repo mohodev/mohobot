@@ -1,0 +1,19 @@
+# Provider-neutral model roster. NVIDIA NIM Free commonly needs a margin below
+# its account RPM; do not assume 40 RPM for every provider.
+limits:
+  rpm: 34            # absolute local ceiling; use 0 for unlimited
+  reserveRpm: 6      # background jobs cannot consume this reserve
+  maxConcurrent: 4
+
+roles:
+  reply:      { maxTokens: 700, priority: critical }
+  vision:     { maxTokens: 450, priority: critical }
+  planner:    { maxTokens: 250, priority: normal }
+  reflection: { maxTokens: 350, priority: background }
+  profile:    { maxTokens: 300, priority: background }
+  world:      { maxTokens: 700, priority: low }
+  admin:      { maxTokens: 500, priority: critical }
+
+# Merge into data/provider.yaml under options.budget. The runtime currently
+# accepts any OpenAI-compatible model name and endpoint; roster selection is
+# deliberately separate from credentials.

@@ -8,3 +8,18 @@ model: stepfun/step-3.7-flash:free
 baseUrl: https://api.kilo.ai/api/gateway/v1
 apiKey: ${KILO_API_KEY}
 temperature: 0.8
+options:
+  # 34 application RPM leaves six requests per minute for retries and bursts
+  # against a 40 RPM endpoint such as NVIDIA NIM Free.
+  budget:
+    rpm: 34
+    reserveRpm: 6
+    maxConcurrent: 4
+    maxTokens:
+      reply: 700
+      vision: 450
+      planner: 250
+      reflection: 350
+      profile: 300
+      world: 700
+      admin: 500

@@ -1,0 +1,21 @@
+# Optional remote storage design. Keep credentials only in .env.local.
+mode: async-mirror # local-only | async-mirror | remote-authoritative
+mysql:
+  enabled: false
+  urlEnv: MOHO_MYSQL_URL
+  tls: true
+  syncIntervalSeconds: 60
+  tables:
+    archive: true
+    affinity: true
+    profiles: true
+    characterDiary: true
+redis:
+  enabled: false
+  urlEnv: MOHO_REDIS_URL
+  namespace: mohobot
+  # Redis only accelerates short-lived/cacheable state, never becomes source of truth.
+kafka:
+  enabled: false
+  brokersEnv: MOHO_KAFKA_BROKERS
+  # Enable only for multi-process/multi-host Outbox consumers.

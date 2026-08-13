@@ -17,6 +17,8 @@ export interface ChatOptions {
   /** When set, the provider streams and invokes this per delta chunk. */
   onDelta?: (delta: string) => void;
   stream?: boolean;
+  /** Scheduler lane; defaults to reply. Kept out of provider HTTP payloads. */
+  task?: 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin';
 }
 
 export interface AIUsage {

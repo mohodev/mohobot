@@ -73,6 +73,10 @@ const noopStorage: ScopedStorage = {
   },
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export class PluginManager {
   readonly #plugins = new Map<string, LoadedPlugin>();
   readonly #opts: PluginManagerOptions;
@@ -121,6 +125,11 @@ export class PluginManager {
       return false;
     }
 
+    if (!id || id !== path.basename(id) || id === '.' || id === '..') {
+      this.#logger.warn({ plugin: id }, 'invalid plugin id');
+      return false;
+    }
+
     const dir = path.join(this.#opts.dir, id);
     const previous = this.#plugins.get(id);
 
@@ -138,9 +147,20 @@ export class PluginManager {
       return false;
     }
 
-    const entryFile = path.join(dir, manifest.main ?? 'index.ts');
+    let entryFile = path.resolve(dir, manifest.main ?? 'index.ts');
+    const relativeEntry = path.relative(dir, entryFile);
+    if (relativeEntry.startsWith('..') || path.isAbsolute(relativeEntry)) {
+      this.#fail(id, dir, new Error(`entry file escapes plugin directory: ${manifest.main}`), 'entry');
+      return false;
+    }
     try {
-      await fs.access(entryFile);
+      const [realDir, realEntry] = await Promise.all([fs.realpath(dir), fs.realpath(entryFile)]);
+      const realRelative = path.relative(realDir, realEntry);
+      if (realRelative.startsWith('..') || path.isAbsolute(realRelative)) {
+        this.#fail(id, dir, new Error(`entry file escapes plugin directory: ${manifest.main}`), 'entry');
+        return false;
+      }
+      entryFile = realEntry;
     } catch {
       this.#fail(id, dir, new Error(`entry file not found: ${entryFile}`), 'entry');
       return false;
@@ -161,23 +181,7 @@ export class PluginManager {
 
     const commands = new Map<string, PluginCommand>();
     const context = this.#makeContext(id, commands, manifest);
-
-    try {
-      await this.#withTimeout(
-        Promise.resolve(staged.onLoad?.(context)),
-        this.#opts.hookTimeoutMs,
-        `${id}.onLoad`,
-      );
-    } catch (error) {
-      this.#fail(id, dir, error, 'onLoad');
-      this.#logger.warn({ plugin: id }, previous ? 'keeping previously loaded version' : 'plugin not loaded');
-      return false;
-    }
-
-    // New instance is healthy: retire the old one now.
-    if (previous) await this.#teardown(previous);
-
-    this.#plugins.set(id, {
+    const stagedEntry: LoadedPlugin = {
       record: {
         id,
         manifest,
@@ -189,7 +193,27 @@ export class PluginManager {
       plugin: staged,
       context,
       commands,
-    });
+    };
+
+    try {
+      await this.#withTimeout(
+        Promise.resolve(staged.onLoad?.(context)),
+        this.#opts.hookTimeoutMs,
+        `${id}.onLoad`,
+      );
+    } catch (error) {
+      // onLoad may already have registered commands or global extensions.
+      // Always reap those staged side effects before keeping the old version.
+      await this.#teardown(stagedEntry);
+      this.#fail(id, dir, error, 'onLoad');
+      this.#logger.warn({ plugin: id }, previous ? 'keeping previously loaded version' : 'plugin not loaded');
+      return false;
+    }
+
+    // New instance is healthy: retire the old one now.
+    if (previous) await this.#teardown(previous);
+
+    this.#plugins.set(id, stagedEntry);
 
     this.#logger.info({ plugin: id, version: manifest.version, commands: commands.size }, 'plugin loaded');
     this.#opts.events.emit('plugin:loaded', { pluginId: id });
@@ -424,6 +448,7 @@ export class PluginManager {
       main: typeof parsed.main === 'string' ? parsed.main : 'index.ts',
       enabled: parsed.enabled !== false,
       priority: typeof parsed.priority === 'number' ? parsed.priority : 100,
+      config: isRecord(parsed.config) ? { ...parsed.config } : {},
     };
   }
 
