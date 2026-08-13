@@ -28,6 +28,7 @@ import { TopicBuffer } from './topic-buffer.js';
 import { decideSocially } from './social-decision.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
+import { preprocessAttachments } from '../media/attachments.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -222,7 +223,8 @@ export class MessagePipeline {
     // Persona bots intentionally have no text command prefix. `!foo` is an
     // ordinary chat message; operational actions live behind authenticated
     // admin UI/Discord interactions, never in public text command parsing.
-    const prompt = content.trim();
+    const attachments = preprocessAttachments(message.attachments);
+    const prompt = [content.trim(), attachments.accepted.length || attachments.rejected.length ? attachments.context : ''].filter(Boolean).join('\n\n');
     if (prompt.length === 0) {
       this.#stats.skipped += 1;
       return;
