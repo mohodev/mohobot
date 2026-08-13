@@ -47,7 +47,7 @@ MySQL 写入必须通过最小权限账号、TLS、固定 schema 与参数化查
 
 仅在多进程/多机、需要可靠异步事件流水（聊天归档、反思、画像、世界事件、分析）时启用。
 
-当前单机版本使用 SQLite Outbox + TaskManager；Kafka 是同一 `EventOutbox` 接口的未来实现，不能成为启动依赖。
+当前单机版本使用 SQLite Outbox + `OutboxWorker`；可选 `MySqlRemoteMirror` 通过参数化、幂等 event_id 写入远程归档，可选 `KafkaMirror` 发布版本化 envelope。二者均由注入的最小客户端接口提供驱动，未配置时不加载、不成为启动依赖。
 
 ## 模型阵列
 
