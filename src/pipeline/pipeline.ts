@@ -312,6 +312,11 @@ export class MessagePipeline {
     }
     reply = planText(plan);
 
+    const delivered = await this.#replyPlan(message, plan);
+    if (!delivered) {
+      this.#stats.skipped += 1;
+      return;
+    }
     try {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
@@ -323,8 +328,6 @@ export class MessagePipeline {
     } catch (error) {
       log.warn({ err: error instanceof Error ? error.message : String(error) }, 'failed to persist assistant turn');
     }
-
-    await this.#replyPlan(message, plan);
     this.#stats.replied += 1;
   }
 
@@ -356,7 +359,7 @@ export class MessagePipeline {
    * and local admin UI controls, not public `!` messages. */
   async #dispatchCommand(name: string, args: string[], message: MohoMessage, raw: string): Promise<boolean> {
     const cfg = this.#deps.config;
-    const reply = (text: string | EmbedCard): Promise<void> => this.#reply(message, text);
+    const reply = async (text: string | EmbedCard): Promise<void> => { await this.#reply(message, text); };
 
     if (name === 'reset' || name === 'clear') {
       await this.#deps.sessions
@@ -421,7 +424,8 @@ export class MessagePipeline {
     return true;
   }
 
-  async #replyPlan(message: MohoMessage, plan: ReplyPlan): Promise<void> {
+  async #replyPlan(message: MohoMessage, plan: ReplyPlan): Promise<boolean> {
+    let delivered = 0;
     const segments = deliverySegments(plan, message.channel.dm);
     for (let i = 0; i < segments.length; i += 1) {
       const segment = segments[i]!;
@@ -429,14 +433,16 @@ export class MessagePipeline {
         void this.#deps.typing(message.channel.id).catch(() => {});
         await new Promise<void>((resolve) => setTimeout(resolve, segment.typingMs));
       }
-      await this.#reply(message, segment.text, plan.quote && i === 0);
+      if (await this.#reply(message, segment.text, plan.quote && i === 0)) delivered += 1;
+      else break;
       if (segment.pauseAfterMs > 0 && i < segments.length - 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, segment.pauseAfterMs));
       }
     }
+    return delivered === segments.length;
   }
 
-  async #reply(message: MohoMessage, content: string | EmbedCard, quote = true): Promise<void> {
+  async #reply(message: MohoMessage, content: string | EmbedCard, quote = true): Promise<boolean> {
     const embed = typeof content === 'object' ? content : undefined;
     const text = typeof content === 'object' ? '' : content;
     const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
@@ -448,11 +454,13 @@ export class MessagePipeline {
         replyToId: !quote || message.channel.dm ? undefined : message.id,
         suppressMentions: true,
       });
+      return true;
     } catch (error) {
       this.#logger.error(
         { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
         'send failed',
       );
+      return false;
     }
   }
 
