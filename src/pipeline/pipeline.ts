@@ -371,7 +371,7 @@ export class MessagePipeline {
     if (name === 'help') {
       const pluginCommands = this.#deps.plugins ? [...this.#deps.plugins.commands().keys()] : [];
       const fields: EmbedField[] = [
-        { name: '基础', value: '`!help` 帮助 · `!reset` 清上下文 · `!status` 运行状态', inline: false },
+        { name: '管理入口', value: '请使用已鉴权的 Discord Interaction 或本地 WebUI；角色 Bot 不执行文本命令。', inline: false },
       ];
       if (pluginCommands.length > 0) {
         // one field per command group, 25 fields max
