@@ -10,6 +10,7 @@ import { registries, type MemoryFactory, type StorageFactory } from '../core/reg
 import { MemoryStorage } from './memory.js';
 import { SqliteStorage } from './sqlite.js';
 import { nullMemoryAdapter, type QueryFilter, type ScopedStorage, type Storage, type StoredRecord } from './types.js';
+import { SemanticMemoryAdapter } from '../memory/semantic-memory.js';
 
 export * from './types.js';
 export * from './sqlite.js';
@@ -25,6 +26,7 @@ export interface CreateStorageOptions {
 export const SQLITE_DRIVER = 'sqlite';
 export const MEMORY_DRIVER = 'memory';
 export const NULL_MEMORY_ADAPTER = 'null';
+export const SEMANTIC_MEMORY_ADAPTER = 'semantic';
 
 const sqliteFactory: StorageFactory = (cfg, deps) => {
   const raw = typeof cfg.path === 'string' && cfg.path.trim().length > 0 ? cfg.path.trim() : './data/mohobot.db';
@@ -33,6 +35,13 @@ const sqliteFactory: StorageFactory = (cfg, deps) => {
 };
 const memoryFactory: StorageFactory = (_cfg, deps) => new MemoryStorage({ logger: deps.logger });
 const nullMemoryFactory: MemoryFactory = () => nullMemoryAdapter;
+const semanticMemoryFactory: MemoryFactory = (deps) => {
+  if (!deps.storage) throw new Error('semantic memory requires a storage driver');
+  const recallLimit = typeof deps.options['recallLimit'] === 'number' ? deps.options['recallLimit'] : undefined;
+  const candidateLimit = typeof deps.options['candidateLimit'] === 'number' ? deps.options['candidateLimit'] : undefined;
+  const embeddingBatchSize = typeof deps.options['embeddingBatchSize'] === 'number' ? deps.options['embeddingBatchSize'] : undefined;
+  return new SemanticMemoryAdapter({ storage: deps.storage, logger: deps.logger, recallLimit, candidateLimit, embeddingBatchSize });
+};
 
 /** Register built-in storage drivers and memory adapters. Idempotent. */
 export function registerBuiltinStorage(): void {
@@ -52,6 +61,12 @@ export function registerBuiltinStorage(): void {
     registries.memories.register(NULL_MEMORY_ADAPTER, nullMemoryFactory, {
       source: 'builtin',
       description: 'no long-term memory (MVP default)',
+    });
+  }
+  if (!registries.memories.has(SEMANTIC_MEMORY_ADAPTER)) {
+    registries.memories.register(SEMANTIC_MEMORY_ADAPTER, semanticMemoryFactory, {
+      source: 'builtin',
+      description: 'storage-backed semantic memory with optional derived vectors',
     });
   }
 }
