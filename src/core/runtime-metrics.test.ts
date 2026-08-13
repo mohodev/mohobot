@@ -1,0 +1,1 @@
+import{describe,expect,it}from'vitest';import{RuntimeMetrics}from'./runtime-metrics.js';describe('RuntimeMetrics',()=>{it('publishes stable metric groups',()=>{const m=new RuntimeMetrics();m.ai.record(10);m.worldCache.hit();const s=m.snapshot() as any;expect(s.ai.count).toBe(1);expect(s.cache.world.hits).toBe(1);expect(s.rerank.count).toBe(0);});});
