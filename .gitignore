@@ -23,4 +23,6 @@ data/storage/*.json
 .env.local
 *.log
 logs/
+*_TODO.md
 .DS_Store
+VISION_ROUTER_TODO.md
