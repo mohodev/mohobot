@@ -88,6 +88,21 @@ describe('MessagePipeline ordering', () => {
   });
 });
 
+describe('attachments', () => {
+  it('keeps a safe attachment-only message in the AI context', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = { ...base, ai: AIConfigSchema.parse(base.ai), session: SessionConfigSchema.parse({ ...base.session, persist: false }), memory: MemoryConfigSchema.parse(base.memory) };
+    let seen='';
+    const sessions: SessionManagerLike = { async get() { return { key:'k',botId:'main',channelId:'c',messages:[],updatedAt:0 }; }, async append(_key,message) { if(message.role==='user')seen=message.content; }, async buildContext() { return [{ role:'user',content:seen }]; }, async clear(){}, async sweep(){return 0;}, size(){return 0;} };
+    const sent:string[]=[];
+    const pipeline=new MessagePipeline({config,provider:{name:'x',model:'x',async chat(){return{content:'看到了附件',model:'x',ms:0};},async health(){return{ok:true};}},sessions,events:new EventBus(),logger:createNullLogger(),send:async out=>{sent.push(out.content);}});
+    await pipeline.handle({id:'1',platform:'console',botId:'main',channel:{id:'c',dm:true},author:{id:'u',username:'u',bot:false},content:'',mentionsBot:true,attachments:[{id:'a',url:'https://cdn.discordapp.com/a.png',name:'a.png',contentType:'image/png',size:123}],createdAt:0});
+    expect(seen).toContain('image');
+    expect(seen).not.toContain('cdn.discordapp.com');
+    expect(sent).toEqual(['看到了附件']);
+  });
+});
+
 describe('persona messages', () => {
   it('treats ! text as ordinary chat instead of dispatching a command', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
