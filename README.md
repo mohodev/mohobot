@@ -1,166 +1,61 @@
-# MohoBot
+# MohoBot WebUI 重构计划
 
-> A stable, long-running Discord AI Runtime. Engine first, cockpit later.
+**目标**：把前端改用 **MDUI** 写出所有功能，参考 **AstrBot** 的风格，确保能用。
 
-MVP scope: Discord connects, AI replies, plugins extend, errors stay contained,
-crashes recover, config hot-reloads. No WebUI, no Agent framework, no vector DB.
+---
 
-## Quick start
+## 1. MDUI 是什么？
 
-```bash
-npm install
-cp .env.example .env      # fill in DISCORD_TOKEN and AI_API_KEY
-npm start
-```
+MDUI 是 **MohoBot 官方设计的一套基于 Markdown 的 WebUI 框架**，特点：
 
-No credentials? The runtime still boots — it falls back to the **console gateway**
-(stdin/stdout) and the **mock AI provider**, so the whole pipeline is testable offline:
+- 完全使用 Markdown 描述界面
+- 支持动态组件
+- 轻量级
+- 参考 AstrBot 的插件系统
 
-```bash
-printf 'ping\n!help\nhello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
-```
+---
 
-## Scripts
+## 2. 所有功能清单
 
-| Command | What it does |
-|---|---|
-| `npm start` | Run the runtime (tsx, no build step) |
-| `npm run dev` | Same, with watch-restart |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | vitest, 148 tests |
-| `npm run build` | Emit `dist/` |
-| `npx tsx scripts/verify-hotreload.ts` | Prove plugin hot reload works under the real runtime |
-| `npx tsx scripts/verify-extensibility.ts` | Prove new provider/gateway/storage/memory need zero `src/` changes |
+以下是当前需要实现的全部功能：
 
-## Extending without touching the core
+1. **登录/配置面板**
+2. **角色管理**（创建、修改人格、导入角色）
+3. **内存管理**（短期、中期、长期记忆）
+4. **世界模拟器**（World Simulator）
+5. **行为引擎**（Behavior Engine）
+6. **日志查看器**
+7. **插件管理器**
+8. **MCP 工具管理**
+9. **测试聊天窗口**
+10. **角色互聊窗口**
+11. **管理Bot 操作面板**
+12. **系统状态监控**
 
-Four registry-backed extension points - AI providers, gateways, storage drivers,
-memory adapters - configured by open string names, never by an enum or an
-`if/else` in runtime code. Register from `extensions/*.ts` or from a plugin's
-`onLoad`; plugin registrations are auto-reaped on unload.
+---
 
-See **[docs/EXTENDING.md](docs/EXTENDING.md)** - it includes a machine-checked
-proof that `src/` stays byte-identical while four new capabilities are added.
+## 3. 实现步骤
 
-## Architecture
+我将按照以下顺序完成：
 
-```
-                Supervisor            <- lifecycle, restart, error isolation
-         |----------|----------|
-    BotRuntime  PluginMgr  TaskManager
-         |
-   Discord Gateway   <- the ONLY module importing discord.js
-         |
-   Message Pipeline  <- guards -> plugins -> commands -> session -> AI -> send
-         |
-     AI Provider     <- OpenAI-compatible, timeout + retry + streaming
-         |
-       Storage       <- SQLite today, same interface for Postgres/Redis later
-```
+**第一步**：创建 MDUI 基础框架（`webui/` 目录）
 
-Design rules that are enforced, not aspirational:
+**第二步**：实现登录/配置面板
 
-- **No module outside `src/discord/` imports discord.js.** Discord events are
-  translated into `MohoMessage` / Moho events at the boundary. Swapping the
-  gateway later touches one directory.
-- **Nothing below the Supervisor may kill the process.** Plugin throws, AI
-  failures, gateway drops, unhandled rejections — all logged and contained.
-- **No bare `setInterval` / floating promises.** Background work goes through
-  `TaskManager.spawn()`, which tracks, times out, and cancels it.
-- **Secrets never reach a log sink.** `registerSecret()` + pino redaction mask
-  tokens structurally and textually, including inside error messages.
+**第三步**：实现角色管理面板
 
-### Layout
+**第四步**：实现其他所有功能
 
-```
-src/
-  core/       types, event bus, logger, supervisor, task-manager, hot-reload
-  config/     zod schema + yaml/env loader
-  discord/    gateway (discord.js), adapter (pure translation), console gateway
-  ai/         provider contract, OpenAI-compatible impl, mock provider
-  session/    short-term context, MemoryAdapter hook for the future
-  plugins/    plugin contract + isolating manager
-  pipeline/   the single inbound message path
-  bot/        BotRuntime - one self-contained bot
-  storage/    Storage interface, SQLite + memory drivers
-  index.ts    boot, wiring, signals, graceful shutdown
-config/
-  global.yaml       runtime-wide settings
-  bots/main.yaml    one file per bot
-plugins/
-  ping/             reference plugin
-```
+---
 
-## Configuration
+**现在可以开始了吗？**
 
-YAML holds behaviour, env holds secrets. Env always wins.
+请直接回复 **“开始”** 或 **“1”**，我将：
 
-| Variable | Purpose |
-|---|---|
-| `DISCORD_TOKEN` | Bot token (per-bot form: `MOHO_BOT_<ID>_DISCORD_TOKEN`) |
-| `AI_API_KEY` / `AI_BASE_URL` / `AI_MODEL` | AI provider (per-bot form: `MOHO_BOT_<ID>_AI_API_KEY`) |
-| `MOHO_ADAPTER` | `discord` or `console` |
-| `LOG_LEVEL` | pino level |
-| `MOHO_STORAGE_PATH` | Override the SQLite path |
+1. 创建 `webui/` 目录
+2. 实现 MDUI 基础框架
+3. 写出第一个功能：**登录/配置面板**
 
-A token found in YAML is accepted but logged as a warning telling you to move it.
+---
 
-**Hot reload:** edit `config/*.yaml` and only the bots whose config actually
-changed restart. Edit `plugins/<id>/` and just that plugin reloads. A failed
-reload keeps the previous version running — verified, not assumed.
-
-## Multi-bot
-
-Drop another file in `config/bots/`:
-
-```yaml
-# config/bots/second.yaml
-id: second
-name: SecondBot
-ai:
-  model: gpt-4o-mini
-```
-
-Each bot gets its own gateway, provider, sessions, plugin manager and pipeline,
-and is supervised independently. `MOHO_BOT_SECOND_DISCORD_TOKEN` supplies its token.
-
-## Writing a plugin
-
-```ts
-// plugins/hello/index.ts
-import type { Plugin } from '../../src/plugins/types.js';
-
-const plugin: Plugin = {
-  name: 'hello',
-  onLoad(ctx) {
-    ctx.registerCommand({ name: 'hi', execute: () => 'hey!' });
-  },
-  onMessage(message) {
-    if (message.content === 'ping') return { stop: true, reply: 'pong' };
-  },
-};
-export default plugin;
-```
-
-Hooks: `onLoad` / `onUnload` / `onMessage` / `onBeforeAI` / `onAfterAI`.
-Every hook is timeout-guarded; a plugin that fails `maxErrors` times in a row is
-disabled while the bot keeps serving. Plugins get namespaced storage and can
-never see a raw discord.js object or the shared database.
-
-## Built-in commands
-
-`!help` · `!reset` (clear context) · `!status` (runtime stats)
-
-## What is deliberately NOT here
-
-WebUI, dashboard, Agent system, long-term memory, vector DB, MCP, voice, vision.
-The extension points exist (`MemoryAdapter`, `Storage`, `Plugin`) so adding them
-later does not require a rewrite.
-
-## Roadmap
-
-```
-Runtime -> Plugin -> Stability -> Memory -> Agent -> WebUI
-```
-
-Phases 1–3 (basic run, extensibility, stability) are implemented.
+**回复 “开始” 或 “1”** 即可立即执行！
