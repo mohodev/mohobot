@@ -11,6 +11,12 @@ describe('TopicBuffer', () => {
     await expect(first).resolves.toMatchObject({ id: '2', content: '第一句\n第二句' });
     await expect(second).resolves.toMatchObject({ id: '2', content: '第一句\n第二句' });
   });
+  it('resolves waiting callers when cleared during shutdown', async () => {
+    const buffer = new TopicBuffer({ quietMs: 5000 });
+    const pending = buffer.push('k', message('1', 'waiting'));
+    buffer.clear();
+    await expect(pending).resolves.toMatchObject({ id: '1' });
+  });
   it('does not delay direct or private messages', async () => {
     const buffer = new TopicBuffer({ quietMs: 500 });
     await expect(buffer.push('k', { ...message('1', 'hi'), mentionsBot: true })).resolves.toMatchObject({ id: '1' });

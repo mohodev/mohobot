@@ -27,7 +27,16 @@ export class TopicBuffer {
     });
   }
 
-  clear(): void { for (const item of this.#pending.values()) clearTimeout(item.timer); this.#pending.clear(); }
+  clear(): void {
+    for (const item of this.#pending.values()) {
+      clearTimeout(item.timer);
+      // Resolve callers with their newest original message. Pipeline.stop()
+      // then prevents new work, while no handle promise is left hanging.
+      const last = item.messages.at(-1)!;
+      for (const resolve of item.resolves) resolve(last);
+    }
+    this.#pending.clear();
+  }
   #timer(key: string): NodeJS.Timeout { const timer = setTimeout(() => void this.#flush(key), this.#options.quietMs); timer.unref?.(); return timer; }
   #flush(key: string): Promise<MohoMessage> {
     const item = this.#pending.get(key);
