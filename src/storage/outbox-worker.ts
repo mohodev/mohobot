@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '../core/logger.js';
 import { Outbox, type OutboxEvent } from './outbox.js';
+import { runtimeMetrics } from '../core/runtime-metrics.js';
 
 export interface RemoteMirror {
   /** Deliver one event. Implementations must use eventId as an idempotency key. */
@@ -140,11 +141,14 @@ export class OutboxWorker {
   }
 
   async #deliver(event: OutboxEvent): Promise<void> {
+    const started=Date.now();
     try {
       await this.#mirror.send(event);
       await this.#outbox.release(event.eventId, this.#workerId, { done: true });
       this.#stats.sent += 1;
+      runtimeMetrics.outbox.record(Date.now()-started,true);
     } catch (error) {
+      runtimeMetrics.outbox.record(Date.now()-started,false);
       const retryAfterMs = Math.max(0, typeof this.#retryDelay === 'function'
         ? this.#retryDelay(event, error)
         : this.#retryDelay);
