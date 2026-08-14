@@ -13,6 +13,14 @@ import type { EventBus } from './event.js';
 import type { Logger } from './logger.js';
 import type { ComponentState, ComponentStatus, Managed } from './types.js';
 
+interface DeferredRestartError extends Error { retryAt?: number; }
+
+function retryAtFrom(error: unknown): number | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const retryAt = (error as DeferredRestartError).retryAt;
+  return typeof retryAt === 'number' && Number.isFinite(retryAt) && retryAt > Date.now() ? retryAt : undefined;
+}
+
 interface Entry {
   component: Managed;
   status: ComponentStatus;
@@ -128,7 +136,7 @@ export class Supervisor {
       entry.status.lastError = msg;
       this.#setState(entry, 'crashed');
       this.#logger.error({ component: name, err: msg }, 'component failed to start');
-      this.#scheduleRestart(entry);
+      this.#scheduleRestart(entry, retryAtFrom(error));
       return false;
     }
   }
@@ -171,7 +179,7 @@ export class Supervisor {
     entry.status.lastError = msg;
     this.#setState(entry, 'crashed');
     this.#logger.error({ component: name, err: msg }, 'component crashed');
-    this.#scheduleRestart(entry);
+    this.#scheduleRestart(entry, retryAtFrom(error));
   }
 
   /** Stop then start a component immediately, bypassing backoff. */
@@ -213,10 +221,23 @@ export class Supervisor {
     this.removeGlobalHandlers();
   }
 
-  #scheduleRestart(entry: Entry): void {
+  #scheduleRestart(entry: Entry, deferredUntil?: number): void {
     if (this.#shuttingDown || !this.#config.autoRestart) return;
     const now = Date.now();
     entry.restartTimes = entry.restartTimes.filter((t) => now - t < this.#config.restartWindowMs);
+
+    if (deferredUntil) {
+      const wait = Math.max(100, deferredUntil - now + 1_000);
+      this.#logger.warn({ component: entry.component.name, retryAt: new Date(deferredUntil).toISOString(), inMs: wait }, 'deferring restart until provider session quota resets');
+      if (entry.restartTimer) clearTimeout(entry.restartTimer);
+      const timer = setTimeout(() => {
+        entry.restartTimer = undefined;
+        void this.restartComponent(entry.component.name);
+      }, wait);
+      timer.unref?.();
+      entry.restartTimer = timer;
+      return;
+    }
 
     if (entry.restartTimes.length >= this.#config.maxRestarts) {
       this.#logger.error(
