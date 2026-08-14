@@ -106,6 +106,13 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     envCreated = true;
   }
 
+  // Machine-owned YAML lives only in ignored overlays, so upstream template
+  // updates never conflict with production edits.
+  const globalLocal=path.join(rootDir,'config','global.local.yaml');
+  if(!await exists(globalLocal))await fs.writeFile(globalLocal,'# Machine-local overrides. This file is ignored by Git.\nversion: 1\n',{encoding:'utf8',flag:'wx',mode:0o600});
+  const botLocal=path.join(rootDir,'config','bots','main.local.yaml');
+  if(!await exists(botLocal))await fs.writeFile(botLocal,'# Machine-local overrides for bot main.\n',{encoding:'utf8',flag:'wx',mode:0o600});
+
   const storage = new SqliteStorage({ path: sqlitePath, logger: createNullLogger() });
   await storage.init();
   await storage.close();
