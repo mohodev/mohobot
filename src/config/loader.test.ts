@@ -195,7 +195,7 @@ describe('ConfigLoader', () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(
       path.join(rootDir, 'data', 'provider.yaml'),
-      ['provider: kilo', 'model: provider-model', 'temperature: 0.1', ''].join('\n'),
+      ['provider: kilo', 'model: provider-model', 'temperature: 0.1', 'options:', '  budget:', '    maxTokens:', '      reply: 2048', ''].join('\n'),
       'utf8',
     );
     await writeGlobal(['ai:', '  model: global-model', '  temperature: 0.7', ''].join('\n'));
@@ -205,6 +205,7 @@ describe('ConfigLoader', () => {
     expect(cfg.global.ai.provider).toBe('kilo');
     expect(cfg.global.ai.model).toBe('global-model');
     expect(cfg.global.ai.temperature).toBe(0.7);
+    expect(cfg.global.ai.options).toMatchObject({ budget: { maxTokens: { reply: 2048 } } });
   });
 
   it('keeps media disabled by default and resolves inherited per-bot providers from env key names', async () => {

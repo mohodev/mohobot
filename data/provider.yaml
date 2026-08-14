@@ -16,7 +16,9 @@ options:
     reserveRpm: 6
     maxConcurrent: 4
     maxTokens:
-      reply: 700
+      # tencent/hy3:free spends substantial output budget on private reasoning.
+      # 700 regularly exhausts it before an answer is emitted; keep >= 2048.
+      reply: 2048
       vision: 450
       planner: 250
       reflection: 350
