@@ -13,6 +13,7 @@ import Database from 'better-sqlite3';
 
 import type { Logger } from '../core/logger.js';
 import { attachChatLogDb, detachChatLogDb } from './chatlog.js';
+import { migrateSqlite, RECORD_TYPE_RULES } from './migrations.js';
 import type { QueryFilter, Storage, StoredRecord } from './types.js';
 
 type DatabaseHandle = InstanceType<typeof Database>;
@@ -28,14 +29,13 @@ export interface SqliteStorageOptions {
   /** File path, or ':memory:' for an ephemeral database. */
   path: string;
   logger: Logger;
+  /** Defaults to a backups directory next to the database file. */
+  backupDir?: string;
 }
 
-const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kv (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  expires_at INTEGER
-)`;
+function recordTypeFor(key: string): string | null {
+  return RECORD_TYPE_RULES.find(([prefix]) => key.startsWith(prefix))?.[1] ?? null;
+}
 
 function sanitizeCount(value: number | undefined, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -45,11 +45,13 @@ function sanitizeCount(value: number | undefined, fallback: number): number {
 
 export class SqliteStorage implements Storage {
   readonly #path: string;
+  readonly #backupDir: string | undefined;
   readonly #log: Logger;
   #db: DatabaseHandle | undefined;
 
   constructor(opts: SqliteStorageOptions) {
     this.#path = opts.path;
+    this.#backupDir = opts.backupDir;
     this.#log = opts.logger.child({ mod: 'storage', driver: 'sqlite' });
   }
 
@@ -63,15 +65,20 @@ export class SqliteStorage implements Storage {
       mkdirSync(path.dirname(path.resolve(this.#path)), { recursive: true });
     }
     const db = new Database(this.#path);
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.exec(SCHEMA_SQL);
-    db.exec('CREATE INDEX IF NOT EXISTS idx_kv_expires_at ON kv (expires_at)');
-    this.#db = db;
-    // The physical chat log shares this database file; hand it the open handle
-    // so no second connection is ever created for data/mohobot.db.
-    if (this.#path !== ':memory:') attachChatLogDb(db);
-    this.#log.debug({ path: this.#path }, 'sqlite storage ready');
+    try {
+      db.pragma('journal_mode = WAL');
+      db.pragma('synchronous = FULL');
+      const migration = await migrateSqlite(db, { databasePath: this.#path, backupDir: this.#backupDir });
+      db.pragma('synchronous = NORMAL');
+      this.#db = db;
+      // The physical chat log shares this database file; hand it the open handle
+      // so no second connection is ever created for data/mohobot.db.
+      if (this.#path !== ':memory:') attachChatLogDb(db);
+      this.#log.debug({ path: this.#path, schemaVersion: migration.toVersion, migrated: migration.migrated, backupPath: migration.backupPath }, 'sqlite storage ready');
+    } catch (error) {
+      try { db.close(); } catch { /* preserve the migration error */ }
+      throw error;
+    }
   }
 
   async save<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
@@ -81,10 +88,12 @@ export class SqliteStorage implements Storage {
       typeof ttlSeconds === 'number' && Number.isFinite(ttlSeconds) && ttlSeconds > 0
         ? now + Math.trunc(ttlSeconds * 1000)
         : null;
+    const recordType = recordTypeFor(key);
     db.prepare(
-      `INSERT INTO kv (key, value, updated_at, expires_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, expires_at = excluded.expires_at`,
-    ).run(key, JSON.stringify(value ?? null), now, expiresAt);
+      `INSERT INTO kv (key, value, updated_at, expires_at, record_type, record_version, writer_version) VALUES (?, ?, ?, ?, ?, 1, 1)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, expires_at = excluded.expires_at,
+         record_type = excluded.record_type, record_version = excluded.record_version, writer_version = excluded.writer_version`,
+    ).run(key, JSON.stringify(value ?? null), now, expiresAt, recordType);
   }
 
   async get<T>(key: string): Promise<T | undefined> {

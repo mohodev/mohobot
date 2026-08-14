@@ -31,7 +31,11 @@ export const SEMANTIC_MEMORY_ADAPTER = 'semantic';
 const sqliteFactory: StorageFactory = (cfg, deps) => {
   const raw = typeof cfg.path === 'string' && cfg.path.trim().length > 0 ? cfg.path.trim() : './data/mohobot.db';
   const resolved = raw === ':memory:' || path.isAbsolute(raw) ? raw : path.resolve(deps.rootDir, raw);
-  return new SqliteStorage({ path: resolved, logger: deps.logger });
+  const configuredBackupDir = typeof cfg.options['backupDir'] === 'string' ? cfg.options['backupDir'].trim() : '';
+  const backupDir = configuredBackupDir
+    ? (path.isAbsolute(configuredBackupDir) ? configuredBackupDir : path.resolve(deps.rootDir, configuredBackupDir))
+    : undefined;
+  return new SqliteStorage({ path: resolved, logger: deps.logger, backupDir });
 };
 const memoryFactory: StorageFactory = (_cfg, deps) => new MemoryStorage({ logger: deps.logger });
 const nullMemoryFactory: MemoryFactory = () => nullMemoryAdapter;
