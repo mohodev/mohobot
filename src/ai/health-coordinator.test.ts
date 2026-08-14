@@ -1,0 +1,15 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createNullLogger } from '../core/logger.js';
+import { HealthCoordinator, type ProbeProfile } from './health-coordinator.js';
+
+const deferred=()=>{let resolve!:(value:{ok:boolean;latencyMs?:number})=>void;const promise=new Promise<{ok:boolean;latencyMs?:number}>(r=>{resolve=r});return{promise,resolve};};
+
+describe('HealthCoordinator',()=>{
+  it('bounds concurrency and deduplicates overlapping ticks',async()=>{let active=0,max=0,calls=0;const gates=Array.from({length:3},deferred);const profiles:ProbeProfile[]=gates.map((gate,index)=>({id:`p${index}`,model:`m${index}`,probe:async()=>{calls++;active++;max=Math.max(max,active);const result=await gate.promise;active--;return result;}}));const coordinator=new HealthCoordinator({profiles,logger:createNullLogger(),concurrency:2,jitterRatio:0});const first=coordinator.tick();const second=coordinator.tick();await vi.waitFor(()=>expect(calls).toBe(2));gates[0]!.resolve({ok:true});gates[1]!.resolve({ok:true});await vi.waitFor(()=>expect(calls).toBe(3));gates[2]!.resolve({ok:true});await Promise.all([first,second]);expect(max).toBe(2);expect(calls).toBe(3);});
+
+  it('times out, marks TTL results stale, and old results unknown',async()=>{vi.useFakeTimers();let now=0;const coordinator=new HealthCoordinator({profiles:[{id:'slow',model:'safe/model',probe:()=>new Promise(()=>{})}],logger:createNullLogger(),timeoutMs:10,ttlMs:20,staleMs:40,intervalMs:100,jitterRatio:0,now:()=>now});const tick=coordinator.tick();await vi.advanceTimersByTimeAsync(10);await tick;expect(coordinator.snapshot().profiles[0]).toMatchObject({availability:'unavailable'});now=31;expect(coordinator.snapshot().profiles[0]?.availability).toBe('stale');now=51;expect(coordinator.snapshot().profiles[0]?.availability).toBe('unknown');vi.useRealTimers();});
+
+  it('honors jitter scheduling and force probes',async()=>{let now=100,calls=0;const coordinator=new HealthCoordinator({profiles:[{id:'p',model:'m',probe:async()=>{calls++;return{ok:true}}}],logger:createNullLogger(),intervalMs:100,jitterRatio:.2,random:()=>1,now:()=>now});await coordinator.tick();expect(calls).toBe(1);expect(coordinator.snapshot().profiles[0]?.nextProbeAt).toBe(220);now=219;await coordinator.tick();expect(calls).toBe(1);await coordinator.tick({force:true});expect(calls).toBe(2);});
+
+  it('uses router profiles and excludes detail, URLs, and credentials from snapshots',async()=>{const coordinator=new HealthCoordinator({router:{profileIds:()=>['primary'],probeProfile:async()=>({id:'primary',model:'vendor/model',ok:false,detail:'https://secret.example/v1 sk-secret apiKey=bad',circuit:{state:'open',consecutiveFailures:3,retryAt:99}})},logger:createNullLogger(),jitterRatio:0});await coordinator.tick();const text=JSON.stringify(coordinator.snapshot());expect(text).not.toContain('secret.example');expect(text).not.toContain('sk-secret');expect(text).not.toContain('apiKey');expect(coordinator.snapshot().profiles[0]).toMatchObject({profileId:'primary',modelId:'vendor/model',availability:'open',circuit:'open'});});
+});
