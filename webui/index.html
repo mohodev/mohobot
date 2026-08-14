@@ -12,27 +12,27 @@
   <section id="login-view" class="login-view">
     <form id="login-form" class="login-panel" autocomplete="on">
       <div class="brand-mark">墨</div>
-      <div><span class="eyebrow">MOHOBOT CONTROL PLANE</span><h1>管理控制台</h1></div>
-      <p class="muted">使用管理账号登录。首次部署可切换到 Legacy Bootstrap，用本地 Token 建立会话。</p>
+      <div><span class="eyebrow">MOHOBOT 管理平面</span><h1>管理控制台</h1></div>
+      <p class="muted">使用管理账号登录。首次部署可切换到本地初始化令牌，用本地令牌建立会话。</p>
       <div id="login-error" class="notice error" hidden></div>
       <div id="account-fields">
         <label for="username">用户名</label><input id="username" name="username" autocomplete="username" required>
         <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required>
       </div>
       <div id="legacy-fields" hidden>
-        <label for="bootstrap-token">Bootstrap Token</label><input id="bootstrap-token" name="token" type="password" autocomplete="off">
+        <label for="bootstrap-token">本地初始化令牌</label><input id="bootstrap-token" name="token" type="password" autocomplete="off">
       </div>
       <button class="primary wide" type="submit">登录</button>
-      <button id="login-mode" class="link-button" type="button">使用 Legacy Bootstrap</button>
+      <button id="login-mode" class="link-button" type="button">使用本地初始化令牌</button>
     </form>
   </section>
 
   <div id="console-view" class="shell" hidden>
     <aside>
-      <div class="brand">墨染荷韵<small>MohoBot Console</small></div>
+      <div class="brand">墨染荷韵<small>MohoBot 控制台</small></div>
       <nav id="navigation">
         <button data-tab="overview" data-permission="status.read" class="active">仪表盘</button>
-        <button data-tab="bots" data-permission="status.read">Bot 与平台</button>
+        <button data-tab="bots" data-permission="status.read">机器人与平台</button>
         <button data-tab="plugins" data-permission="plugin.read">插件管理</button>
         <button data-tab="extensions" data-permission="extensions.read">扩展与工具</button>
         <button data-tab="operations" data-permission="sessions.chat.read">运行数据</button>
@@ -54,16 +54,16 @@
       <div class="account-box"><strong id="account-name"></strong><span id="account-role"></span><button id="logout" type="button">退出登录</button></div>
     </aside>
     <main>
-      <header><div><span class="eyebrow">CONTROL PLANE</span><h1 id="title">仪表盘</h1></div><span id="status" class="pill neutral">正在连接</span></header>
+      <header><div><span class="eyebrow">管理平面</span><h1 id="title">仪表盘</h1></div><span id="status" class="pill neutral">正在连接</span></header>
       <section id="app" aria-live="polite"></section>
     </main>
   </div>
 
   <dialog id="confirmation-dialog">
     <form method="dialog" class="modal-panel">
-      <span class="eyebrow">SECONDARY CONFIRMATION</span><h2>确认管理操作</h2>
+      <span class="eyebrow">二次确认</span><h2>确认管理操作</h2>
       <p id="confirmation-description" class="muted"></p>
-      <label for="confirmation-text">输入 <strong>CONFIRM</strong> 继续</label>
+      <label for="confirmation-text">输入 <strong>确认</strong> 继续</label>
       <input id="confirmation-text" autocomplete="off">
       <div class="modal-actions"><button value="cancel">取消</button><button id="confirmation-submit" class="danger" value="confirm">确认执行</button></div>
     </form>
