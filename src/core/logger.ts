@@ -7,6 +7,7 @@
  */
 
 import pino, { type Logger as PinoLogger } from 'pino';
+import type { LogSink } from './log-buffer.js';
 
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -28,10 +29,18 @@ const REDACT_PATHS = [
   'authorization',
   'password',
   'secret',
+  'content',
+  'prompt',
+  'body',
+  'messages',
   '*.token',
   '*.apiKey',
   '*.api_key',
   '*.authorization',
+  '*.content',
+  '*.prompt',
+  '*.body',
+  '*.messages',
   'config.discord.token',
   'config.ai.apiKey',
   'headers.authorization',
@@ -84,14 +93,16 @@ function scrubDeep(value: unknown, depth = 0): unknown {
   return value;
 }
 
-function wrap(base: PinoLogger): Logger {
+function wrap(base: PinoLogger, sink?: LogSink, bindings: Record<string, unknown> = {}): Logger {
   const call = (level: LogLevel) => (obj: unknown, msg?: string) => {
     const safeMsg = typeof msg === 'string' ? scrub(msg) : undefined;
+    const safeObj = typeof obj === 'string' ? undefined : scrubDeep(obj);
+    sink?.write({ level, bindings: scrubDeep(bindings) as Record<string, unknown>, message: typeof obj === 'string' ? scrub(obj) : safeMsg, data: safeObj });
     if (typeof obj === 'string') {
       base[level](scrub(obj));
       return;
     }
-    base[level](scrubDeep(obj) as object, safeMsg);
+    base[level](safeObj as object, safeMsg);
   };
   return {
     trace: call('trace'),
@@ -100,7 +111,10 @@ function wrap(base: PinoLogger): Logger {
     warn: call('warn'),
     error: call('error'),
     fatal: call('fatal'),
-    child: (bindings) => wrap(base.child(scrubDeep(bindings) as Record<string, unknown>)),
+    child: (childBindings) => {
+      const safe = scrubDeep(childBindings) as Record<string, unknown>;
+      return wrap(base.child(safe), sink, { ...bindings, ...safe });
+    },
   };
 }
 
@@ -108,6 +122,7 @@ export interface LoggerOptions {
   level?: LogLevel;
   pretty?: boolean;
   name?: string;
+  sink?: LogSink;
 }
 
 export function createLogger(options: LoggerOptions = {}): Logger {
@@ -126,7 +141,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
         }
       : {}),
   });
-  return wrap(base);
+  return wrap(base, options.sink, options.name ? { component: options.name } : {});
 }
 
 /** Silent logger for tests. */

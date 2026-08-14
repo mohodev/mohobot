@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createNullLogger } from '../core/logger.js';
+import { createNullLogger, registerSecret, clearSecrets } from '../core/logger.js';
+import { LogBuffer } from '../core/log-buffer.js';
 import { MemoryStorage } from '../storage/memory.js';
 import { AdminServer } from './server.js';
 import { OpsControlFacade } from './ops-control.js';
@@ -13,6 +14,7 @@ describe('AdminServer production authorization chain', () => {
   let root: string;
   let storage: MemoryStorage;
   let server: AdminServer;
+  let logs: LogBuffer;
   let base: string;
   const master = 'master-token-for-integration-tests';
 
@@ -20,13 +22,14 @@ describe('AdminServer production authorization chain', () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'mohobot-admin-server-'));
     await fs.mkdir(path.join(root, 'webui'), { recursive: true });
     await fs.writeFile(path.join(root, 'webui', 'index.html'), '<h1>Moho</h1>');
+    clearSecrets();logs=new LogBuffer({capacity:3});
     storage = new MemoryStorage({ logger: createNullLogger() });
     await storage.init();
     server = new AdminServer({
       rootDir: root, host: '127.0.0.1', port: 0, token: master, logger: createNullLogger(), storage, snapshots: () => [],
       remoteHealth: async () => ({ mysql: { ok: true } }), modelHealth: async () => ({ reply: { ok: true } }),
       configPublication: { get: async () => ({ version: 1 }), publish: async (input, principal) => ({ ...input, actor: principal.id }) },
-      ops:new OpsControlFacade({storage,listTasks:()=>[{id:'task-1',name:'world:tick',kind:'interval',state:'pending',createdAt:1,runs:2,errors:0}]}),
+      ops:new OpsControlFacade({storage,listTasks:()=>[{id:'task-1',name:'world:tick',kind:'interval',state:'pending',createdAt:1,runs:2,errors:0}]}),logs,
     });
     await server.start();
     base = `http://127.0.0.1:${server.port}`;
@@ -140,6 +143,8 @@ describe('AdminServer production authorization chain', () => {
   });
 
   it('exposes narrow redacted ops controls with RBAC and confirmations',async()=>{const admin=await bootstrap();const session={kind:'session',recordVersion:1,key:'session:main:channel:user',botId:'main',channelId:'channel',userId:'user',messages:[{role:'user',content:'private session body'}],updatedAt:5};await storage.save(session.key,session);await storage.save('outbox:failed-1',{eventId:'failed-1',type:'message.updated',payload:{token:'private payload'},status:'failed',attempts:2,createdAt:1,updatedAt:2,nextAttemptAt:9,lastError:'private remote error'});await storage.save('outbox:done-1',{eventId:'done-1',type:'message.updated',payload:{},status:'done',attempts:1,createdAt:1,updatedAt:2,nextAttemptAt:2});const sessions=await request('GET','/api/ops/sessions?botId=main&limit=1',{token:admin});expect(sessions.status).toBe(200);expect(JSON.stringify(sessions.data)).not.toContain('private session');const outbox=await request('GET','/api/ops/outbox?status=failed',{token:admin});expect(outbox.status).toBe(200);expect(JSON.stringify(outbox.data)).not.toContain('private payload');expect(JSON.stringify(outbox.data)).not.toContain('private remote');expect((await request('GET','/api/tasks',{token:admin})).data.tasks.items[0]).toMatchObject({name:'world:tick'});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin})).status).toBe(409);const delNonce=await confirmation(admin,'DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin,confirmation:delNonce})).status).toBe(200);const retryBody={};const retryNonce=await confirmation(admin,'POST','/api/ops/outbox/failed-1/retry',retryBody);expect((await request('POST','/api/ops/outbox/failed-1/retry',{token:admin,confirmation:retryNonce,body:retryBody})).data.event.status).toBe('pending');const doneNonce=await confirmation(admin,'POST','/api/ops/outbox/done-1/retry',{});expect((await request('POST','/api/ops/outbox/done-1/retry',{token:admin,confirmation:doneNonce,body:{}})).status).toBe(409);expect((await request('DELETE','/api/ops/sessions/not-a-session-key',{token:admin})).status).toBe(409);});
+
+  it('polls redacted structured logs with gap and filters under logs.read',async()=>{const secret='log-api-secret-value-123';registerSecret(secret);logs.write({level:'info',bindings:{component:'runtime'},message:'one'});logs.write({level:'warn',bindings:{component:'discord'},message:`failure ${secret}`,data:{token:secret,content:'private chat',prompt:'private prompt',safe:`masked ${secret}`}});logs.write({level:'error',bindings:{component:'runtime'},message:'three'});logs.write({level:'error',bindings:{component:'runtime'},message:'four'});logs.write({level:'info',bindings:{component:'other'},message:'five'});expect((await request('GET','/api/logs')).status).toBe(401);const admin=await bootstrap();const result=await request('GET','/api/logs?after=1&limit=1&level=error&component=runtime',{token:admin});expect(result.status).toBe(200);expect(result.data.logs).toMatchObject({gap:true,oldestSeq:3,latestSeq:5,items:[{seq:3,level:'error',component:'runtime',message:'three'}]});const all=await request('GET','/api/logs',{token:admin});const serialized=JSON.stringify(all.data);expect(serialized).not.toContain(secret);expect(serialized).not.toContain('private chat');expect(serialized).not.toContain('private prompt');expect((await request('GET','/api/logs?limit=501',{token:admin})).status).toBe(400);expect((await request('GET','/api/logs?level=nope',{token:admin})).status).toBe(400);});
 
   it('filters and paginates audit records through the strict ops facade',async()=>{const admin=await bootstrap();await request('GET','/api/status',{token:admin});const result=await request('GET','/api/admin/audit?actor=bootstrap&outcome=allowed&method=GET&limit=1&offset=0',{token:admin});expect(result.status).toBe(200);expect(result.data.audit).toMatchObject({limit:1,offset:0,items:expect.any(Array)});expect(result.data.audit.items.every((item:any)=>item.actor==='bootstrap'&&item.outcome==='allowed'&&item.method==='GET')).toBe(true);expect((await request('GET','/api/admin/audit?limit=101',{token:admin})).status).toBe(400);});
   it('enforces memory metadata/detail/delete permissions and confirmation',async()=>{await storage.save('semantic-memory:main:u:1:id',{id:'id',botId:'main',channelId:'dm:u',userId:'u',scope:'private',text:'private body',user:{role:'user',content:'private'},assistant:{role:'assistant',content:'reply'},createdAt:1});const admin=await bootstrap();const create={username:'viewer-memory',password:'long viewer password',role:'viewer',enabled:true};let nonce=await confirmation(admin,'POST','/api/admin/users',create);await request('POST','/api/admin/users',{token:admin,confirmation:nonce,body:create});const login=await request('POST','/api/auth/login',{body:{username:'viewer-memory',password:'long viewer password'}});const viewer=login.data.token;const list=await request('GET','/api/memory',{token:viewer});expect(list.status).toBe(200);expect(JSON.stringify(list.data)).not.toContain('private body');const key=encodeURIComponent(list.data.memories[0].key);expect((await request('GET',`/api/memory/${key}`,{token:viewer})).status).toBe(403);expect((await request('DELETE',`/api/memory/${key}`,{token:admin})).status).toBe(409);nonce=await confirmation(admin,'DELETE',`/api/memory/${key}`,{});expect((await request('DELETE',`/api/memory/${key}`,{token:admin,confirmation:nonce})).status).toBe(200);});

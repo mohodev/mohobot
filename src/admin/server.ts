@@ -4,7 +4,8 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { BotSnapshot } from '../bot/runtime.js';
 import { CharacterCatalog } from '../characters/catalog.js';
-import type { Logger } from '../core/logger.js';
+import type { Logger, LogLevel } from '../core/logger.js';
+import type { LogBuffer } from '../core/log-buffer.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
 import type { Storage } from '../storage/types.js';
@@ -43,6 +44,7 @@ export interface AdminServerOptions {
   modelHealth?: () => Promise<unknown>;
   botControl?: BotControlFacade;
   ops?: OpsControlFacade;
+  logs?: LogBuffer;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -245,6 +247,13 @@ export class AdminServer {
     }
     if (method === 'POST' && pathname === '/api/confirmations') return this.#issueConfirmation(auth, input);
     if (method === 'GET' && pathname === '/api/metrics') return this.#ok({ metrics: runtimeMetrics.snapshot() });
+    if(method==='GET'&&pathname==='/api/logs'){
+      if(!this.#opts.logs)throw new HttpError(409,'log buffer unavailable');
+      const level=stringParam(url,'level');if(level&&!['trace','debug','info','warn','error','fatal'].includes(level))throw new HttpError(400,'invalid level');
+      const component=stringParam(url,'component');if(component&&component.length>64)throw new HttpError(400,'invalid component');
+      const after=intParam(url,'after');const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>500))throw new HttpError(400,'invalid limit');
+      return this.#ok({logs:this.#opts.logs.query({after,limit,level:level as LogLevel|undefined,component})});
+    }
     if (method === 'GET' && pathname === '/api/status') return this.#ok({ now: new Date().toISOString(), bots: this.#opts.snapshots() });
     if (method === 'GET' && pathname === '/api/models') {
       const catalog = await this.#catalog.get();
