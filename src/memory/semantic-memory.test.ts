@@ -126,6 +126,7 @@ describe('SemanticMemoryAdapter', () => {
       logger,
       embedding,
       allowedScopes: () => ['shared'],
+      channelDomain: (channelId) => channelId === 'other' || channelId === 'channel' ? 'guild:g' : `dm:${channelId}`,
     });
     const recalled = await adapter.recall({ botId: 'bot', channelId: 'other', userId: 'user', query: 'hobby' });
 
@@ -134,6 +135,8 @@ describe('SemanticMemoryAdapter', () => {
     expect(embeddedTexts.join('\n')).not.toContain('private secret');
     expect(embeddedTexts.join('\n')).not.toContain('relationship detail');
   });
+
+  it('never recalls private or relationship memory across channels and separates DM/group domains', async()=>{const store=await storage();let scope:MemoryScope='private',now=1;const writer=new SemanticMemoryAdapter({storage:store,logger,scopeForExchange:()=>scope,now:()=>now});await writer.remember({botId:'bot',channelId:'guild-a',userId:'user',user:message('user','private guild'),assistant:message('assistant','p')});scope='relationship';now=2;await writer.remember({botId:'bot',channelId:'guild-a',userId:'user',user:message('user','relationship guild'),assistant:message('assistant','r')});scope='shared';now=3;await writer.remember({botId:'bot',channelId:'guild-a',userId:'user',user:message('user','shared guild'),assistant:message('assistant','s')});const reader=new SemanticMemoryAdapter({storage:store,logger,allowedScopes:()=>['private','relationship','shared'],channelDomain:(id)=>id.startsWith('guild-')?'guild:g':`dm:${id}`});const guild=await reader.recall({botId:'bot',channelId:'guild-b',userId:'user',query:'guild'});expect(guild.map(x=>x.content).join('\n')).toContain('shared guild');expect(guild.map(x=>x.content).join('\n')).not.toContain('private guild');expect(guild.map(x=>x.content).join('\n')).not.toContain('relationship guild');expect(await reader.recall({botId:'bot',channelId:'dm-user',userId:'user',query:'guild'})).toEqual([]);});
 
   it('isolates memories by bot and user and falls back to recent records', async () => {
     const store = await storage();

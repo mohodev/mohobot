@@ -1,3 +1,4 @@
+import{createHash}from'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -9,6 +10,7 @@ export interface CharacterRecord {
   tags: string[];
   source?: string;
   updatedAt: string;
+  revision: string;
 }
 
 function idFromFile(file: string): string {
@@ -37,6 +39,7 @@ export class CharacterCatalog {
         prompt,
         tags: [],
         updatedAt: stat.mtime.toISOString(),
+        revision: createHash('sha256').update(prompt).digest('hex'),
       });
     }
     return records;
@@ -46,10 +49,11 @@ export class CharacterCatalog {
     return (await this.list()).find((item) => item.id === id || item.promptFile === id);
   }
 
-  async save(input: { id?: string; name: string; prompt: string; source?: string }): Promise<CharacterRecord> {
+  async save(input: { id?: string; name: string; prompt: string; source?: string;expectedRevision?:string }): Promise<CharacterRecord> {
     const safe = (input.id ?? input.name).toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff_-]+/g, '-').replace(/^-|-$/g, '');
     if (!safe) throw new Error('character id is empty');
     if (input.prompt.trim().length < 20) throw new Error('character prompt is too short');
+    if(input.expectedRevision!==undefined){const current=await this.get(safe);if(!current)throw new Error('character not found');if(current.revision!==input.expectedRevision)throw new Error('character revision conflict');}
     await fs.mkdir(this.#dir, { recursive: true });
     const file = `${safe}.md`;
     const body = input.prompt.startsWith('# ') ? input.prompt : `# ${input.name}\n\n${input.prompt.trim()}\n`;
