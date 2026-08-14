@@ -27,6 +27,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/ops\/outbox$/,permission:'outbox.read',action:'ops.outbox.read',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/ops\/outbox\/[^/]+\/retry$/,permission:'outbox.retry',action:'ops.outbox.retry',risk:'impact',confirmation:true},
 {method:'GET',pattern:/^\/api\/tasks$/,permission:'tasks.read',action:'tasks.read',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/tasks\/[^/]+\/(pause|resume|run)$/,permission:'tasks.control',action:'tasks.control',risk:'impact',confirmation:true},
 {method:'GET',pattern:/^\/api\/admin\/health$/,permission:'status.read',action:'runtime.health',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/admin\/users$/,permission:'users.read',action:'users.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/admin\/users$/,permission:'users.create',action:'users.create',risk:'impact',confirmation:true},
