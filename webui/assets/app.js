@@ -88,7 +88,8 @@ function showConsole(me) {
   document.querySelector('#account-name').textContent = identity.principal.username || identity.principal.id || '管理员';
   document.querySelector('#account-role').textContent = identity.principal.role || 'unknown';
   document.querySelectorAll('#navigation [data-permission]').forEach((button) => { button.hidden = !has(button.dataset.permission); });
-  const first = [...document.querySelectorAll('#navigation button:not([hidden])')][0];
+  const requested=location.hash.replace(/^#\/?/,'');
+  const first=[...document.querySelectorAll('#navigation button:not([hidden])')].find(button=>button.dataset.tab===requested)||[...document.querySelectorAll('#navigation button:not([hidden])')][0];
   if (first) activate(first);
 }
 
@@ -242,9 +243,11 @@ async function activate(button) {
   if (!button || button.hidden) return;
   document.querySelectorAll('#navigation button').forEach((item) => item.classList.toggle('active', item === button));
   title.textContent = button.textContent;
+  if(location.hash!==`#/${button.dataset.tab}`)history.replaceState(null,'',`#/${button.dataset.tab}`);
   app.innerHTML = '<div class="loading">正在加载…</div>';
   try { await tabs[button.dataset.tab](); setConnected(true); } catch (error) { if (error.statusCode !== 401) { setConnected(false); app.innerHTML = `<div class="notice error">${esc(error.message)}</div>`; } }
 }
 document.querySelectorAll('#navigation button').forEach((button) => button.addEventListener('click', () => activate(button)));
+window.addEventListener('hashchange',()=>{const tab=location.hash.replace(/^#\/?/,'');const button=[...document.querySelectorAll('#navigation button')].find(x=>x.dataset.tab===tab&&!x.hidden);if(button)activate(button);});
 
 await authenticate();
