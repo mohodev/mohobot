@@ -44,7 +44,11 @@ const semanticMemoryFactory: MemoryFactory = (deps) => {
   const recallLimit = typeof deps.options['recallLimit'] === 'number' ? deps.options['recallLimit'] : undefined;
   const candidateLimit = typeof deps.options['candidateLimit'] === 'number' ? deps.options['candidateLimit'] : undefined;
   const embeddingBatchSize = typeof deps.options['embeddingBatchSize'] === 'number' ? deps.options['embeddingBatchSize'] : undefined;
-  return new SemanticMemoryAdapter({ storage: deps.storage, logger: deps.logger, recallLimit, candidateLimit, embeddingBatchSize });
+  const configuredDomains=deps.options['channelDomains'];const channelDomains=configuredDomains&&typeof configuredDomains==='object'&&!Array.isArray(configuredDomains)?configuredDomains as Record<string,unknown>:{};
+  const channelDomain=(channelId:string)=>typeof channelDomains[channelId]==='string'&&String(channelDomains[channelId]).trim()?String(channelDomains[channelId]).trim():`channel:${channelId}`;
+  const configuredScopes=deps.options['allowedScopes'];const safeScopes=Array.isArray(configuredScopes)?configuredScopes.filter((scope):scope is 'private'|'relationship'|'shared'=>scope==='private'||scope==='relationship'||scope==='shared'):undefined;
+  const allowedScopes=safeScopes?()=>safeScopes:undefined;
+  return new SemanticMemoryAdapter({ storage: deps.storage, logger: deps.logger, recallLimit, candidateLimit, embeddingBatchSize,channelDomain,allowedScopes });
 };
 
 /** Register built-in storage drivers and memory adapters. Idempotent. */

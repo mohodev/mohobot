@@ -40,6 +40,8 @@ export interface SemanticMemoryOptions {
   embeddingBatchSize?: number;
   scopeForExchange?: (input: Parameters<MemoryAdapter['remember']>[0]) => MemoryScope;
   allowedScopes?: (input: Parameters<MemoryAdapter['recall']>[0]) => readonly MemoryScope[];
+  /** Maps a channel to an authorization domain such as `dm:<id>` or `guild:<id>`. */
+  channelDomain?: (channelId: string) => string;
   /** Injectable monotonic clock for deterministic tests and clustered nodes. */
   now?: () => number;
 }
@@ -96,6 +98,8 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
   readonly #embeddingBatchSize: number;
   readonly #scopeForExchange: NonNullable<SemanticMemoryOptions['scopeForExchange']>;
   readonly #allowedScopes: NonNullable<SemanticMemoryOptions['allowedScopes']>;
+  readonly #crossChannelScopeAuthorized:boolean;
+  readonly #channelDomain: NonNullable<SemanticMemoryOptions['channelDomain']>;
   readonly #now: () => number;
 
   constructor(options: SemanticMemoryOptions) {
@@ -108,6 +112,8 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
     this.#embeddingBatchSize = Math.max(1, options.embeddingBatchSize ?? 16);
     this.#scopeForExchange = options.scopeForExchange ?? (() => 'private');
     this.#allowedScopes = options.allowedScopes ?? (() => ALL_SCOPES);
+    this.#crossChannelScopeAuthorized=options.allowedScopes!==undefined;
+    this.#channelDomain = options.channelDomain ?? ((channelId) => `channel:${channelId}`);
     this.#now = options.now ?? Date.now;
   }
 
@@ -146,8 +152,14 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
       prefix: `${PREFIX}${input.botId}:`,
       limit: this.#candidateLimit * 4,
     });
+    const targetDomain = this.#channelDomain(input.channelId);
     const visible = records
-      .filter(({ value }) => value.userId === input.userId && allowed.has(value.scope))
+      .filter(({ value }) => {
+        if (value.userId !== input.userId || !allowed.has(value.scope)) return false;
+        if (value.channelId === input.channelId) return true;
+        if (value.scope !== 'shared' || !this.#crossChannelScopeAuthorized) return false;
+        return this.#channelDomain(value.channelId) === targetDomain;
+      })
       .sort((a, b) => b.value.createdAt - a.value.createdAt)
       .slice(0, this.#candidateLimit);
 

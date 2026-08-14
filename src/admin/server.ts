@@ -6,6 +6,7 @@ import type { BotSnapshot } from '../bot/runtime.js';
 import { CharacterCatalog } from '../characters/catalog.js';
 import type { Logger } from '../core/logger.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import{MemoryAdminService}from'../memory/admin-service.js';
 import type { Storage } from '../storage/types.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
@@ -19,6 +20,8 @@ import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
 import { WorldStore } from './world.js';
+import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
+import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -111,6 +114,7 @@ export class AdminServer {
   readonly #affinity: AffinityStore;
   readonly #device: DeviceStore;
   readonly #catalog: ModelCatalogStore;
+  readonly #memories:MemoryAdminService;
   #server?: http.Server;
 
   constructor(opts: AdminServerOptions) {
@@ -121,6 +125,7 @@ export class AdminServer {
     this.#affinity = new AffinityStore(opts.rootDir);
     this.#device = new DeviceStore(opts.rootDir);
     this.#catalog = new ModelCatalogStore(opts.rootDir);
+    this.#memories=new MemoryAdminService(opts.storage);
   }
 
   get port(): number | undefined {
@@ -310,10 +315,16 @@ export class AdminServer {
       const rows = await this.#characters.list();
       return this.#ok({ characters: rows.map(({ prompt, ...item }) => ({ ...item, promptLength: prompt.length })) });
     }
+    const characterMatch=pathname.match(/^\/api\/characters\/([^/]+)$/);
+    if(method==='GET'&&characterMatch){const character=await this.#characters.get(decodeURIComponent(characterMatch[1]!));if(!character)throw new HttpError(404,'character not found');return this.#ok({character});}
+    if(method==='PUT'&&characterMatch){const id=decodeURIComponent(characterMatch[1]!);const expectedRevision=String(input.expectedRevision??'');if(!/^[a-f0-9]{64}$/.test(expectedRevision))throw new HttpError(400,'expectedRevision required');const saved=await this.#characters.save({id,name:String(input.name??'').trim(),prompt:String(input.prompt??''),source:typeof input.source==='string'?input.source:undefined,expectedRevision});return this.#ok({character:saved});}
     if (method === 'POST' && pathname === '/api/characters') {
       const saved = await this.#characters.save({ id: typeof input.id === 'string' ? input.id : undefined, name: String(input.name ?? '').trim(), prompt: String(input.prompt ?? ''), source: typeof input.source === 'string' ? input.source : undefined });
       return { status: 201, body: { ok: true, character: { ...saved, promptLength: saved.prompt.length } } };
     }
+    if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
+    const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
+    if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#world.get(),this.#device.get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
     if (method === 'GET' && pathname === '/api/world') return this.#ok({ world: await this.#world.get() });
     if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#world.schedule({ ...input, trust: 'candidate' }) } };
     if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
@@ -331,13 +342,11 @@ export class AdminServer {
     if (method === 'POST' && pathname === '/api/world/events') return { status: 201, body: { ok: true, world: await this.#world.event(String(input.type ?? 'social'), String(input.text ?? '').trim()) } };
     if (method === 'GET' && pathname === '/api/device') return this.#ok({ device: await this.#device.get() });
     if (method === 'POST' && pathname === '/api/device/transition') {
-      const allowed = ['battery', 'charging', 'network', 'screen', 'doNotDisturb', 'activity', 'notificationCount'];
-      const patch = Object.fromEntries(allowed.filter((key) => key in input).map((key) => [key, input[key]]));
-      return this.#ok({ device: await this.#device.transition(patch) });
+      return this.#ok({ device: await this.#device.transition(parseDevicePatch(input)) });
     }
     if (method === 'GET' && pathname === '/api/affinity') return this.#ok({ affinity: await this.#affinity.list(url.searchParams.get('botId') ?? undefined) });
     if (method === 'POST' && pathname === '/api/affinity/adjust') {
-      const row = await this.#affinity.adjust(String(input.botId ?? 'main'), String(input.userId ?? ''), Number(input.delta ?? 0), 'manual', typeof input.note === 'string' ? input.note : undefined);
+      const parsed=parseAffinityAdjust(input);const row = await this.#affinity.adjust(parsed.botId,parsed.userId,parsed.delta,parsed.reason,parsed.note);
       return this.#ok({ affinity: row });
     }
     throw new HttpError(403, `handler missing for policy ${policy.action}`);
@@ -389,6 +398,8 @@ export class AdminServer {
       if (error.code === 'disabled') return new HttpError(403, error.code);
       return new HttpError(400, error.code);
     }
+    if(error instanceof Error&&error.message==='character revision conflict')return new HttpError(409,error.message);
+    if(error instanceof Error&&error.message==='character not found')return new HttpError(404,error.message);
     return new HttpError(400, error instanceof Error ? error.message : 'bad request');
   }
 
