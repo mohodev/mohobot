@@ -1,0 +1,12 @@
+# Copy to config/global.local.yaml for machine-local overrides.
+# The .local file is ignored by Git and recursively merged over global.yaml.
+# Secrets still belong in .env.local, never here.
+version: 1
+
+logLevel: debug
+
+storage:
+  path: ./data/mohobot.local.db
+
+session:
+  maxMessages: 30

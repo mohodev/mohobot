@@ -111,6 +111,59 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.admin).toEqual({ enabled: true, userIds: ['123'] });
   });
 
+  it('keeps legacy tracked-only fixtures working unchanged', async () => {
+    await writeGlobal(['version: 1', 'logLevel: debug', 'session:', '  maxMessages: 7', ''].join('\n'));
+    await writeBot('legacy.yaml', ['name: Legacy', 'session:', '  scope: channel', ''].join('\n'));
+    const cfg = await newLoader().load();
+    expect(cfg.global.version).toBe(1);
+    expect(cfg.global.session.maxMessages).toBe(7);
+    expect(cfg.bots[0]).toMatchObject({ id: 'legacy', name: 'Legacy' });
+    expect(cfg.bots[0]).not.toHaveProperty('version');
+    expect(cfg.bots[0]?.session.scope).toBe('channel');
+  });
+
+  it('deep-merges global, bot and provider local overrides without creating duplicate bots', async () => {
+    await mkdir(path.join(rootDir, 'data'), { recursive: true });
+    await writeGlobal(['logLevel: info', 'session:', '  maxMessages: 5', '  ttlSeconds: 60', 'ai:', '  options:', '    budget:', '      rpm: 10', '      concurrency: 2', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'config', 'global.local.yaml'), ['session:', '  maxMessages: 9', 'ai:', '  options:', '    budget:', '      concurrency: 4', 'futureGlobal:', '  enabled: true', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'data', 'provider.yaml'), ['provider: openai-compatible', 'model: tracked-model', 'options:', '  headers:', '    x-one: tracked', '    x-two: tracked', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'data', 'provider.local.yaml'), ['model: local-provider-model', 'options:', '  headers:', '    x-two: local', ''].join('\n'));
+    await writeBot('main.yaml', ['name: Main', 'ai:', '  options:', '    budget:', '      rpm: 20', 'session:', '  scope: user', ''].join('\n'));
+    await writeBot('main.local.yaml', ['name: Local Main', 'ai:', '  options:', '    budget:', '      concurrency: 4', 'session:', '  threadContext: inherit-parent', 'futureBotField: true', ''].join('\n'));
+
+    const cfg = await newLoader().load();
+    expect(cfg.bots).toHaveLength(1);
+    expect(cfg.bots[0]?.id).toBe('main');
+    expect(cfg.bots[0]?.name).toBe('Local Main');
+    expect(cfg.bots[0]?.session).toMatchObject({ maxMessages: 9, ttlSeconds: 60, scope: 'user', threadContext: 'inherit-parent' });
+    expect(cfg.bots[0]?.ai.model).toBe('local-provider-model');
+    expect(cfg.bots[0]?.ai.options).toMatchObject({ budget: { rpm: 20, concurrency: 4 } });
+  });
+
+  it('deep-merges tracked and local provider options', async () => {
+    await writeGlobal('logLevel: info\n');
+    await mkdir(path.join(rootDir, 'data'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data', 'provider.yaml'), ['options:', '  headers:', '    x-one: tracked', '    x-two: tracked', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'data', 'provider.local.yaml'), ['options:', '  headers:', '    x-two: local', ''].join('\n'));
+    await writeBot('main.yaml', 'name: Main\n');
+    const cfg = await newLoader().load();
+    expect(cfg.global.ai.options).toEqual({ headers: { 'x-one': 'tracked', 'x-two': 'local' } });
+  });
+
+  it('keeps environment precedence above all local YAML overrides', async () => {
+    await writeGlobal(['ai:', '  model: tracked', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'config', 'global.local.yaml'), ['logLevel: debug', 'ai:', '  model: local-global', ''].join('\n'));
+    await writeBot('main.yaml', ['ai:', '  model: tracked-bot', ''].join('\n'));
+    await writeBot('main.local.yaml', ['ai:', '  model: local-bot', ''].join('\n'));
+    process.env['LOG_LEVEL'] = 'error';
+    process.env['AI_MODEL'] = 'global-env';
+    process.env['MOHO_BOT_MAIN_AI_MODEL'] = 'bot-env';
+    const cfg = await newLoader().load();
+    expect(cfg.global.logLevel).toBe('error');
+    expect(cfg.global.ai.model).toBe('global-env');
+    expect(cfg.bots[0]?.ai.model).toBe('bot-env');
+  });
+
   it('lets global.yaml override data/provider.yaml defaults', async () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(

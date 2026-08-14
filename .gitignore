@@ -18,9 +18,12 @@ data/storage/*.json
 # keep persona prompts versioned
 !data/prompts/
 !data/prompts/**
-# secrets
+# secrets and machine-local configuration overlays
 .env
 .env.local
+config/global.local.yaml
+config/bots/*.local.yaml
+data/provider.local.yaml
 *.log
 logs/
 *_TODO.md

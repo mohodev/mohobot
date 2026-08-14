@@ -13,7 +13,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
-import type { z } from 'zod';
+import { z } from 'zod';
 
 import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
@@ -34,6 +34,7 @@ import {
 } from './schema.js';
 
 const BOT_FILE_RE = /\.ya?ml$/i;
+const LOCAL_BOT_FILE_RE = /\.local\.ya?ml$/i;
 
 export interface ConfigLoaderOptions {
   /** Project root. `config/` and `.env` are resolved against it. */
@@ -72,6 +73,17 @@ function pruneUndefined(input: unknown): Record<string, unknown> {
     if (value !== undefined) out[key] = value;
   }
   return out;
+}
+
+/** Objects merge recursively; arrays and scalar values replace the base. */
+export function deepMerge(base: unknown, override: unknown): unknown {
+  if (!isRecord(base) || !isRecord(override)) return override === undefined ? base : override;
+  const result: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    if (value === undefined) continue;
+    result[key] = isRecord(value) && isRecord(result[key]) ? deepMerge(result[key], value) : value;
+  }
+  return result;
 }
 
 function errText(error: unknown): string {
@@ -147,6 +159,10 @@ export class ConfigLoader {
 
   get globalFile(): string {
     return path.join(this.configDir, 'global.yaml');
+  }
+
+  get globalLocalFile(): string {
+    return path.join(this.configDir, 'global.local.yaml');
   }
 
   get botsDir(): string {
@@ -297,6 +313,13 @@ export class ConfigLoader {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') {
+        const local = await this.#readOptionalMapping(this.globalLocalFile, 'global local override');
+        if (local) {
+          this.#warnUnknownFields(this.globalLocalFile, local, GlobalConfigSchema);
+          const parsed = GlobalConfigSchema.safeParse(local);
+          if (parsed.success) return { global: this.#applyGlobalEnv(parsed.data) };
+          this.#log.warn({ file: this.globalLocalFile, issues: formatIssues(parsed.error) }, 'invalid global local override - using schema defaults');
+        }
         this.#log.warn({ file }, 'global.yaml not found - using schema defaults');
         return { global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})) };
       }
@@ -326,15 +349,20 @@ export class ConfigLoader {
       };
     }
 
+    let mergedData: Record<string, unknown> = data;
+    const local = await this.#readOptionalMapping(this.globalLocalFile, 'global local override');
+    if (local) mergedData = deepMerge(mergedData, local) as Record<string, unknown>;
+
     // AstrBot-style provider overrides from data/provider.yaml.
     const providerOverrides = await this.#loadProviderOverrides();
     if (Object.keys(providerOverrides).length > 0) {
-      data.ai = { ...providerOverrides, ...pruneUndefined(data.ai) };
+      mergedData.ai = deepMerge(providerOverrides, pruneUndefined(mergedData.ai));
     }
 
-    this.#warnYamlSecrets(file, data);
+    this.#warnYamlSecrets(file, mergedData);
+    this.#warnUnknownFields(file, mergedData, GlobalConfigSchema);
 
-    const parsed = GlobalConfigSchema.safeParse(data);
+    const parsed = GlobalConfigSchema.safeParse(mergedData);
     if (!parsed.success) {
       return {
         global: this.#applyGlobalEnv(GlobalConfigSchema.parse({})),
@@ -357,7 +385,8 @@ export class ConfigLoader {
       return { found: 0, entries: [] };
     }
 
-    const files = names.filter((name) => BOT_FILE_RE.test(name)).sort();
+    // A *.local.yaml file only overrides its tracked sibling; it is never a bot.
+    const files = names.filter((name) => BOT_FILE_RE.test(name) && !LOCAL_BOT_FILE_RE.test(name)).sort();
     const entries: RawBotFile[] = [];
 
     for (const name of files) {
@@ -380,7 +409,12 @@ export class ConfigLoader {
         this.#log.error({ file }, 'bot config must contain a mapping - skipping');
         continue;
       }
-      entries.push({ file, stem: name.replace(BOT_FILE_RE, ''), data });
+      const stem = name.replace(BOT_FILE_RE, '');
+      const localFile = path.join(this.botsDir, `${stem}.local.yaml`);
+      const local = await this.#readOptionalMapping(localFile, 'bot local override');
+      const merged = local ? deepMerge(data, local) as Record<string, unknown> : data;
+      this.#warnUnknownFields(file, merged, BotConfigSchema);
+      entries.push({ file, stem, data: merged });
     }
 
     return { found: files.length, entries };
@@ -544,23 +578,59 @@ export class ConfigLoader {
     }
   }
 
-  /**
-   * Optional AstrBot-style data/provider.yaml. Merged into the global AI config
-   * (below per-bot ai and environment variables). ${ENV_VAR} placeholders in
-   * any value are resolved from process.env at load time.
-   */
-  async #loadProviderOverrides(): Promise<Record<string, unknown>> {
-    const file = path.join(this.#rootDir, 'data', 'provider.yaml');
+  async #readOptionalMapping(file: string, label: string): Promise<Record<string, unknown> | undefined> {
     let text: string;
     try {
       text = await readFile(file, 'utf8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
-      this.#log.warn({ file, error: errText(error) }, 'unable to read provider.yaml - skipping');
-      return {};
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      this.#log.warn({ file, error: errText(error) }, `unable to read ${label} - ignoring`);
+      return undefined;
     }
-    const data = parseYaml(text);
-    if (!isRecord(data)) return {};
+    try {
+      const data = parseYaml(text) ?? {};
+      if (!isRecord(data)) {
+        this.#log.warn({ file }, `${label} must contain a mapping - ignoring`);
+        return undefined;
+      }
+      return data;
+    } catch (error) {
+      this.#log.warn({ file, error: errText(error) }, `invalid YAML in ${label} - ignoring`);
+      return undefined;
+    }
+  }
+
+  #warnUnknownFields(file: string, data: Record<string, unknown>, schema: z.AnyZodObject): void {
+    const fields: string[] = [];
+    const visit = (value: Record<string, unknown>, objectSchema: z.AnyZodObject, prefix = ''): void => {
+      const shape = objectSchema.shape as Record<string, z.ZodTypeAny>;
+      for (const [key, child] of Object.entries(value)) {
+        const field = prefix ? `${prefix}.${key}` : key;
+        const expected = shape[key];
+        if (!expected) { fields.push(field); continue; }
+        let unwrapped: z.ZodTypeAny = expected;
+        while (unwrapped instanceof z.ZodOptional || unwrapped instanceof z.ZodDefault || unwrapped instanceof z.ZodNullable) {
+          unwrapped = unwrapped._def.innerType as z.ZodTypeAny;
+        }
+        if (isRecord(child) && unwrapped instanceof z.ZodObject) visit(child, unwrapped, field);
+      }
+    };
+    visit(data, schema);
+    if (fields.length > 0) {
+      this.#log.warn({ file, fields: fields.sort() }, 'unknown config fields retained for forward compatibility and ignored by this version');
+    }
+  }
+
+  /**
+   * Optional AstrBot-style provider config. provider.local.yaml recursively
+   * overrides provider.yaml before global/bot/env precedence is applied.
+   */
+  async #loadProviderOverrides(): Promise<Record<string, unknown>> {
+    const file = path.join(this.#rootDir, 'data', 'provider.yaml');
+    const localFile = path.join(this.#rootDir, 'data', 'provider.local.yaml');
+    const tracked = await this.#readOptionalMapping(file, 'provider.yaml');
+    const local = await this.#readOptionalMapping(localFile, 'provider.local.yaml');
+    const data = deepMerge(tracked ?? {}, local ?? {}) as Record<string, unknown>;
     const resolveEnv = (value: unknown): unknown => {
       if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => process.env[name] ?? '');
       if (Array.isArray(value)) return value.map(resolveEnv);
@@ -568,7 +638,10 @@ export class ConfigLoader {
       return value;
     };
     const resolved = resolveEnv(data) as Record<string, unknown>;
-    this.#log.debug({ file }, 'loaded provider overrides from data/provider.yaml');
+    if (Object.keys(resolved).length > 0) {
+      this.#warnUnknownFields(local ? localFile : file, resolved, AIConfigSchema);
+      this.#log.debug({ file, local: Boolean(local) }, 'loaded provider overrides');
+    }
     return resolved;
   }
 }
