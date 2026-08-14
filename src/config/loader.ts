@@ -102,9 +102,9 @@ export function botEnvPrefix(id: string): string {
   return `MOHO_BOT_${id.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`;
 }
 
-/** Reads process.env, treating blank values as unset. */
-function envValue(key: string): string | undefined {
-  const raw = process.env[key];
+/** Reads one immutable environment snapshot, treating blank values as unset. */
+function envValue(source: Readonly<Record<string, string | undefined>>, key: string): string | undefined {
+  const raw = source[key];
   if (typeof raw !== 'string') return undefined;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : undefined;
@@ -142,6 +142,7 @@ export class ConfigLoader {
   readonly #log: Logger;
   readonly #events: EventBus | undefined;
   #last: ResolvedConfig | undefined;
+  #env: Readonly<Record<string, string | undefined>> = Object.freeze({ ...process.env });
 
   constructor(opts: ConfigLoaderOptions) {
     this.#rootDir = path.resolve(opts.rootDir);
@@ -225,7 +226,7 @@ export class ConfigLoader {
   // ---------------------------------------------------------------- internals
 
   async #build(): Promise<BuildResult> {
-    await this.#loadEnvFile();
+    this.#env = await this.#loadEnvSnapshot();
 
     const loaded = await this.#loadGlobal();
     const global = loaded.global;
@@ -282,27 +283,21 @@ export class ConfigLoader {
     };
   }
 
-  async #loadEnvFile(): Promise<void> {
-    // Local-only overrides win over the shared .env file, while real process
-    // environment variables still win over both.
-    for (const filename of ['.env.local', '.env']) {
+  async #loadEnvSnapshot(): Promise<Readonly<Record<string, string | undefined>>> {
+    const files: Record<string, string> = {};
+    // Shared .env is the base; machine-local .env.local overrides it.
+    for (const filename of ['.env', '.env.local']) {
       const envPath = path.join(this.#rootDir, filename);
-      let text: string;
       try {
-        text = await readFile(envPath, 'utf8');
+        Object.assign(files, parseEnvFile(await readFile(envPath, 'utf8')));
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, `unable to read ${filename}`);
-        continue;
       }
-      let applied = 0;
-      for (const [key, value] of Object.entries(parseEnvFile(text))) {
-        if (process.env[key] !== undefined) continue;
-        process.env[key] = value;
-        applied += 1;
-      }
-      if (applied > 0) this.#log.debug({ file: envPath, keys: applied }, `loaded ${filename}`);
     }
+    const snapshot = Object.freeze({ ...files, ...process.env });
+    this.#log.debug({ fileKeys: Object.keys(files).length }, 'built isolated environment snapshot');
+    return snapshot;
   }
 
   async #loadGlobal(): Promise<GlobalLoad> {
@@ -454,20 +449,20 @@ export class ConfigLoader {
       `bot ${bot.id} media`,
     );
     const resolveMediaProvider = (provider: typeof inheritedMedia.vision, label: string) => {
-      const apiKey = provider.enabled ? (envValue(provider.apiKeyEnv!) ?? '') : '';
+      const apiKey = provider.enabled ? (envValue(this.#env, provider.apiKeyEnv!) ?? '') : '';
       if (provider.enabled && !apiKey) this.#log.warn({ bot: bot.id, provider: label, env: provider.apiKeyEnv }, 'media provider enabled but secret env is unset; provider disabled');
       return { ...MediaProviderConfigSchema.parse(provider), enabled: provider.enabled && apiKey.length > 0, apiKey };
     };
     const media = { ...inheritedMedia, vision: resolveMediaProvider(inheritedMedia.vision, 'vision'), ocr: resolveMediaProvider(inheritedMedia.ocr, 'ocr') };
 
     const discord = { ...bot.discord };
-    const token = envValue(`${prefix}DISCORD_TOKEN`) ?? envValue('DISCORD_TOKEN');
+    const token = envValue(this.#env, `${prefix}DISCORD_TOKEN`) ?? envValue(this.#env, 'DISCORD_TOKEN');
     if (token !== undefined) discord.token = token;
 
     // `adapter` is an open registry name, so env can select any registered
     // gateway (e.g. MOHO_ADAPTER=telegram) without a schema change.
     let adapter = bot.adapter;
-    const adapterEnv = envValue('MOHO_ADAPTER');
+    const adapterEnv = envValue(this.#env, 'MOHO_ADAPTER');
     if (adapterEnv !== undefined) {
       const trimmed = adapterEnv.trim().toLowerCase();
       if (trimmed.length > 0) adapter = trimmed;
@@ -506,14 +501,14 @@ export class ConfigLoader {
       media: { ...global.media, vision: { ...global.media.vision }, ocr: { ...global.media.ocr } },
     };
 
-    const level = envValue('LOG_LEVEL');
+    const level = envValue(this.#env, 'LOG_LEVEL');
     if (level !== undefined) {
       const parsed = LogLevelSchema.safeParse(level.toLowerCase());
       if (parsed.success) next.logLevel = parsed.data;
       else this.#log.warn({ LOG_LEVEL: level }, 'ignoring invalid LOG_LEVEL value');
     }
 
-    const storagePath = envValue('MOHO_STORAGE_PATH');
+    const storagePath = envValue(this.#env, 'MOHO_STORAGE_PATH');
     if (storagePath !== undefined) next.storage.path = storagePath;
 
     next.ai = this.#applyAiEnv(next.ai, '');
@@ -523,13 +518,13 @@ export class ConfigLoader {
   #applyAiEnv(ai: AIConfig, prefix: string): AIConfig {
     const out: AIConfig = { ...ai };
 
-    const apiKey = envValue(`${prefix}AI_API_KEY`);
+    const apiKey = envValue(this.#env, `${prefix}AI_API_KEY`);
     if (apiKey !== undefined) out.apiKey = apiKey;
 
-    const model = envValue(`${prefix}AI_MODEL`);
+    const model = envValue(this.#env, `${prefix}AI_MODEL`);
     if (model !== undefined) out.model = model;
 
-    const baseUrl = envValue(`${prefix}AI_BASE_URL`);
+    const baseUrl = envValue(this.#env, `${prefix}AI_BASE_URL`);
     if (baseUrl !== undefined) {
       const parsed = AIConfigSchema.shape.baseUrl.safeParse(baseUrl);
       if (parsed.success) out.baseUrl = parsed.data;
@@ -632,7 +627,7 @@ export class ConfigLoader {
     const local = await this.#readOptionalMapping(localFile, 'provider.local.yaml');
     const data = deepMerge(tracked ?? {}, local ?? {}) as Record<string, unknown>;
     const resolveEnv = (value: unknown): unknown => {
-      if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => process.env[name] ?? '');
+      if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => this.#env[name] ?? '');
       if (Array.isArray(value)) return value.map(resolveEnv);
       if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveEnv(item)]));
       return value;
