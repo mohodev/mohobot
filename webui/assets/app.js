@@ -204,15 +204,14 @@ async function models() {
 async function config() {
   try {
     const data = await request('/config/publication');
-    const publication = data.publication || data.config || data;
-    const revision = valueOf(publication, ['revision', 'currentRevision'], 0);
-    app.innerHTML = `<div class="summary-grid"><article class="card"><h3>当前 Revision</h3><div class="metric">${esc(revision)}</div><div class="muted">${esc(publication.publishedAt || publication.updatedAt || '尚未发布')}</div></article><article class="card"><h3>发布者</h3><div class="metric compact">${esc(publication.publishedBy || publication.actor || '—')}</div></article></div><form id="publish-config" class="card config-form"><h3>发布配置</h3><p class="muted">expectedRevision 用于并发控制。Revision 不匹配时服务端必须拒绝发布。</p><label>Expected Revision</label><input name="expectedRevision" type="number" min="0" step="1" value="${esc(revision)}" required><label>配置 JSON</label><textarea name="config" rows="14" spellcheck="false" required>${esc(JSON.stringify(publication.payload || publication.config || publication.value || {}, null, 2))}</textarea><label>发布说明</label><input name="message" maxlength="240"><button class="danger" type="submit">发布配置</button></form>`;
-    document.querySelector('#publish-config').addEventListener('submit', async (event) => {
-      event.preventDefault(); const form = new FormData(event.currentTarget); let configValue;
-      try { configValue = JSON.parse(String(form.get('config'))); } catch { throw new ApiError('配置必须是有效 JSON', 0, {}); }
-      const payload = { expectedRevision: Number(form.get('expectedRevision')), payload: configValue, message: String(form.get('message') || '') };
-      await confirmedRequest('/config/publish', { method: 'POST', body: body(payload) }, { permission: 'config.publish', action: 'config.publish', payload, description: `发布配置，expectedRevision=${payload.expectedRevision}` }); await config();
-    });
+    const publication = data.publication || {};
+    const snapshot = publication.snapshot || publication;
+    const active = snapshot.active || publication.active || {};
+    const state = snapshot.state || {};
+    const revision = state.desiredRevision || active.revision || 0;
+    app.innerHTML = `<div class="summary-grid"><article class="card"><h3>Active Revision</h3><div class="metric">${esc(state.activeRevision ?? active.revision ?? 0)}</div><div class="muted">${esc(state.phase || 'empty')} · state ${esc(state.stateVersion ?? 0)}</div></article><article class="card"><h3>发布者</h3><div class="metric compact">${esc(active.publishedBy || '—')}</div></article></div><form id="publish-config" class="card config-form"><h3>发布配置</h3><p class="muted">默认即时激活；多节点 rollout 可由 API 指定 quorum/targets。</p><label>Expected Revision</label><input name="expectedRevision" type="number" min="0" step="1" value="${esc(revision)}" required><label>配置 JSON</label><textarea name="config" rows="14" spellcheck="false" required>${esc(JSON.stringify(active.payload || {}, null, 2))}</textarea><button class="danger" type="submit">发布配置</button>${state.previousActiveRevision ? '<button id="rollback-config" type="button">回滚上一 Active</button>' : ''}</form>`;
+    document.querySelector('#publish-config').addEventListener('submit', async (event) => {event.preventDefault();const form=new FormData(event.currentTarget);let value;try{value=JSON.parse(String(form.get('config')))}catch{throw new ApiError('配置必须是有效 JSON',0,{})}const payload={expectedRevision:Number(form.get('expectedRevision')),expectedStateVersion:state.stateVersion,payload:value,payloadSchemaVersion:1};await confirmedRequest('/config/publish',{method:'POST',body:body(payload)},{payload,description:`发布配置 revision ${payload.expectedRevision}`});await config();});
+    document.querySelector('#rollback-config')?.addEventListener('click',async()=>{const payload={expectedStateVersion:state.stateVersion};await confirmedRequest('/config/rollback',{method:'POST',body:body(payload)},{payload,description:'回滚到上一 Active 配置'});await config();});
   } catch (error) { app.innerHTML = unavailable(error); }
 }
 
