@@ -153,3 +153,18 @@ describe('buildContextAnchor', () => {
     expect(anchor).not.toMatch(/sk-|api[_-]?key|token/i);
   });
 });
+
+describe('thread/forum production session routing', () => {
+  async function effectiveInput(kind: 'thread'|'forum-post', policy: 'isolated'|'inherit-parent') {
+    const base = BotConfigSchema.parse({ id:'main', rateLimit:{enabled:false}, session: kind === 'thread' ? { threadContext: policy } : { forumContext: policy } });
+    const config = { ...base, ai:AIConfigSchema.parse(base.ai), session:SessionConfigSchema.parse({...base.session,persist:false}), memory:MemoryConfigSchema.parse(base.memory) };
+    let captured: {channelId:string}|undefined;
+    const sessions: SessionManagerLike={async get(){return{key:'k',botId:'main',channelId:'x',messages:[],updatedAt:0};},async append(input){captured=input;},async buildContext(){return[{role:'user',content:'hello'}];},async clear(){},async sweep(){return 0;},size(){return 0;}};
+    const pipeline=new MessagePipeline({config,sessions,provider:{name:'x',model:'x',async chat(){return{content:'ok',model:'x',ms:0};},async health(){return{ok:true};}},events:new EventBus(),logger:createNullLogger(),send:async()=>{}});
+    const parent=kind==='thread'?'text1':'forum1';
+    await pipeline.handle({id:'m',platform:'discord',botId:'main',channel:{id:'child1',guildId:'g1',dm:false,parentChannelId:parent,location:{channelId:'child1',parentChannelId:parent,guildId:'g1',kind}},author:{id:'u',username:'u',bot:false},content:'hello',mentionsBot:true,attachments:[],createdAt:1});
+    return captured?.channelId;
+  }
+  it('isolates thread and forum post contexts',async()=>{expect(await effectiveInput('thread','isolated')).toBe('child1');expect(await effectiveInput('forum-post','isolated')).toBe('child1');});
+  it('inherits parent context independently',async()=>{expect(await effectiveInput('thread','inherit-parent')).toBe('text1');expect(await effectiveInput('forum-post','inherit-parent')).toBe('forum1');});
+});

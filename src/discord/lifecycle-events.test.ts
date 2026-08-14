@@ -19,3 +19,9 @@ describe('Discord lifecycle event adaptation', () => {
     expect(toThreadLifecycleEvent('bot', 'update', thread, 789)).toEqual({ botId: 'bot', platform: 'discord', action: 'update', channelId: 'post1', parentChannelId: 'forum1', guildId: 'g1', name: 'topic', forumPost: true, archived: false, locked: true, partial: false, occurredAt: 789 });
   });
 });
+
+it('allows a thread when its parent channel is allowlisted', async () => {
+  const { locationAllowed } = await import('../session/context-policy.js');
+  expect(locationAllowed(['parent1'], { channelId: 'thread1', parentChannelId: 'parent1' })).toBe(true);
+  expect(locationAllowed(['other'], { channelId: 'thread1', parentChannelId: 'parent1' })).toBe(false);
+});

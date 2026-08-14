@@ -24,6 +24,7 @@ import { scopeStorage } from '../storage/index.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
 import { WorldStore } from '../admin/world.js';
 import { MessageSync } from '../session/message-sync.js';
+import { ThreadLifecycleStore } from '../session/thread-lifecycle.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -178,6 +179,7 @@ export class BotRuntime implements Managed {
 
     // Only react to events addressed to THIS bot.
     const messageSync = this.#deps.storage ? new MessageSync({ storage: this.#deps.storage }) : undefined;
+    const threadLifecycle = this.#deps.storage ? new ThreadLifecycleStore(this.#deps.storage, this.#logger) : undefined;
     this.#unsubscribe.push(
       this.#deps.events.on('message:create', ({ message }) => {
         if (message.botId !== cfg.id) return;
@@ -190,6 +192,11 @@ export class BotRuntime implements Managed {
       this.#deps.events.on('message:delete', (event) => {
         if (event.botId !== cfg.id || !messageSync) return;
         void messageSync.delete(event).catch((error) => this.#logger.warn({ err: error }, 'message delete sync failed'));
+      }),
+      this.#deps.events.on('thread:lifecycle', (event) => {
+        if (event.botId !== cfg.id || !threadLifecycle || !this.#sessions) return;
+        void threadLifecycle.apply(event, cfg.session, this.#sessions)
+          .catch((error) => this.#logger.warn({ err: error }, 'thread lifecycle sync failed'));
       }),
       this.#deps.events.on('interaction:create', ({ botId, name, userId, reply }) => {
         if (botId !== cfg.id || name !== 'status' || !cfg.admin.enabled || !cfg.admin.userIds.includes(userId)) return;

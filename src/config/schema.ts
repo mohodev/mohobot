@@ -44,6 +44,10 @@ export const SessionConfigSchema = z.object({
   ttlSeconds: z.number().int().positive().default(3600),
   /** channel = whole channel shares context; user = per user per channel. */
   scope: z.enum(['channel', 'user']).default('user'),
+  /** Thread messages use their own context unless explicitly inherited from the parent channel. */
+  threadContext: z.enum(['isolated', 'inherit-parent']).default('isolated'),
+  /** Forum posts use their own context unless explicitly inherited from the forum channel. */
+  forumContext: z.enum(['isolated', 'inherit-parent']).default('isolated'),
   /** Persist sessions to storage so restarts keep context. */
   persist: z.boolean().default(true),
 });
