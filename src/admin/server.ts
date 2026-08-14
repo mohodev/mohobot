@@ -11,6 +11,7 @@ import { ADMIN_ACTIONS, AuditTrail, healthSnapshot } from './actions.js';
 import { DeviceStore } from './device.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import { AdminSessionStore } from './auth.js';
 
 export interface AdminServerOptions {
   rootDir: string;
@@ -50,6 +51,7 @@ export class AdminServer {
   readonly #device: DeviceStore;
   readonly #catalog: ModelCatalogStore;
   readonly #audit = new AuditTrail();
+  readonly #sessions = new AdminSessionStore();
   #server?: http.Server;
 
   constructor(opts: AdminServerOptions) {
@@ -81,6 +83,11 @@ export class AdminServer {
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      if (url.pathname === '/api/auth/session' && req.method === 'POST') {
+        if (!this.#masterAuthorized(req)) return json(res, 401, { ok:false, error:'unauthorized' });
+        const created=this.#sessions.create({id:String(req.headers['x-admin-actor']??'local-admin'),role:'admin',enabled:true});
+        return json(res,201,{ok:true,token:created.token,session:created.session});
+      }
       if (url.pathname.startsWith('/api/')) {
         if (!this.#authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
         return await this.#api(req, res, url);
@@ -92,10 +99,17 @@ export class AdminServer {
     }
   }
 
-  #authorized(req: IncomingMessage): boolean {
+  #masterAuthorized(req: IncomingMessage): boolean {
     if (!this.#opts.token) return false;
     const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
     return bearer === this.#opts.token || req.headers['x-admin-token'] === this.#opts.token;
+  }
+
+  #authorized(req: IncomingMessage): boolean {
+    if (this.#masterAuthorized(req)) return true;
+    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const token = bearer || (typeof req.headers['x-admin-token']==='string' ? req.headers['x-admin-token'] : '');
+    return Boolean(this.#sessions.authenticate(token));
   }
 
   async #api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
