@@ -119,6 +119,8 @@ describe('AdminServer production authorization chain', () => {
     expect(published.data.publication).toMatchObject({ version: 2, digest: 'abc' });
   });
 
+  it('accepts stable user ids from the WebUI for updates', async()=>{const admin=await bootstrap();const users=await request('GET','/api/admin/users',{token:admin});const id=users.data.users[0].id as string;const body={username:'renamed'};const nonce=await confirmation(admin,'PATCH',`/api/admin/users/${encodeURIComponent(id)}`,body);expect((await request('PATCH',`/api/admin/users/${encodeURIComponent(id)}`,{token:admin,confirmation:nonce,body})).status).toBe(200);});
+
   it('rotates passwords with confirmation and exposes revocable persistent sessions', async () => {
     const admin = await bootstrap();
     const passwordBody = { password: 'replacement password 123' };

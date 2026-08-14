@@ -80,7 +80,7 @@ function setConnected(connected) {
 
 function showConsole(me) {
   identity = {
-    principal: me.principal || me.user || me.session?.principal || {},
+    principal: me.auth?.principal || me.principal || me.auth?.user || me.user || me.session?.principal || {},
     permissions: Array.isArray(me.permissions) ? me.permissions : [],
   };
   loginView.hidden = true;
@@ -181,8 +181,10 @@ function healthBlock(name, value) {
 async function health() {
   const results = await Promise.allSettled([request('/admin/health'), request('/remote/health'), request('/models/health')]);
   const runtime = results[0].status === 'fulfilled' ? results[0].value.health : {};
-  const remote = results[1].status === 'fulfilled' ? valueOf(results[1].value, ['health', 'services'], {}) : {};
-  const model = results[2].status === 'fulfilled' ? valueOf(results[2].value, ['health', 'models'], {}) : {};
+  const remoteHealth = results[1].status === 'fulfilled' ? results[1].value.health || {} : {};
+  const remote = remoteHealth.remote || remoteHealth.services || remoteHealth;
+  const modelHealth = results[2].status === 'fulfilled' ? results[2].value.health || {} : {};
+  const model = modelHealth.models || modelHealth;
   const blocks = [
     ['Runtime', runtime],
     ...Object.entries(remote || {}).map(([name, value]) => [`Remote · ${name}`, value]),
@@ -204,11 +206,11 @@ async function config() {
     const data = await request('/config/publication');
     const publication = data.publication || data.config || data;
     const revision = valueOf(publication, ['revision', 'currentRevision'], 0);
-    app.innerHTML = `<div class="summary-grid"><article class="card"><h3>当前 Revision</h3><div class="metric">${esc(revision)}</div><div class="muted">${esc(publication.publishedAt || publication.updatedAt || '尚未发布')}</div></article><article class="card"><h3>发布者</h3><div class="metric compact">${esc(publication.publishedBy || publication.actor || '—')}</div></article></div><form id="publish-config" class="card config-form"><h3>发布配置</h3><p class="muted">expectedRevision 用于并发控制。Revision 不匹配时服务端必须拒绝发布。</p><label>Expected Revision</label><input name="expectedRevision" type="number" min="0" step="1" value="${esc(revision)}" required><label>配置 JSON</label><textarea name="config" rows="14" spellcheck="false" required>${esc(JSON.stringify(publication.config || publication.value || {}, null, 2))}</textarea><label>发布说明</label><input name="message" maxlength="240"><button class="danger" type="submit">发布配置</button></form>`;
+    app.innerHTML = `<div class="summary-grid"><article class="card"><h3>当前 Revision</h3><div class="metric">${esc(revision)}</div><div class="muted">${esc(publication.publishedAt || publication.updatedAt || '尚未发布')}</div></article><article class="card"><h3>发布者</h3><div class="metric compact">${esc(publication.publishedBy || publication.actor || '—')}</div></article></div><form id="publish-config" class="card config-form"><h3>发布配置</h3><p class="muted">expectedRevision 用于并发控制。Revision 不匹配时服务端必须拒绝发布。</p><label>Expected Revision</label><input name="expectedRevision" type="number" min="0" step="1" value="${esc(revision)}" required><label>配置 JSON</label><textarea name="config" rows="14" spellcheck="false" required>${esc(JSON.stringify(publication.payload || publication.config || publication.value || {}, null, 2))}</textarea><label>发布说明</label><input name="message" maxlength="240"><button class="danger" type="submit">发布配置</button></form>`;
     document.querySelector('#publish-config').addEventListener('submit', async (event) => {
       event.preventDefault(); const form = new FormData(event.currentTarget); let configValue;
       try { configValue = JSON.parse(String(form.get('config'))); } catch { throw new ApiError('配置必须是有效 JSON', 0, {}); }
-      const payload = { expectedRevision: Number(form.get('expectedRevision')), config: configValue, message: String(form.get('message') || '') };
+      const payload = { expectedRevision: Number(form.get('expectedRevision')), payload: configValue, message: String(form.get('message') || '') };
       await confirmedRequest('/config/publish', { method: 'POST', body: body(payload) }, { permission: 'config.publish', action: 'config.publish', payload, description: `发布配置，expectedRevision=${payload.expectedRevision}` }); await config();
     });
   } catch (error) { app.innerHTML = unavailable(error); }
