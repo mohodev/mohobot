@@ -1,3 +1,62 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MohoBot 控制台</title><link rel="stylesheet" href="/assets/app.css"></head>
-<body><div class="shell"><aside><div class="brand">墨染荷韵<small>MohoBot Console</small></div><nav><button data-tab="overview" class="active">仪表盘</button><button data-tab="characters">角色管理</button><button data-tab="world">世界模拟</button><button data-tab="affinity">好感度</button><button data-tab="models">模型阵列</button><button data-tab="metrics">性能指标</button><button data-tab="plugins">插件与能力</button><button data-tab="settings">配置说明</button></nav><div class="safe">本地管理模式<br>API 默认仅监听 127.0.0.1</div></aside><main><header><div><span class="eyebrow">PERSONA RUNTIME</span><h1 id="title">仪表盘</h1></div><span id="status" class="pill">未连接</span></header><section id="app"></section></main></div><script type="module" src="/assets/app.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>MohoBot 管理控制台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <section id="login-view" class="login-view">
+    <form id="login-form" class="login-panel" autocomplete="on">
+      <div class="brand-mark">墨</div>
+      <div><span class="eyebrow">MOHOBOT CONTROL PLANE</span><h1>管理控制台</h1></div>
+      <p class="muted">使用管理账号登录。首次部署可切换到 Legacy Bootstrap，用本地 Token 建立会话。</p>
+      <div id="login-error" class="notice error" hidden></div>
+      <div id="account-fields">
+        <label for="username">用户名</label><input id="username" name="username" autocomplete="username" required>
+        <label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div id="legacy-fields" hidden>
+        <label for="bootstrap-token">Bootstrap Token</label><input id="bootstrap-token" name="token" type="password" autocomplete="off">
+        <label for="bootstrap-actor">管理员标识</label><input id="bootstrap-actor" name="actor" value="local-admin" autocomplete="off">
+      </div>
+      <button class="primary wide" type="submit">登录</button>
+      <button id="login-mode" class="link-button" type="button">使用 Legacy Bootstrap</button>
+    </form>
+  </section>
+
+  <div id="console-view" class="shell" hidden>
+    <aside>
+      <div class="brand">墨染荷韵<small>MohoBot Console</small></div>
+      <nav id="navigation">
+        <button data-tab="overview" data-permission="status.read" class="active">仪表盘</button>
+        <button data-tab="users" data-permission="users.read">用户管理</button>
+        <button data-tab="health" data-permission="status.read">服务健康</button>
+        <button data-tab="models" data-permission="models.read">模型阵列</button>
+        <button data-tab="config" data-permission="config.publish">配置发布</button>
+        <button data-tab="characters" data-permission="characters.read">角色管理</button>
+        <button data-tab="world" data-permission="world.read">世界模拟</button>
+        <button data-tab="metrics" data-permission="metrics.read">性能指标</button>
+      </nav>
+      <div class="account-box"><strong id="account-name"></strong><span id="account-role"></span><button id="logout" type="button">退出登录</button></div>
+    </aside>
+    <main>
+      <header><div><span class="eyebrow">CONTROL PLANE</span><h1 id="title">仪表盘</h1></div><span id="status" class="pill neutral">正在连接</span></header>
+      <section id="app" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <dialog id="confirmation-dialog">
+    <form method="dialog" class="modal-panel">
+      <span class="eyebrow">SECONDARY CONFIRMATION</span><h2>确认管理操作</h2>
+      <p id="confirmation-description" class="muted"></p>
+      <label for="confirmation-text">输入 <strong>CONFIRM</strong> 继续</label>
+      <input id="confirmation-text" autocomplete="off">
+      <div class="modal-actions"><button value="cancel">取消</button><button id="confirmation-submit" class="danger" value="confirm">确认执行</button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>
