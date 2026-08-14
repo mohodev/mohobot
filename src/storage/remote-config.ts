@@ -5,6 +5,13 @@ export const RemoteStorageConfigSchema = z.object({
   mysql: z.object({ enabled:z.boolean().default(false), urlEnv:z.string().min(1).default('MOHO_MYSQL_URL'), tls:z.boolean().default(true), syncIntervalSeconds:z.number().int().min(5).max(86400).default(60) }).default({}),
   redis: z.object({ enabled:z.boolean().default(false), urlEnv:z.string().min(1).default('MOHO_REDIS_URL'), namespace:z.string().regex(/^[a-zA-Z0-9:_-]+$/).default('mohobot') }).default({}),
   kafka: z.object({ enabled:z.boolean().default(false), brokersEnv:z.string().min(1).default('MOHO_KAFKA_BROKERS') }).default({}),
+  worker: z.object({
+    pollIntervalMs:z.number().int().positive().default(1000),
+    batchSize:z.number().int().positive().max(1000).default(20),
+    concurrency:z.number().int().positive().max(100).default(4),
+    leaseMs:z.number().int().positive().default(30000),
+    retryDelayMs:z.number().int().nonnegative().default(5000),
+  }).default({}),
 }).superRefine((value,ctx)=>{
   if(value.mode==='remote-authoritative'&&!value.mysql.enabled)ctx.addIssue({code:z.ZodIssueCode.custom,message:'remote-authoritative requires mysql.enabled',path:['mysql','enabled']});
 });
