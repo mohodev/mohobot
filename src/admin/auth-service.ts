@@ -4,6 +4,7 @@ import type { AdminPrincipal, AdminRole } from './rbac.js';
 
 const USER_PREFIX = 'admin-user:';
 const SESSION_PREFIX = 'admin-session:';
+const TEMP_TOKEN_PREFIX = 'admin-temp-token:';
 const PASSWORD_VERSION = 1;
 interface ScryptConfig { N: number; r: number; p: number; keyLength: number }
 const DEFAULT_SCRYPT: ScryptConfig = { N: 16_384, r: 8, p: 1, keyLength: 32 };
@@ -49,6 +50,11 @@ export interface AdminSessionRecord {
   expiresAt: number;
   lastSeenAt: number;
 }
+
+export interface AdminTemporaryTokenRecord {
+  kind:'admin-temporary-token';recordVersion:1;id:string;tokenHash:string;label:string;role:AdminRole;createdBy:string;createdAt:number;expiresAt:number;lastUsedAt?:number;revokedAt?:number;
+}
+export interface PublicTemporaryToken {id:string;label:string;role:AdminRole;createdBy:string;createdAt:number;expiresAt:number;lastUsedAt?:number;revokedAt?:number;}
 
 export interface PublicAdminUser {
   id: string;
@@ -96,6 +102,8 @@ export function normalizeAdminUsername(username: string): string {
 
 function userKey(normalized: string): string { return `${USER_PREFIX}${encodeURIComponent(normalized)}`; }
 function sessionKey(tokenHash: string): string { return `${SESSION_PREFIX}${tokenHash}`; }
+function temporaryTokenKey(tokenHash:string):string{return `${TEMP_TOKEN_PREFIX}${tokenHash}`;}
+function publicTemporaryToken(record:AdminTemporaryTokenRecord):PublicTemporaryToken{const{kind:_kind,recordVersion:_version,tokenHash:_hash,...safe}=record;return safe;}
 function publicUser(user: AdminUserRecord): PublicAdminUser {
   const { password: _password, kind: _kind, recordVersion: _recordVersion, ...safe } = user;
   return safe;
@@ -125,6 +133,7 @@ function decodeUser(value: unknown, expectedNormalized?: string): AdminUserRecor
   const password = decodePassword(value.password); if (!password) return undefined;
   return { ...(value as unknown as AdminUserRecord), recordVersion: 1, password };
 }
+function decodeTemporaryToken(value:unknown,expectedHash?:string):AdminTemporaryTokenRecord|undefined{if(!object(value)||(value.recordVersion!==undefined&&value.recordVersion!==1)||value.kind!=='admin-temporary-token'||!string(value.id,128)||!string(value.tokenHash,128)||(expectedHash!==undefined&&value.tokenHash!==expectedHash)||!string(value.label,128)||!string(value.createdBy,128)||!role(value.role)||!safeInt(value.createdAt)||!safeInt(value.expiresAt)||(value.lastUsedAt!==undefined&&!safeInt(value.lastUsedAt))||(value.revokedAt!==undefined&&!safeInt(value.revokedAt)))return undefined;return{...(value as unknown as AdminTemporaryTokenRecord),recordVersion:1};}
 function decodeSession(value: unknown, expectedHash?: string): AdminSessionRecord | undefined {
   if (!object(value) || (value.recordVersion !== undefined && value.recordVersion !== 1)
     || value.kind !== 'admin-session' || !string(value.id, 128) || !string(value.tokenHash, 128)
@@ -282,6 +291,9 @@ export class AdminAuthService {
   async authenticate(token: string): Promise<AuthenticatedAdmin | undefined> {
     if (!token || token.length > 512) return undefined;
     const hash = tokenDigest(token);
+    const rawTemporary=await this.#storage.get<unknown>(temporaryTokenKey(hash));
+    const temporary=rawTemporary===undefined?undefined:decodeTemporaryToken(rawTemporary,hash);
+    if(temporary){if(temporary.revokedAt||temporary.expiresAt<=this.#now())return undefined;temporary.lastUsedAt=this.#now();await this.#storage.save(temporaryTokenKey(hash),temporary,Math.max(1,Math.ceil((temporary.expiresAt-this.#now())/1000)));const principal={id:`temp:${temporary.id}`,role:temporary.role,enabled:true} as AdminPrincipal;const user={id:principal.id,username:temporary.label,normalizedUsername:temporary.label,role:temporary.role,enabled:true,authVersion:1,failedLoginCount:0,createdAt:temporary.createdAt,updatedAt:temporary.createdAt};const session={kind:'admin-session' as const,id:temporary.id,userId:principal.id,normalizedUsername:temporary.label,authVersion:1,createdAt:temporary.createdAt,expiresAt:temporary.expiresAt,lastSeenAt:temporary.lastUsedAt};return{principal,user,session};}
     const rawSession = await this.#storage.get<unknown>(sessionKey(hash));
     const session = rawSession === undefined ? undefined : decodeSession(rawSession, hash);
     if (!session || session.expiresAt <= this.#now()) return undefined;
@@ -296,7 +308,10 @@ export class AdminAuthService {
     return this.#authenticated(user, session);
   }
 
-  async revokeSession(token: string): Promise<void> { if (token) await this.#storage.delete(sessionKey(tokenDigest(token))); }
+  async createTemporaryToken(input:{label:string;role:AdminRole;createdBy:string;ttlMs:number}):Promise<{token:string;record:PublicTemporaryToken}>{return this.#exclusive(async()=>{const label=input.label.trim();if(label.length<1||label.length>128||/[\u0000-\u001f\u007f]/u.test(label))throw new AdminAuthError('invalid_input');if(!Number.isSafeInteger(input.ttlMs)||input.ttlMs<60_000||input.ttlMs>7*24*60*60*1000)throw new AdminAuthError('invalid_input');const now=this.#now();const token=`moht_${this.#randomBytes(32).toString('base64url')}`,tokenHash=tokenDigest(token);const record:AdminTemporaryTokenRecord={kind:'admin-temporary-token',recordVersion:1,id:this.#randomBytes(16).toString('hex'),tokenHash,label,role:input.role,createdBy:input.createdBy,createdAt:now,expiresAt:now+input.ttlMs};await this.#storage.save(temporaryTokenKey(tokenHash),record,Math.ceil(input.ttlMs/1000));return{token,record:publicTemporaryToken(record)};});}
+  async listTemporaryTokens():Promise<PublicTemporaryToken[]>{const now=this.#now(),rows=await this.#storage.query<unknown>({prefix:TEMP_TOKEN_PREFIX});return rows.flatMap(row=>{const record=decodeTemporaryToken(row.value);return record&&record.expiresAt>now?[publicTemporaryToken(record)]:[];}).sort((a,b)=>b.createdAt-a.createdAt);}
+  async revokeTemporaryToken(id:string):Promise<boolean>{return this.#exclusive(async()=>{const rows=await this.#storage.query<unknown>({prefix:TEMP_TOKEN_PREFIX});const row=rows.find(x=>decodeTemporaryToken(x.value)?.id===id);if(!row)return false;const record=decodeTemporaryToken(row.value)!;if(record.revokedAt)return false;record.revokedAt=this.#now();await this.#storage.save(row.key,record,Math.max(1,Math.ceil((record.expiresAt-this.#now())/1000)));return true;});}
+  async revokeSession(token: string): Promise<void> { if (!token) return;const hash=tokenDigest(token);await this.#storage.delete(sessionKey(hash));const raw=await this.#storage.get<unknown>(temporaryTokenKey(hash));const temporary=raw===undefined?undefined:decodeTemporaryToken(raw,hash);if(temporary&&!temporary.revokedAt){temporary.revokedAt=this.#now();await this.#storage.save(temporaryTokenKey(hash),temporary,Math.max(1,Math.ceil((temporary.expiresAt-this.#now())/1000)));} }
 
   async listSessions(): Promise<Array<Omit<AdminSessionRecord, 'tokenHash'|'recordVersion'>>> {
     const rows = await this.#storage.query<unknown>({ prefix: SESSION_PREFIX });

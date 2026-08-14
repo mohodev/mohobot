@@ -130,6 +130,8 @@ describe('AdminServer production authorization chain', () => {
     expect(published.data.publication).toMatchObject({ version: 2, digest: 'abc' });
   });
 
+  it('creates scoped temporary tokens once and blocks role escalation',async()=>{const admin=await bootstrap();const payload={label:'临时验收',role:'viewer',ttlMinutes:5};const nonce=await confirmation(admin,'POST','/auth/temporary-tokens',payload);const made=await request('POST','/api/auth/temporary-tokens',{token:admin,confirmation:nonce,body:payload});expect(made.status).toBe(201);expect(made.data.token).toMatch(/^moht_/);const listed=await request('GET','/api/auth/temporary-tokens',{token:admin});expect(JSON.stringify(listed.data)).not.toContain(made.data.token);const status=await request('GET','/api/status',{token:made.data.token});expect(status.status).toBe(200);const elevated={label:'bad',role:'developer',ttlMinutes:5};const elevatedNonce=await confirmation(admin,'POST','/auth/temporary-tokens',elevated);expect((await request('POST','/api/auth/temporary-tokens',{token:admin,confirmation:elevatedNonce,body:elevated})).status).toBe(403);});
+
   it('accepts stable user ids from the WebUI for updates', async()=>{const admin=await bootstrap();const users=await request('GET','/api/admin/users',{token:admin});const id=users.data.users[0].id as string;const body={username:'renamed'};const nonce=await confirmation(admin,'PATCH',`/api/admin/users/${encodeURIComponent(id)}`,body);expect((await request('PATCH',`/api/admin/users/${encodeURIComponent(id)}`,{token:admin,confirmation:nonce,body})).status).toBe(200);});
 
   it('rotates passwords with confirmation and exposes revocable persistent sessions', async () => {
