@@ -15,6 +15,8 @@ import type { Managed, MohoMessage, OutboundMessage } from '../core/types.js';
 import type { Registries } from '../core/registries.js';
 import { createProvider } from '../ai/index.js';
 import type { AIProvider } from '../ai/types.js';
+import { MultiProviderRouter } from '../ai/multi-router.js';
+import { HealthCoordinator, type HealthSnapshot } from '../ai/health-coordinator.js';
 import { createGateway } from '../discord/index.js';
 import type { Gateway, GatewayStatus } from '../discord/types.js';
 import { SessionManager } from '../session/manager.js';
@@ -53,6 +55,7 @@ export interface BotSnapshot {
   sessions: number;
   plugins: { id: string; state: string; errors: number }[];
   pipeline: PipelineStats;
+  modelHealth?: HealthSnapshot;
 }
 
 export class BotRuntime implements Managed {
@@ -69,6 +72,8 @@ export class BotRuntime implements Managed {
   #unsubscribe: Array<() => void> = [];
   #sweepTaskId?: string;
   #worldTickTaskId?: string;
+  #healthTaskId?: string;
+  #health?: HealthCoordinator;
   #running = false;
 
   constructor(deps: BotRuntimeDeps) {
@@ -167,6 +172,10 @@ export class BotRuntime implements Managed {
       events: this.#deps.events,
       botId: cfg.id,
     });
+    if (this.#provider instanceof MultiProviderRouter) {
+      this.#health = new HealthCoordinator({ router: this.#provider, logger: this.#logger });
+      this.#healthTaskId = this.#health.start(this.#deps.tasks);
+    }
 
     let media: MediaRuntime | undefined;
     if (cfg.media.enabled && (cfg.media.vision.enabled || cfg.media.ocr.enabled)) {
@@ -288,6 +297,11 @@ export class BotRuntime implements Managed {
       this.#deps.tasks.cancel(this.#worldTickTaskId);
       this.#worldTickTaskId = undefined;
     }
+    if (this.#healthTaskId) {
+      this.#deps.tasks.cancel(this.#healthTaskId);
+      this.#healthTaskId = undefined;
+    }
+    this.#health = undefined;
 
     // Each teardown step is independent - one failure must not skip the rest.
     try {
@@ -350,6 +364,7 @@ export class BotRuntime implements Managed {
         aiFailures: 0,
         rateLimited: 0,
       },
+      ...(this.#health ? { modelHealth: this.#health.snapshot() } : {}),
     };
   }
 }
