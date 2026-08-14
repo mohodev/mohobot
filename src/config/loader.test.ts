@@ -138,9 +138,9 @@ describe('ConfigLoader', () => {
 
   it('reloads an isolated env snapshot without mutating process.env', async () => {
     await writeGlobal('logLevel: info\n');
-    await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=file-one\nSNAPSHOT_ONLY=present\n');
+    await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=file-one\nSNAPSHOT_ONLY=present\nMOHO_ADMIN_TOKEN=local-admin-token\nMOHO_ADMIN_PORT=4321\n');
     const loader = newLoader();
-    expect((await loader.load()).global.ai.model).toBe('file-one');
+    const first=await loader.load();expect(first.global.ai.model).toBe('file-one');expect(first.global.admin).toMatchObject({token:'local-admin-token',port:4321});
     expect(process.env['SNAPSHOT_ONLY']).toBeUndefined();
     await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=file-two\n');
     expect((await loader.reload()).global.ai.model).toBe('file-two');
