@@ -27,16 +27,18 @@ describe('Outbox', () => {
     const claimed = await outbox.claim('worker-a', { limit: 1, now: 10, leaseMs: 100 });
     expect(claimed).toHaveLength(1);
     expect(claimed[0]).toMatchObject({ eventId: 'a', status: 'processing', attempts: 1, workerId: 'worker-a', claimExpiresAt: 110 });
-    expect(await outbox.release('a', 'worker-b', { done: true, now: 20 })).toMatchObject({ status: 'processing', workerId: 'worker-a' });
-    expect(await outbox.release('a', 'worker-a', { done: true, now: 30 })).toMatchObject({ status: 'done', attempts: 1 });
+    const token = claimed[0]!.claimToken!;
+    expect(await outbox.release('a', 'worker-b', { claimToken: token, done: true, now: 20 })).toMatchObject({ status: 'processing', workerId: 'worker-a' });
+    expect(await outbox.release('a', 'worker-a', { claimToken: 'stale-token', done: true, now: 25 })).toMatchObject({ status: 'processing', workerId: 'worker-a' });
+    expect(await outbox.release('a', 'worker-a', { claimToken: token, done: true, now: 30 })).toMatchObject({ status: 'done', attempts: 1 });
     expect((await outbox.claim('worker-a', { now: 30 }))[0]?.eventId).toBe('b');
   });
 
   it('releases failures with retry delay and preserves a bounded error', async () => {
     const outbox = await makeOutbox();
     await outbox.append({ eventId: 'retry', type: 'test', payload: {}, nextAttemptAt: 0 });
-    await outbox.claim('worker', { now: 100, leaseMs: 50 });
-    const failed = await outbox.release('retry', 'worker', { error: 'x'.repeat(3000), retryAfterMs: 100, now: 110 });
+    const [claim] = await outbox.claim('worker', { now: 100, leaseMs: 50 });
+    const failed = await outbox.release('retry', 'worker', { claimToken: claim!.claimToken!, error: 'x'.repeat(3000), retryAfterMs: 100, now: 110 });
     expect(failed).toMatchObject({ status: 'failed', attempts: 1, nextAttemptAt: 210 });
     expect(failed?.lastError).toHaveLength(2000);
     expect(await outbox.claim('worker', { now: 209 })).toEqual([]);
@@ -56,8 +58,8 @@ describe('Outbox', () => {
     const outbox = await makeOutbox();
     await outbox.append({ eventId: 'future', type: 'test', payload: {}, nextAttemptAt: 100 });
     await outbox.append({ eventId: 'done', type: 'test', payload: {}, nextAttemptAt: 0 });
-    await outbox.claim('worker', { now: 0 });
-    await outbox.release('done', 'worker', { done: true, now: 1 });
+    const [doneClaim] = await outbox.claim('worker', { now: 0 });
+    await outbox.release('done', 'worker', { claimToken: doneClaim!.claimToken!, done: true, now: 1 });
     expect((await outbox.claim('worker', { now: 99 })).map((event) => event.eventId)).toEqual([]);
     expect((await outbox.claim('worker', { now: 100 })).map((event) => event.eventId)).toEqual(['future']);
   });

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { Storage } from './types.js';
 
 export type OutboxStatus = 'pending' | 'processing' | 'done' | 'failed';
@@ -12,6 +14,8 @@ export interface OutboxEvent<T = unknown> {
   updatedAt: number;
   nextAttemptAt: number;
   workerId?: string;
+  /** Fencing token unique to this lease. Required when releasing a claim. */
+  claimToken?: string;
   claimExpiresAt?: number;
   lastError?: string;
 }
@@ -31,12 +35,21 @@ export interface ClaimOptions {
 }
 
 export interface ReleaseOptions {
+  /** Token returned by claim(). A stale lease cannot release a newer claim. */
+  claimToken: string;
   /** `done` permanently completes the event; otherwise it becomes retryable. */
   done?: boolean;
   error?: string;
   /** Optional delay before a failed event can be claimed again. */
   retryAfterMs?: number;
   now?: number;
+}
+
+/** Optional multi-process-safe primitive implemented by SQLite. */
+export interface AtomicOutboxStorage {
+  claimOutboxAtomic<T = unknown>(workerId: string, options: Required<ClaimOptions>): Promise<OutboxEvent<T>[]>;
+  releaseOutboxAtomic(eventId: string, workerId: string, options: ReleaseOptions & { now: number }): Promise<OutboxEvent | undefined>;
+  recoverExpiredOutboxAtomic(now: number): Promise<number>;
 }
 
 const PREFIX = 'outbox:';
@@ -60,13 +73,23 @@ function normalizeEvent<T>(value: OutboxEvent<T>): OutboxEvent<T> {
   };
 }
 
+function atomicStorage(storage: Storage): AtomicOutboxStorage | undefined {
+  const candidate = storage as Storage & Partial<AtomicOutboxStorage>;
+  return typeof candidate.claimOutboxAtomic === 'function'
+    && typeof candidate.releaseOutboxAtomic === 'function'
+    && typeof candidate.recoverExpiredOutboxAtomic === 'function'
+    ? candidate as Storage & AtomicOutboxStorage
+    : undefined;
+}
+
 /**
  * Storage-backed local outbox.
  *
  * Event IDs are the idempotency key. A claim is leased, so a crashed worker
  * does not permanently strand an event. Operations are serialized per
- * Outbox instance; a future multi-process driver can replace the CAS/claim
- * primitive without changing callers.
+ * Outbox instance. The generic Storage fallback is safe only within one
+ * process because its serialization queue is instance-local. SQLite provides
+ * an atomic multi-process claim primitive without changing callers.
  */
 export class Outbox {
   readonly #storage: Storage;
@@ -109,6 +132,8 @@ export class Outbox {
     const limit = positiveInt(options.limit, DEFAULT_LIMIT);
     const leaseMs = positiveInt(options.leaseMs, DEFAULT_LEASE_MS);
     const now = options.now ?? Date.now();
+    const atomic = atomicStorage(this.#storage);
+    if (atomic) return atomic.claimOutboxAtomic<T>(workerId, { limit, leaseMs, now });
     return this.#serial(async () => {
       await this.#recoverExpired(now);
       const rows = await this.#storage.query<OutboxEvent<T>>({ prefix: PREFIX });
@@ -125,6 +150,7 @@ export class Outbox {
           attempts: event.attempts + 1,
           updatedAt: now,
           workerId,
+          claimToken: randomUUID(),
           claimExpiresAt: now + leaseMs,
         };
         await this.#storage.save(key(event.eventId), next);
@@ -134,22 +160,26 @@ export class Outbox {
     });
   }
 
-  async release(eventId: string, workerId: string, options: ReleaseOptions = {}): Promise<OutboxEvent | undefined> {
+  async release(eventId: string, workerId: string, options: ReleaseOptions): Promise<OutboxEvent | undefined> {
     this.#assertEventId(eventId);
     if (!workerId.trim()) throw new Error('outbox workerId is required');
+    if (!options.claimToken?.trim()) throw new Error('outbox claimToken is required');
     const now = options.now ?? Date.now();
+    const atomic = atomicStorage(this.#storage);
+    if (atomic) return atomic.releaseOutboxAtomic(eventId, workerId, { ...options, now });
     return this.#serial(async () => {
       const current = await this.get(eventId);
       if (!current) return undefined;
-      if (current.status !== 'processing' || current.workerId !== workerId) return current;
+      if (current.status !== 'processing' || current.workerId !== workerId || current.claimToken !== options.claimToken) return current;
       const done = options.done === true;
       const next: OutboxEvent = {
         ...current,
         status: done ? 'done' : 'failed',
         updatedAt: now,
         nextAttemptAt: done ? now : now + Math.max(0, options.retryAfterMs ?? 0),
-        ...(done ? { workerId: undefined, claimExpiresAt: undefined, lastError: undefined } : {
+        ...(done ? { workerId: undefined, claimToken: undefined, claimExpiresAt: undefined, lastError: undefined } : {
           workerId: undefined,
+          claimToken: undefined,
           claimExpiresAt: undefined,
           ...(options.error ? { lastError: options.error.slice(0, MAX_ERROR_LENGTH) } : {}),
         }),
@@ -160,6 +190,8 @@ export class Outbox {
   }
 
   async recoverExpired(now = Date.now()): Promise<number> {
+    const atomic = atomicStorage(this.#storage);
+    if (atomic) return atomic.recoverExpiredOutboxAtomic(now);
     return this.#serial(() => this.#recoverExpired(now));
   }
 
@@ -180,6 +212,7 @@ export class Outbox {
         updatedAt: now,
         nextAttemptAt: now,
         workerId: undefined,
+        claimToken: undefined,
         claimExpiresAt: undefined,
       });
       recovered += 1;
