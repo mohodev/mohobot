@@ -365,7 +365,7 @@ export class PluginManager {
 
     // Reap anything this plugin registered, otherwise a hot reload would hit
     // "already registered" on the next load and leak dead factories.
-    const source = `plugin:${entry.record.id}`;
+    const source = `plugin:${this.#opts.botConfig.id}:${entry.record.id}`;
     const reaped: string[] = [];
     for (const registry of Object.values(this.#opts.registries)) {
       reaped.push(...registry.unregisterSource(source));
@@ -406,7 +406,7 @@ export class PluginManager {
 
   /** Registries whose `register` calls are auto-tagged with the plugin id. */
   #scopedRegistries(id: string): Registries {
-    const source = `plugin:${id}`;
+    const source = `plugin:${this.#opts.botConfig.id}:${id}`;
     const wrap = <T>(registry: Registry<T>): Registry<T> =>
       new Proxy(registry, {
         get(target, prop, receiver) {
