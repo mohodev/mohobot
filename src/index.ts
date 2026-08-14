@@ -20,6 +20,7 @@ import type { ResolvedConfig } from './config/schema.js';
 import { EventBus } from './core/event.js';
 import { HotReloader, type ReloadEvent } from './core/hot-reload.js';
 import { createLogger, type Logger } from './core/logger.js';
+import { LogBuffer } from './core/log-buffer.js';
 import { registries } from './core/registries.js';
 import { Supervisor } from './core/supervisor.js';
 import { TaskManager } from './core/task-manager.js';
@@ -45,6 +46,7 @@ export interface RuntimeOptions {
 
 export class Runtime {
   #logger: Logger;
+  readonly #logs = new LogBuffer();
   #events: EventBus;
   #tasks!: TaskManager;
   #supervisor!: Supervisor;
@@ -61,7 +63,7 @@ export class Runtime {
   constructor(options: RuntimeOptions = {}) {
     this.#options = options;
     // Bootstrap logger; replaced once config is known.
-    this.#logger = createLogger({ name: 'mohobot' });
+    this.#logger = createLogger({ name: 'mohobot', sink: this.#logs });
     this.#events = new EventBus({
       onHandlerError: ({ event, error }) => {
         this.#logger.error({ event, err: error instanceof Error ? error.message : String(error) }, 'event handler failed');
@@ -73,7 +75,7 @@ export class Runtime {
     this.#loader = new ConfigLoader({ rootDir: ROOT_DIR, logger: this.#logger, events: this.#events });
     this.#config = await this.#loader.load();
 
-    this.#logger = createLogger({ name: 'mohobot', level: this.#config.global.logLevel });
+    this.#logger = createLogger({ name: 'mohobot', level: this.#config.global.logLevel, sink: this.#logs });
     this.#logger.info(
       { root: ROOT_DIR, bots: this.#config.bots.length, storage: this.#config.global.storage.driver },
       'MohoBot booting',
@@ -198,6 +200,7 @@ export class Runtime {
         remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
         configPublication:publicationAdmin,
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
+        logs:this.#logs,
       });
       await this.#admin.start();
     } else {
