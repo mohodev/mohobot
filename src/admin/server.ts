@@ -319,7 +319,8 @@ export class AdminServer {
 
   #issueConfirmation(auth: AuthenticatedAdmin, input: Record<string, unknown>): ApiResult {
     const method = String(input.method ?? '').toUpperCase();
-    const pathname = String(input.path ?? '');
+    const rawPath = String(input.path ?? '');
+    const pathname = rawPath.startsWith('/api/') ? rawPath : `/api${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`;
     const payload = input.body === undefined ? {} : input.body;
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new HttpError(400, 'confirmation body must be an object');
     const target = routePolicy(method, pathname);

@@ -75,7 +75,7 @@ describe('AdminServer production authorization chain', () => {
     const admin = await bootstrap();
     const createBody = { username: 'viewer-one', password: 'long viewer password', role: 'viewer', enabled: true };
     expect((await request('POST', '/api/admin/users', { token: admin, body: createBody })).status).toBe(409);
-    const createNonce = await confirmation(admin, 'POST', '/api/admin/users', createBody);
+    const createNonce = await confirmation(admin, 'POST', '/admin/users', createBody);
     expect((await request('POST', '/api/admin/users', { token: admin, confirmation: createNonce, body: { ...createBody, role: 'operator' } })).status).toBe(409);
     const createNonce2 = await confirmation(admin, 'POST', '/api/admin/users', createBody);
     expect((await request('POST', '/api/admin/users', { token: admin, confirmation: createNonce2, body: createBody })).status).toBe(201);
