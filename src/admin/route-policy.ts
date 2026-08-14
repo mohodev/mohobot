@@ -10,6 +10,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/models$/,permission:'models.read',action:'models.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/models\/health$/,permission:'models.read',action:'models.health',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/providers$/,permission:'providers.read',action:'providers.list',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/extensions$/,permission:'extensions.read',action:'extensions.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/providers\/[^/]+\/probe$/,permission:'providers.probe',action:'providers.probe',risk:'reversible',confirmation:false},
 {method:'GET',pattern:/^\/api\/status$/,permission:'status.read',action:'runtime.status',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/debug\/chat\/capabilities$/,permission:'debug.chat',action:'debug.chat.capabilities',risk:'read',confirmation:false},

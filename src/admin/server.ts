@@ -23,6 +23,7 @@ import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
 import {TaskControlError,type TaskControlFacade}from'./task-control.js';
 import { ProviderControlError,type ProviderControl } from './provider-control.js';
+import type { ExtensionsControl } from './extensions-control.js';
 import{DebugChatError,type DebugChatFacade}from'./debug-chat.js';
 import { WorldStore } from './world.js';
 import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
@@ -50,6 +51,7 @@ export interface AdminServerOptions {
   ops?: OpsControlFacade;
   logs?: LogBuffer;
   providers?: ProviderControl;
+  extensions?: ExtensionsControl;
   debugChat?: DebugChatFacade;
   taskControl?: TaskControlFacade;
 }
@@ -273,6 +275,7 @@ export class AdminServer {
     }
     if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? this.#opts.botControl?.modelHealth() ?? { configured: false } });
     if(method==='GET'&&pathname==='/api/providers')return this.#ok({providers:this.#providers().list()});
+    if(method==='GET'&&pathname==='/api/extensions')return this.#ok({extensions:this.#opts.extensions?.list()??{providers:[],gateways:[],storages:[],memories:[]}});
     const providerProbe=pathname.match(/^\/api\/providers\/([^/]+)\/probe$/);if(method==='POST'&&providerProbe)return this.#ok({probe:await this.#providers().probe(decodeURIComponent(providerProbe[1]!))});
     if (method === 'GET' && pathname === '/api/bots') return this.#ok({ bots: this.#control().list() });
     const botMatch = pathname.match(/^\/api\/bots\/([^/]+)$/);
