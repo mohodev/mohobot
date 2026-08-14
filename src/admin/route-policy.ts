@@ -30,5 +30,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/remote\/health$/,permission:'status.read',action:'remote.health',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/config\/publication$/,permission:'config.publish',action:'config.read',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/config\/publish$/,permission:'config.publish',action:'config.publish',risk:'dangerous',confirmation:true},
+{method:'POST',pattern:/^\/api\/config\/ack$/,permission:'config.publish',action:'config.ack',risk:'impact',confirmation:true},
+{method:'POST',pattern:/^\/api\/config\/rollback$/,permission:'config.publish',action:'config.rollback',risk:'dangerous',confirmation:true},
 ]as const;
 export function routePolicy(method:string,path:string):RoutePolicy|undefined{return ROUTE_POLICIES.find(p=>p.method===method&&p.pattern.test(path));}

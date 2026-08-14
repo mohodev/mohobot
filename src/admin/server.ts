@@ -21,6 +21,8 @@ import { WorldStore } from './world.js';
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
   publish(input: Record<string, unknown>, principal: AdminPrincipal): Promise<unknown>;
+  acknowledge?(input: any,principal:AdminPrincipal):Promise<unknown>;
+  rollback?(input:any,principal:AdminPrincipal):Promise<unknown>;
 }
 
 export interface AdminServerOptions {
@@ -247,6 +249,8 @@ export class AdminServer {
       if (!this.#opts.configPublication) throw new HttpError(409, 'config publication unavailable');
       return this.#ok({ publication: await this.#opts.configPublication.publish(input, auth.principal) });
     }
+    if(method==='POST'&&pathname==='/api/config/ack'){if(!this.#opts.configPublication?.acknowledge)throw new HttpError(409,'config acknowledgement unavailable');return this.#ok({publication:await this.#opts.configPublication.acknowledge(input,auth.principal)});}
+    if(method==='POST'&&pathname==='/api/config/rollback'){if(!this.#opts.configPublication?.rollback)throw new HttpError(409,'config rollback unavailable');return this.#ok({publication:await this.#opts.configPublication.rollback(input,auth.principal)});}
     if (method === 'GET' && pathname === '/api/admin/users') return this.#ok({ users: await this.#auth.listUsers() });
     if (method === 'POST' && pathname === '/api/admin/users') {
       const role = this.#role(input.role);

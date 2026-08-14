@@ -29,6 +29,8 @@ import type { Storage } from './storage/types.js';
 import { AdminServer } from './admin/server.js';
 import type { OptionalRemoteDrivers } from './storage/remote-factory.js';
 import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtime.js';
+import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
+import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -171,6 +173,8 @@ export class Runtime {
 
     const adminToken = this.#config.global.admin.token.trim();
     if (adminToken && this.#storage) {
+      const publicationMachine=new ConfigPublicationStateMachine(new InMemoryPublicationStateStore());await publicationMachine.init();
+      const publicationAdmin=new ConfigPublicationAdminAdapter(publicationMachine);
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,
@@ -180,6 +184,7 @@ export class Runtime {
         storage: this.#storage,
         snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
         remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
+        configPublication:publicationAdmin,
       });
       await this.#admin.start();
     } else {
