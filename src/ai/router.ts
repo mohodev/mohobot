@@ -55,7 +55,8 @@ export class BudgetedProvider implements AIProvider {
     try {
       const ceiling = this.#budget.maxTokens[task];
       const requested = options.maxTokens;
-      return await this.#inner.chat(messages, { ...options, maxTokens: ceiling === undefined ? requested : requested === undefined ? ceiling : Math.min(requested, ceiling) });
+      const unlimited = ceiling === 0 || requested === 0;
+      return await this.#inner.chat(messages, { ...options, maxTokens: unlimited ? undefined : ceiling === undefined ? requested : requested === undefined ? ceiling : Math.min(requested, ceiling) });
     } finally {
       this.#active -= 1;
     }

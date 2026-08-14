@@ -24,7 +24,8 @@ export const AIConfigSchema = z.object({
   apiKey: z.string().default(''),
   model: z.string().default('gpt-4o-mini'),
   temperature: z.number().min(0).max(2).default(0.8),
-  maxTokens: z.number().int().positive().max(32000).default(1024),
+  /** 0 delegates output length to the upstream provider; positive values are local ceilings. */
+  maxTokens: z.number().int().nonnegative().max(32000).default(1024),
   timeoutMs: z.number().int().positive().default(60000),
   retries: z.number().int().min(0).max(10).default(2),
   retryBaseDelayMs: z.number().int().positive().default(500),

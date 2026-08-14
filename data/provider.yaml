@@ -6,8 +6,8 @@
 provider: kilo
 # Keep the tracked default aligned with the deployed Kilo model. Do not silently select another gateway model.
 model: tencent/hy3:free
-# Pipeline passes ai.maxTokens explicitly; this must also cover hy3 reasoning.
-maxTokens: 2048
+# 0 omits max_tokens so Kilo enforces the selected model's own hard limit.
+maxTokens: 0
 baseUrl: https://api.kilo.ai/api/gateway/v1
 apiKey: ${KILO_API_KEY}
 temperature: 0.8
@@ -19,9 +19,8 @@ options:
     reserveRpm: 6
     maxConcurrent: 4
     maxTokens:
-      # tencent/hy3:free spends substantial output budget on private reasoning.
-      # 700 regularly exhausts it before an answer is emitted; keep >= 2048.
-      reply: 2048
+      # 0 removes the local reply ceiling; Kilo/model hard limits still apply.
+      reply: 0
       vision: 450
       planner: 250
       reflection: 350

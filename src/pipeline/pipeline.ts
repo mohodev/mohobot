@@ -313,7 +313,8 @@ export class MessagePipeline {
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
-        maxTokens: cfg.ai.maxTokens,
+        // 0 means no local output ceiling; omit max_tokens and let the provider enforce its own limit.
+        maxTokens: cfg.ai.maxTokens === 0 ? undefined : cfg.ai.maxTokens,
         timeoutMs: cfg.ai.timeoutMs,
       });
       reply = response.content.trim();

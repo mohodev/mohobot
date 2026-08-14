@@ -20,7 +20,7 @@ describe('MessagePipeline ordering', () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {
       ...base,
-      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456' }),
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
       session: SessionConfigSchema.parse({ ...base.session, persist: false }),
       memory: MemoryConfigSchema.parse(base.memory),
       media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
@@ -32,9 +32,10 @@ describe('MessagePipeline ordering', () => {
       async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }, ...appended]; },
       async clear() {}, async sweep() { return 0; }, size() { return 1; },
     };
+    let seenMaxTokens: number | undefined = 1;
     const pipeline = new MessagePipeline({
       config,
-      provider: { name: 'test', model: 'test', async chat() { return { content: 'ok', model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      provider: { name: 'test', model: 'test', async chat(_messages, options) { seenMaxTokens = options?.maxTokens; return { content: 'ok', model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
       sessions, events: new EventBus(), logger: createNullLogger(), send: async () => {},
     });
     await pipeline.handle({
@@ -45,13 +46,14 @@ describe('MessagePipeline ordering', () => {
     expect(appended[0]).toMatchObject({
       role: 'user', content: 'hello', sourceMessageId: 'source-42', sourcePlatform: 'discord', createdAt: 1234,
     });
+    expect(seenMaxTokens).toBeUndefined();
   });
 
   it('serializes concurrent messages in the same user session', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {
       ...base,
-      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456' }),
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
       session: SessionConfigSchema.parse({ ...base.session, persist: false, scope: 'user' }),
       memory: MemoryConfigSchema.parse(base.memory),
       media: { ...MediaConfigSchema.parse(base.media), vision: { ...MediaConfigSchema.parse(base.media).vision, apiKey: '' }, ocr: { ...MediaConfigSchema.parse(base.media).ocr, apiKey: '' } },
