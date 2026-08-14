@@ -169,12 +169,12 @@ export class Runtime {
       await this.#hotReload.start();
     }
 
-    const adminToken = process.env.MOHO_ADMIN_TOKEN?.trim() ?? '';
+    const adminToken = this.#config.global.admin.token.trim();
     if (adminToken && this.#storage) {
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
-        host: process.env.MOHO_ADMIN_HOST?.trim() || '127.0.0.1',
-        port: Number.parseInt(process.env.MOHO_ADMIN_PORT ?? '3210', 10) || 3210,
+        host: this.#config.global.admin.host,
+        port: this.#config.global.admin.port,
         token: adminToken,
         logger: this.#logger,
         storage: this.#storage,

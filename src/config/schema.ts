@@ -216,6 +216,7 @@ export const GlobalConfigSchema = z.object({
   /** Optional format marker for forward-compatible tooling; not required at runtime. */
   version: ConfigVersionSchema,
   logLevel: LogLevelSchema.default('info'),
+  admin: z.object({host:z.string().default('127.0.0.1'),port:z.number().int().min(1).max(65535).default(3210),token:z.string().default('')}).default({}),
   storage: StorageConfigSchema.default({}),
   remoteStorage: RemoteStorageConfigSchema.default({}),
   supervisor: SupervisorConfigSchema.default({}),

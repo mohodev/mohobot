@@ -4,6 +4,9 @@ dist/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/backups/
+.mohobot-update.lock/
+.secrets/
 data/chat.migrated/
 # generated simulation, memory, cache and remote-sync state
 data/world/*.json
@@ -23,7 +26,9 @@ data/storage/*.json
 .env.local
 config/global.local.yaml
 config/bots/*.local.yaml
+config/bots/*.local.yml
 data/provider.local.yaml
+data/provider.local.yml
 *.log
 logs/
 *_TODO.md

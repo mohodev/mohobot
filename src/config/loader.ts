@@ -513,6 +513,7 @@ export class ConfigLoader {
   #applyGlobalEnv(global: GlobalConfig): GlobalConfig {
     const next: GlobalConfig = {
       ...global,
+      admin: { ...global.admin },
       storage: { ...global.storage },
       ai: { ...global.ai },
       session: { ...global.session },
@@ -529,6 +530,9 @@ export class ConfigLoader {
 
     const storagePath = envValue(this.#env, 'MOHO_STORAGE_PATH');
     if (storagePath !== undefined) next.storage.path = storagePath;
+    const adminToken=envValue(this.#env,'MOHO_ADMIN_TOKEN');if(adminToken!==undefined)next.admin.token=adminToken;
+    const adminHost=envValue(this.#env,'MOHO_ADMIN_HOST');if(adminHost!==undefined)next.admin.host=adminHost;
+    const adminPort=envValue(this.#env,'MOHO_ADMIN_PORT');if(adminPort!==undefined){const port=Number(adminPort);if(Number.isInteger(port)&&port>=1&&port<=65535)next.admin.port=port;else this.#log.warn({key:'MOHO_ADMIN_PORT'},'ignoring invalid admin port');}
 
     next.ai = this.#applyAiEnv(next.ai, '');
     return next;
@@ -584,6 +588,7 @@ export class ConfigLoader {
   }
 
   #registerSecrets(global: GlobalConfig, bots: ResolvedBotConfig[]): void {
+    if (global.admin.token.length > 0) registerSecret(global.admin.token);
     if (global.ai.apiKey.length > 0) registerSecret(global.ai.apiKey);
     for (const bot of bots) {
       if (bot.ai.apiKey.length > 0) registerSecret(bot.ai.apiKey);
