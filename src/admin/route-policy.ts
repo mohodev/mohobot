@@ -1,0 +1,33 @@
+import type{AdminPermission}from'./rbac.js';import type{ActionRisk}from'./actions.js';
+export interface RoutePolicy{method:string;pattern:RegExp;permission?:AdminPermission;action:string;risk:ActionRisk;confirmation:boolean;}
+export const ROUTE_POLICIES:readonly RoutePolicy[]=[
+{method:'GET',pattern:/^\/api\/auth\/me$/,action:'auth.me',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/auth\/logout$/,action:'auth.logout',risk:'reversible',confirmation:false},
+{method:'GET',pattern:/^\/api\/auth\/sessions$/,permission:'sessions.read',action:'sessions.list',risk:'read',confirmation:false},
+{method:'DELETE',pattern:/^\/api\/auth\/sessions\/[^/]+$/,permission:'sessions.revoke',action:'sessions.revoke',risk:'reversible',confirmation:false},
+{method:'GET',pattern:/^\/api\/metrics$/,permission:'metrics.read',action:'metrics.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/models$/,permission:'models.read',action:'models.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/status$/,permission:'status.read',action:'runtime.status',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/admin\/actions$/,permission:'admin.actions.read',action:'admin.actions.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/admin\/audit$/,permission:'audit.read',action:'audit.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/admin\/health$/,permission:'status.read',action:'runtime.health',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/admin\/users$/,permission:'users.read',action:'users.list',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/admin\/users$/,permission:'users.create',action:'users.create',risk:'impact',confirmation:true},
+{method:'PATCH',pattern:/^\/api\/admin\/users\/[^/]+$/,permission:'users.update',action:'users.update',risk:'impact',confirmation:true},
+{method:'POST',pattern:/^\/api\/admin\/users\/[^/]+\/password$/,permission:'users.credentials.rotate',action:'users.password.rotate',risk:'dangerous',confirmation:true},
+{method:'POST',pattern:/^\/api\/confirmations$/,action:'confirmation.issue',risk:'reversible',confirmation:false},
+{method:'GET',pattern:/^\/api\/characters$/,permission:'characters.read',action:'characters.list',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/characters$/,permission:'characters.write',action:'characters.save',risk:'impact',confirmation:true},
+{method:'GET',pattern:/^\/api\/world(?:\/day-plan)?$/,permission:'world.read',action:'world.read',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/world\/schedule$/,permission:'world.write',action:'world.schedule',risk:'reversible',confirmation:false},
+{method:'POST',pattern:/^\/api\/world\/schedule\/[^/]+\/trust$/,permission:'world.confirm',action:'world.schedule.confirm',risk:'impact',confirmation:true},
+{method:'POST',pattern:/^\/api\/world\/(tick|events)$/,permission:'world.write',action:'world.write',risk:'reversible',confirmation:false},
+{method:'GET',pattern:/^\/api\/device$/,permission:'device.read',action:'device.read',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/device\/transition$/,permission:'device.write',action:'device.write',risk:'reversible',confirmation:false},
+{method:'GET',pattern:/^\/api\/affinity$/,permission:'memory.read',action:'affinity.read',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/affinity\/adjust$/,permission:'memory.write',action:'affinity.adjust',risk:'impact',confirmation:true},
+{method:'GET',pattern:/^\/api\/remote\/health$/,permission:'status.read',action:'remote.health',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/config\/publication$/,permission:'config.publish',action:'config.read',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/config\/publish$/,permission:'config.publish',action:'config.publish',risk:'dangerous',confirmation:true},
+]as const;
+export function routePolicy(method:string,path:string):RoutePolicy|undefined{return ROUTE_POLICIES.find(p=>p.method===method&&p.pattern.test(path));}
