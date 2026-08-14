@@ -8,6 +8,7 @@ import type { Logger, LogLevel } from '../core/logger.js';
 import type { LogBuffer } from '../core/log-buffer.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
+import{KnowledgeBaseStore}from'../knowledge/store.js';
 import type { Storage } from '../storage/types.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
@@ -119,6 +120,7 @@ export class AdminServer {
   readonly #device: DeviceStore;
   readonly #catalog: ModelCatalogStore;
   readonly #memories:MemoryAdminService;
+  readonly #knowledge:KnowledgeBaseStore;
   #server?: http.Server;
 
   constructor(opts: AdminServerOptions) {
@@ -130,6 +132,7 @@ export class AdminServer {
     this.#device = new DeviceStore(opts.rootDir);
     this.#catalog = new ModelCatalogStore(opts.rootDir);
     this.#memories=new MemoryAdminService(opts.storage);
+    this.#knowledge=new KnowledgeBaseStore(opts.storage);
   }
 
   get port(): number | undefined {
@@ -338,6 +341,14 @@ export class AdminServer {
     if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
     const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
     if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#world.get(),this.#device.get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
+    if(method==='GET'&&pathname==='/api/knowledge-bases')return this.#ok({bases:await this.#knowledge.list(intParam(url,'offset')??0,intParam(url,'limit')??50)});
+    if(method==='POST'&&pathname==='/api/knowledge-bases')return{status:201,body:{ok:true,base:await this.#knowledge.create({id:typeof input.id==='string'?input.id:undefined,name:String(input.name??''),description:typeof input.description==='string'?input.description:undefined})}};
+    const kb=pathname.match(/^\/api\/knowledge-bases\/([^/]+)$/);if(kb){const baseId=decodeURIComponent(kb[1]!);if(method==='GET'){const base=await this.#knowledge.get(baseId);if(!base)throw new HttpError(404,'knowledge base not found');return this.#ok({base});}if(method==='DELETE'){if(!await this.#knowledge.delete(baseId))throw new HttpError(404,'knowledge base not found');return this.#ok({deleted:true});}}
+    const docList=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/documents$/);if(docList){const baseId=decodeURIComponent(docList[1]!);if(method==='GET')return this.#ok({documents:await this.#knowledge.listDocuments(baseId,intParam(url,'offset')??0,intParam(url,'limit')??50)});if(method==='POST')return this.#ok({document:await this.#knowledge.upsertDocument({baseId,id:typeof input.id==='string'?input.id:undefined,name:String(input.name??''),text:String(input.text??'')})});}
+    const doc=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/documents\/([^/]+)$/);if(doc){const baseId=decodeURIComponent(doc[1]!),id=decodeURIComponent(doc[2]!);if(method==='GET'){const document=await this.#knowledge.getDocument(baseId,id);if(!document)throw new HttpError(404,'document not found');return this.#ok({document});}if(method==='DELETE'){if(!await this.#knowledge.deleteDocument(baseId,id))throw new HttpError(404,'document not found');return this.#ok({deleted:true});}}
+    const search=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/search$/);if(method==='GET'&&search)return this.#ok({results:await this.#knowledge.search({baseId:decodeURIComponent(search[1]!),query:String(url.searchParams.get('q')??''),offset:intParam(url,'offset'),limit:intParam(url,'limit')})});
+    const bindings=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings$/);if(bindings){const baseId=decodeURIComponent(bindings[1]!);if(method==='GET')return this.#ok({bindings:await this.#knowledge.bindings(baseId)});if(method==='POST')return this.#ok({binding:await this.#knowledge.bind({baseId,targetType:input.targetType as 'bot'|'character',targetId:String(input.targetId??'')})});}
+    const binding=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings\/([^/]+)\/([^/]+)$/);if(method==='DELETE'&&binding){if(!await this.#knowledge.unbind(decodeURIComponent(binding[1]!),decodeURIComponent(binding[2]!) as 'bot'|'character',decodeURIComponent(binding[3]!)))throw new HttpError(404,'binding not found');return this.#ok({deleted:true});}
     if (method === 'GET' && pathname === '/api/world') return this.#ok({ world: await this.#world.get() });
     if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#world.schedule({ ...input, trust: 'candidate' }) } };
     if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
