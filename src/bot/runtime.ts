@@ -263,7 +263,7 @@ export class BotRuntime implements Managed {
         this.#pipeline?.sweep();
         if (removed > 0) this.#logger.debug({ removed }, 'idle sessions swept');
       },
-      { name: `${this.name}:sweep`, intervalMs: 60_000, timeoutMs: 10_000 },
+      { name: `${this.name}:housekeeping`, intervalMs: 60_000, timeoutMs: 10_000 },
     );
 
     this.#worldTickTaskId = this.#deps.tasks.spawn(

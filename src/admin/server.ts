@@ -21,6 +21,7 @@ import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac
 import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
+import {TaskControlError,type TaskControlFacade}from'./task-control.js';
 import { ProviderControlError,type ProviderControl } from './provider-control.js';
 import{DebugChatError,type DebugChatFacade}from'./debug-chat.js';
 import { WorldStore } from './world.js';
@@ -50,6 +51,7 @@ export interface AdminServerOptions {
   logs?: LogBuffer;
   providers?: ProviderControl;
   debugChat?: DebugChatFacade;
+  taskControl?: TaskControlFacade;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -292,7 +294,8 @@ export class AdminServer {
     const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
     if(method==='GET'&&pathname==='/api/ops/outbox'){const outbox=await requireOps(this.#opts.ops).listOutbox({limit:intParam(url,'limit'),offset:intParam(url,'offset'),status:stringParam(url,'status') as any});return this.#ok({outbox});}
     const outboxRetry=pathname.match(/^\/api\/ops\/outbox\/([^/]+)\/retry$/);if(method==='POST'&&outboxRetry){const event=await requireOps(this.#opts.ops).retryOutbox(decodeURIComponent(outboxRetry[1]!));return this.#ok({event});}
-    if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
+    if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:this.#opts.taskControl?{items:this.#opts.taskControl.list()} : requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
+    const taskAction=pathname.match(/^\/api\/tasks\/([^/]+)\/(pause|resume|run)$/);if(method==='POST'&&taskAction){const control=this.#opts.taskControl;if(!control)throw new HttpError(409,'task control unavailable');const id=decodeURIComponent(taskAction[1]!);const action=taskAction[2]!;const task=action==='pause'?control.pause(id):action==='resume'?control.resume(id):await control.runNow(id);return this.#ok({task});}
     if (method === 'GET' && pathname === '/api/admin/health') return this.#ok({ health: healthSnapshot(this.#opts.snapshots()) });
     if (method === 'GET' && pathname === '/api/remote/health') return this.#ok({ health: await this.#opts.remoteHealth?.() ?? { configured: false } });
     if (method === 'GET' && pathname === '/api/config/publication') return this.#ok({ publication: await this.#opts.configPublication?.get() ?? null });
@@ -423,6 +426,7 @@ export class AdminServer {
     }
     if(error instanceof ProviderControlError)return new HttpError(404,error.code);
     if(error instanceof DebugChatError){if(error.code==='bot_not_found')return new HttpError(404,error.code);if(error.code==='provider_unavailable')return new HttpError(409,error.code);if(error.code==='rate_limited')return new HttpError(429,error.code);if(error.code==='input_invalid')return new HttpError(400,error.code);return new HttpError(502,error.code);}
+    if(error instanceof TaskControlError)return new HttpError(error.code==='not_found'?404:409,error.code);
     if(error instanceof OpsControlError){if(error.code==='not_found')return new HttpError(404,error.message);if(error.code==='invalid_state')return new HttpError(409,error.message);return new HttpError(400,error.message);}
     if (error instanceof AdminAuthError) {
       if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);

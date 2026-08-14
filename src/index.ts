@@ -36,6 +36,7 @@ import{DebugChatFacade}from'./admin/debug-chat.js';
 import{ProviderControlFacade}from'./admin/provider-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
+import{TaskControlFacade}from'./admin/task-control.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -101,7 +102,7 @@ export class Runtime {
       await this.#storage.init();
       this.#logger.info({ driver: this.#config.global.storage.driver }, 'storage ready');
       this.#tasks.spawn(async () => void (await this.#storage?.purgeExpired()), {
-        name: 'storage:purge',
+        name: 'housekeeping',
         intervalMs: 300_000,
         timeoutMs: 30_000,
       });
@@ -203,6 +204,7 @@ export class Runtime {
         remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
         configPublication:publicationAdmin,
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
+        taskControl:new TaskControlFacade({tasks:this.#tasks}),
         logs:this.#logs,
         providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
         debugChat,

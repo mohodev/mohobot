@@ -8,6 +8,7 @@ import { MemoryStorage } from '../storage/memory.js';
 import { AdminServer } from './server.js';
 import { OpsControlFacade } from './ops-control.js';
 import { DebugChatFacade } from './debug-chat.js';
+import {TaskManager}from'../core/task-manager.js';import{TaskControlFacade}from'./task-control.js';
 
 interface Reply { status: number; headers: Headers; data: Record<string, any> }
 
@@ -16,7 +17,7 @@ describe('AdminServer production authorization chain', () => {
   let storage: MemoryStorage;
   let server: AdminServer;
   let logs: LogBuffer;
-  let base: string;
+  let base: string; let taskManager:TaskManager;
   const master = 'master-token-for-integration-tests';
 
   beforeEach(async () => {
@@ -25,12 +26,12 @@ describe('AdminServer production authorization chain', () => {
     await fs.writeFile(path.join(root, 'webui', 'index.html'), '<h1>Moho</h1>');
     clearSecrets();logs=new LogBuffer({capacity:3});
     storage = new MemoryStorage({ logger: createNullLogger() });
-    await storage.init();
+    await storage.init(); taskManager=new TaskManager({logger:createNullLogger()});taskManager.spawn(async()=>{}, {name:'world-tick',intervalMs:60_000});
     server = new AdminServer({
       rootDir: root, host: '127.0.0.1', port: 0, token: master, logger: createNullLogger(), storage, snapshots: () => [],
       remoteHealth: async () => ({ mysql: { ok: true } }), modelHealth: async () => ({ reply: { ok: true } }),
       configPublication: { get: async () => ({ version: 1 }), publish: async (input, principal) => ({ ...input, actor: principal.id }) },
-      ops:new OpsControlFacade({storage,listTasks:()=>[{id:'task-1',name:'world:tick',kind:'interval',state:'pending',createdAt:1,runs:2,errors:0}]}),logs,
+      ops:new OpsControlFacade({storage,listTasks:()=>taskManager.list()}),taskControl:new TaskControlFacade({tasks:taskManager}),logs,
       debugChat:new DebugChatFacade({providers:()=>[{id:'main',provider:{name:'mock',model:'mock-model',health:async()=>({ok:true}),chat:async()=>({content:'debug response',model:'mock-model',ms:1})}}],logger:createNullLogger(),requestsPerMinute:1,maxInputChars:8}),
     });
     await server.start();
@@ -39,7 +40,7 @@ describe('AdminServer production authorization chain', () => {
 
   afterEach(async () => {
     await server.stop();
-    await storage.close();
+    await taskManager.stopAll(); await storage.close();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -68,6 +69,7 @@ describe('AdminServer production authorization chain', () => {
   }
 
   it('offers isolated debug chat only to operators with bounded input and redacted traces',async()=>{const admin=await bootstrap();const create={username:'operator-debug',password:'long operator password',role:'operator',enabled:true};const nonce=await confirmation(admin,'POST','/api/admin/users',create);await request('POST','/api/admin/users',{token:admin,confirmation:nonce,body:create});const login=await request('POST','/api/auth/login',{body:{username:'operator-debug',password:'long operator password'}});const operator=login.data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:operator})).data.capabilities.bots).toEqual([{id:'main',model:'mock-model',available:true}]);const reply=await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'hello'}});expect(reply.status).toBe(200);expect(reply.data.reply.content).toBe('debug response');expect(JSON.stringify(reply.data.reply.trace)).not.toContain('hello');expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'too long input'}})).status).toBe(400);expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'again'}})).status).toBe(429);const viewerCreate={username:'viewer-debug',password:'long viewer password',role:'viewer',enabled:true};const viewerNonce=await confirmation(admin,'POST','/api/admin/users',viewerCreate);await request('POST','/api/admin/users',{token:admin,confirmation:viewerNonce,body:viewerCreate});const viewer=(await request('POST','/api/auth/login',{body:{username:'viewer-debug',password:'long viewer password'}})).data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:viewer})).status).toBe(403);});
+  it('controls only registered safe interval tasks after confirmation',async()=>{const admin=await bootstrap();const tasks=(await request('GET','/api/tasks',{token:admin})).data.tasks.items;const task=tasks[0];expect(task.controlName).toBe('world-tick');expect((await request('POST',`/api/tasks/${task.id}/pause`,{token:admin,body:{}})).status).toBe(409);const pause=await confirmation(admin,'POST',`/api/tasks/${task.id}/pause`,{});expect((await request('POST',`/api/tasks/${task.id}/pause`,{token:admin,confirmation:pause,body:{}})).data.task.state).toBe('paused');const resume=await confirmation(admin,'POST',`/api/tasks/${task.id}/resume`,{});expect((await request('POST',`/api/tasks/${task.id}/resume`,{token:admin,confirmation:resume,body:{}})).data.task.state).toBe('pending');expect((await request('POST','/api/tasks/nope/run',{token:admin,body:{}})).status).toBe(409);});
 
   it('uses master token only for fixed bootstrap exchange and fails closed', async () => {
     expect((await request('GET', '/api/status', { master })).status).toBe(401);
@@ -146,7 +148,7 @@ describe('AdminServer production authorization chain', () => {
     expect((await request('GET', '/api/auth/me', { token: replacement })).status).toBe(401);
   });
 
-  it('exposes narrow redacted ops controls with RBAC and confirmations',async()=>{const admin=await bootstrap();const session={kind:'session',recordVersion:1,key:'session:main:channel:user',botId:'main',channelId:'channel',userId:'user',messages:[{role:'user',content:'private session body'}],updatedAt:5};await storage.save(session.key,session);await storage.save('outbox:failed-1',{eventId:'failed-1',type:'message.updated',payload:{token:'private payload'},status:'failed',attempts:2,createdAt:1,updatedAt:2,nextAttemptAt:9,lastError:'private remote error'});await storage.save('outbox:done-1',{eventId:'done-1',type:'message.updated',payload:{},status:'done',attempts:1,createdAt:1,updatedAt:2,nextAttemptAt:2});const sessions=await request('GET','/api/ops/sessions?botId=main&limit=1',{token:admin});expect(sessions.status).toBe(200);expect(JSON.stringify(sessions.data)).not.toContain('private session');const outbox=await request('GET','/api/ops/outbox?status=failed',{token:admin});expect(outbox.status).toBe(200);expect(JSON.stringify(outbox.data)).not.toContain('private payload');expect(JSON.stringify(outbox.data)).not.toContain('private remote');expect((await request('GET','/api/tasks',{token:admin})).data.tasks.items[0]).toMatchObject({name:'world:tick'});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin})).status).toBe(409);const delNonce=await confirmation(admin,'DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin,confirmation:delNonce})).status).toBe(200);const retryBody={};const retryNonce=await confirmation(admin,'POST','/api/ops/outbox/failed-1/retry',retryBody);expect((await request('POST','/api/ops/outbox/failed-1/retry',{token:admin,confirmation:retryNonce,body:retryBody})).data.event.status).toBe('pending');const doneNonce=await confirmation(admin,'POST','/api/ops/outbox/done-1/retry',{});expect((await request('POST','/api/ops/outbox/done-1/retry',{token:admin,confirmation:doneNonce,body:{}})).status).toBe(409);expect((await request('DELETE','/api/ops/sessions/not-a-session-key',{token:admin})).status).toBe(409);});
+  it('exposes narrow redacted ops controls with RBAC and confirmations',async()=>{const admin=await bootstrap();const session={kind:'session',recordVersion:1,key:'session:main:channel:user',botId:'main',channelId:'channel',userId:'user',messages:[{role:'user',content:'private session body'}],updatedAt:5};await storage.save(session.key,session);await storage.save('outbox:failed-1',{eventId:'failed-1',type:'message.updated',payload:{token:'private payload'},status:'failed',attempts:2,createdAt:1,updatedAt:2,nextAttemptAt:9,lastError:'private remote error'});await storage.save('outbox:done-1',{eventId:'done-1',type:'message.updated',payload:{},status:'done',attempts:1,createdAt:1,updatedAt:2,nextAttemptAt:2});const sessions=await request('GET','/api/ops/sessions?botId=main&limit=1',{token:admin});expect(sessions.status).toBe(200);expect(JSON.stringify(sessions.data)).not.toContain('private session');const outbox=await request('GET','/api/ops/outbox?status=failed',{token:admin});expect(outbox.status).toBe(200);expect(JSON.stringify(outbox.data)).not.toContain('private payload');expect(JSON.stringify(outbox.data)).not.toContain('private remote');expect((await request('GET','/api/tasks',{token:admin})).data.tasks.items[0]).toMatchObject({name:'world-tick'});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin})).status).toBe(409);const delNonce=await confirmation(admin,'DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin,confirmation:delNonce})).status).toBe(200);const retryBody={};const retryNonce=await confirmation(admin,'POST','/api/ops/outbox/failed-1/retry',retryBody);expect((await request('POST','/api/ops/outbox/failed-1/retry',{token:admin,confirmation:retryNonce,body:retryBody})).data.event.status).toBe('pending');const doneNonce=await confirmation(admin,'POST','/api/ops/outbox/done-1/retry',{});expect((await request('POST','/api/ops/outbox/done-1/retry',{token:admin,confirmation:doneNonce,body:{}})).status).toBe(409);expect((await request('DELETE','/api/ops/sessions/not-a-session-key',{token:admin})).status).toBe(409);});
 
   it('polls redacted structured logs with gap and filters under logs.read',async()=>{const secret='log-api-secret-value-123';registerSecret(secret);logs.write({level:'info',bindings:{component:'runtime'},message:'one'});logs.write({level:'warn',bindings:{component:'discord'},message:`failure ${secret}`,data:{token:secret,content:'private chat',prompt:'private prompt',safe:`masked ${secret}`}});logs.write({level:'error',bindings:{component:'runtime'},message:'three'});logs.write({level:'error',bindings:{component:'runtime'},message:'four'});logs.write({level:'info',bindings:{component:'other'},message:'five'});expect((await request('GET','/api/logs')).status).toBe(401);const admin=await bootstrap();const result=await request('GET','/api/logs?after=1&limit=1&level=error&component=runtime',{token:admin});expect(result.status).toBe(200);expect(result.data.logs).toMatchObject({gap:true,oldestSeq:3,latestSeq:5,items:[{seq:3,level:'error',component:'runtime',message:'three'}]});const all=await request('GET','/api/logs',{token:admin});const serialized=JSON.stringify(all.data);expect(serialized).not.toContain(secret);expect(serialized).not.toContain('private chat');expect(serialized).not.toContain('private prompt');expect((await request('GET','/api/logs?limit=501',{token:admin})).status).toBe(400);expect((await request('GET','/api/logs?level=nope',{token:admin})).status).toBe(400);});
 
