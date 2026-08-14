@@ -234,6 +234,12 @@ export class SqliteStorage implements Storage, AtomicOutboxStorage {
     return run.immediate();
   }
 
+  async retryFailedOutboxAtomic(eventId:string,now:number):Promise<OutboxEvent|undefined>{
+    const db=this.#must(),key=`${OUTBOX_PREFIX}${eventId}`;
+    const run=db.transaction(()=>{const row=db.prepare('SELECT key, value, updated_at, expires_at FROM kv WHERE key = ?').get(key)as Row|undefined;if(!row)return undefined;const current=this.#decodeOutbox(row.key,row.value);if(!current||current.status!=='failed')return undefined;const next:OutboxEvent={...current,status:'pending',updatedAt:now,nextAttemptAt:now,workerId:undefined,claimToken:undefined,claimExpiresAt:undefined,lastError:undefined};const changed=db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').run(JSON.stringify(next),now,key,row.value).changes;return changed===1?next:undefined;});
+    return run.immediate();
+  }
+
   async recoverExpiredOutboxAtomic(now: number): Promise<number> {
     return this.#must().transaction(() => this.#recoverExpiredOutbox(this.#must(), now)).immediate();
   }

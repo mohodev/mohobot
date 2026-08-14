@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNullLogger } from '../core/logger.js';
 import { MemoryStorage } from '../storage/memory.js';
 import { AdminServer } from './server.js';
+import { OpsControlFacade } from './ops-control.js';
 
 interface Reply { status: number; headers: Headers; data: Record<string, any> }
 
@@ -25,6 +26,7 @@ describe('AdminServer production authorization chain', () => {
       rootDir: root, host: '127.0.0.1', port: 0, token: master, logger: createNullLogger(), storage, snapshots: () => [],
       remoteHealth: async () => ({ mysql: { ok: true } }), modelHealth: async () => ({ reply: { ok: true } }),
       configPublication: { get: async () => ({ version: 1 }), publish: async (input, principal) => ({ ...input, actor: principal.id }) },
+      ops:new OpsControlFacade({storage,listTasks:()=>[{id:'task-1',name:'world:tick',kind:'interval',state:'pending',createdAt:1,runs:2,errors:0}]}),
     });
     await server.start();
     base = `http://127.0.0.1:${server.port}`;
@@ -136,6 +138,10 @@ describe('AdminServer production authorization chain', () => {
     expect((await request('DELETE', `/api/auth/sessions/${sessionId}`, { token: replacement })).status).toBe(200);
     expect((await request('GET', '/api/auth/me', { token: replacement })).status).toBe(401);
   });
+
+  it('exposes narrow redacted ops controls with RBAC and confirmations',async()=>{const admin=await bootstrap();const session={kind:'session',recordVersion:1,key:'session:main:channel:user',botId:'main',channelId:'channel',userId:'user',messages:[{role:'user',content:'private session body'}],updatedAt:5};await storage.save(session.key,session);await storage.save('outbox:failed-1',{eventId:'failed-1',type:'message.updated',payload:{token:'private payload'},status:'failed',attempts:2,createdAt:1,updatedAt:2,nextAttemptAt:9,lastError:'private remote error'});await storage.save('outbox:done-1',{eventId:'done-1',type:'message.updated',payload:{},status:'done',attempts:1,createdAt:1,updatedAt:2,nextAttemptAt:2});const sessions=await request('GET','/api/ops/sessions?botId=main&limit=1',{token:admin});expect(sessions.status).toBe(200);expect(JSON.stringify(sessions.data)).not.toContain('private session');const outbox=await request('GET','/api/ops/outbox?status=failed',{token:admin});expect(outbox.status).toBe(200);expect(JSON.stringify(outbox.data)).not.toContain('private payload');expect(JSON.stringify(outbox.data)).not.toContain('private remote');expect((await request('GET','/api/tasks',{token:admin})).data.tasks.items[0]).toMatchObject({name:'world:tick'});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin})).status).toBe(409);const delNonce=await confirmation(admin,'DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{});expect((await request('DELETE',`/api/ops/sessions/${encodeURIComponent(session.key)}`,{token:admin,confirmation:delNonce})).status).toBe(200);const retryBody={};const retryNonce=await confirmation(admin,'POST','/api/ops/outbox/failed-1/retry',retryBody);expect((await request('POST','/api/ops/outbox/failed-1/retry',{token:admin,confirmation:retryNonce,body:retryBody})).data.event.status).toBe('pending');const doneNonce=await confirmation(admin,'POST','/api/ops/outbox/done-1/retry',{});expect((await request('POST','/api/ops/outbox/done-1/retry',{token:admin,confirmation:doneNonce,body:{}})).status).toBe(409);expect((await request('DELETE','/api/ops/sessions/not-a-session-key',{token:admin})).status).toBe(409);});
+
+  it('filters and paginates audit records through the strict ops facade',async()=>{const admin=await bootstrap();await request('GET','/api/status',{token:admin});const result=await request('GET','/api/admin/audit?actor=bootstrap&outcome=allowed&method=GET&limit=1&offset=0',{token:admin});expect(result.status).toBe(200);expect(result.data.audit).toMatchObject({limit:1,offset:0,items:expect.any(Array)});expect(result.data.audit.items.every((item:any)=>item.actor==='bootstrap'&&item.outcome==='allowed'&&item.method==='GET')).toBe(true);expect((await request('GET','/api/admin/audit?limit=101',{token:admin})).status).toBe(400);});
 
   it('persists allowed and denied audit records in Storage', async () => {
     await request('GET', '/api/status');

@@ -17,6 +17,7 @@ import { DeviceStore } from './device.js';
 import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac.js';
 import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
+import { OpsControlError, type OpsControlFacade } from './ops-control.js';
 import { WorldStore } from './world.js';
 
 export interface ConfigPublicationAdapter {
@@ -38,6 +39,7 @@ export interface AdminServerOptions {
   configPublication?: ConfigPublicationAdapter;
   modelHealth?: () => Promise<unknown>;
   botControl?: BotControlFacade;
+  ops?: OpsControlFacade;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -85,6 +87,10 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
 function bearer(req: IncomingMessage): string {
   return req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? '';
 }
+
+function intParam(url:URL,name:string):number|undefined{const raw=url.searchParams.get(name);if(raw===null)return undefined;if(!/^\d+$/.test(raw))throw new HttpError(400,`invalid ${name}`);return Number(raw);}
+function stringParam(url:URL,name:string):string|undefined{return url.searchParams.get(name)??undefined;}
+function requireOps(ops:OpsControlFacade|undefined):OpsControlFacade{if(!ops)throw new HttpError(409,'operations control unavailable');return ops;}
 
 function timingSafeStringEqual(left: string, right: string): boolean {
   const a = crypto.createHash('sha256').update(left).digest();
@@ -254,9 +260,14 @@ export class AdminServer {
     if (method === 'POST' && reloadMatch) return this.#ok({ plugin: await this.#control().reloadPlugin(decodeURIComponent(reloadMatch[1]!), decodeURIComponent(reloadMatch[2]!)) });
     if (method === 'GET' && pathname === '/api/admin/actions') return this.#ok({ actions: ADMIN_ACTIONS });
     if (method === 'GET' && pathname === '/api/admin/audit') {
-      const rows = await this.#opts.storage.query<AuditRecord>({ prefix: AUDIT_PREFIX, limit: 200 });
-      return this.#ok({ audit: rows.map((row) => row.value) });
+      const audit=await requireOps(this.#opts.ops).listAudit({limit:intParam(url,'limit'),offset:intParam(url,'offset'),actor:stringParam(url,'actor'),action:stringParam(url,'action'),outcome:stringParam(url,'outcome') as 'allowed'|'denied'|undefined,method:stringParam(url,'method'),status:intParam(url,'status'),from:intParam(url,'from'),to:intParam(url,'to')});
+      return this.#ok({ audit });
     }
+    if(method==='GET'&&pathname==='/api/ops/sessions'){const sessions=await requireOps(this.#opts.ops).listSessions({limit:intParam(url,'limit'),offset:intParam(url,'offset'),botId:stringParam(url,'botId'),channelId:stringParam(url,'channelId'),userId:stringParam(url,'userId')});return this.#ok({sessions});}
+    const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
+    if(method==='GET'&&pathname==='/api/ops/outbox'){const outbox=await requireOps(this.#opts.ops).listOutbox({limit:intParam(url,'limit'),offset:intParam(url,'offset'),status:stringParam(url,'status') as any});return this.#ok({outbox});}
+    const outboxRetry=pathname.match(/^\/api\/ops\/outbox\/([^/]+)\/retry$/);if(method==='POST'&&outboxRetry){const event=await requireOps(this.#opts.ops).retryOutbox(decodeURIComponent(outboxRetry[1]!));return this.#ok({event});}
+    if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
     if (method === 'GET' && pathname === '/api/admin/health') return this.#ok({ health: healthSnapshot(this.#opts.snapshots()) });
     if (method === 'GET' && pathname === '/api/remote/health') return this.#ok({ health: await this.#opts.remoteHealth?.() ?? { configured: false } });
     if (method === 'GET' && pathname === '/api/config/publication') return this.#ok({ publication: await this.#opts.configPublication?.get() ?? null });
@@ -371,6 +382,7 @@ export class AdminServer {
       if (error.code === 'busy') return new HttpError(409, error.code);
       return new HttpError(409, error.code);
     }
+    if(error instanceof OpsControlError){if(error.code==='not_found')return new HttpError(404,error.message);if(error.code==='invalid_state')return new HttpError(409,error.message);return new HttpError(400,error.message);}
     if (error instanceof AdminAuthError) {
       if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);
       if (error.code === 'not_found') return new HttpError(404, error.code);
