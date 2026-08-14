@@ -98,11 +98,13 @@ export class Runtime {
         timeoutMs: 30_000,
       });
     } catch (error) {
-      this.#logger.error(
-        { err: error instanceof Error ? error.message : String(error) },
-        'storage init failed; continuing without persistence',
-      );
-      this.#storage = undefined;
+      const detail=error instanceof Error?error.message:String(error);
+      if(this.#config.global.storage.driver==='sqlite'&&!this.#config.global.storage.allowEphemeralFallback){
+        this.#logger.fatal({err:detail},'SQLite init/migration failed; refusing unsafe ephemeral fallback');
+        throw error;
+      }
+      this.#logger.error({err:detail},'storage init failed; explicit ephemeral fallback enabled');
+      this.#storage=undefined;
     }
 
     const remoteConfig = this.#config.global.remoteStorage;

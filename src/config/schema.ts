@@ -179,6 +179,8 @@ export const StorageConfigSchema = z.object({
    */
   driver: z.string().default('sqlite'),
   path: z.string().default('./data/mohobot.db'),
+  /** Explicit disaster-mode opt-in. Production SQLite otherwise fails closed. */
+  allowEphemeralFallback: z.boolean().default(false),
   /** Driver-specific options (connection string, pool size, ...). */
   options: z.record(z.unknown()).default({}),
 });
