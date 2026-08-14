@@ -255,7 +255,9 @@ export class AdminServer {
     }
     const userMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
     if (method === 'PATCH' && userMatch) {
-      const username = decodeURIComponent(userMatch[1]!);
+      const identifier = decodeURIComponent(userMatch[1]!);
+      const target=await this.#auth.resolveUserIdentifier(identifier);if(!target)throw new HttpError(404,'user not found');
+      const username=target.normalizedUsername;
       const patch: { username?: string; role?: AdminRole; enabled?: boolean } = {};
       if (input.username !== undefined) patch.username = String(input.username);
       if (input.role !== undefined) {
@@ -270,7 +272,8 @@ export class AdminServer {
     }
     const passwordMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/);
     if (method === 'POST' && passwordMatch) {
-      await this.#auth.changePassword(decodeURIComponent(passwordMatch[1]!), String(input.password ?? ''));
+      const identifier=decodeURIComponent(passwordMatch[1]!);const target=await this.#auth.resolveUserIdentifier(identifier);if(!target)throw new HttpError(404,'user not found');
+      await this.#auth.changePassword(target.normalizedUsername, String(input.password ?? ''));
       return this.#ok({ changed: true });
     }
     if (method === 'GET' && pathname === '/api/characters') {

@@ -160,6 +160,11 @@ export class AdminAuthService {
     return rows.map((row) => publicUser(row.value)).sort((a, b) => a.normalizedUsername.localeCompare(b.normalizedUsername));
   }
 
+  async resolveUserIdentifier(identifier: string): Promise<PublicAdminUser | undefined> {
+    const direct=await this.getUser(identifier);if(direct)return direct;
+    return (await this.listUsers()).find((user)=>user.id===identifier);
+  }
+
   async updateUser(username: string, patch: { username?: string; role?: AdminRole; enabled?: boolean }): Promise<PublicAdminUser> {
     return this.#exclusive(async () => {
       const current = await this.#requireRecord(username);
