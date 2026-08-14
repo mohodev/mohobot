@@ -86,6 +86,22 @@ export function deepMerge(base: unknown, override: unknown): unknown {
   return result;
 }
 
+export function normalizeLegacyAi(input: unknown): unknown {
+  if (!isRecord(input)) return input;
+  const out: Record<string, unknown> = { ...input };
+  const legacyKeys = ['profiles', 'defaultProfile', 'taskRoutes', 'budget'] as const;
+  const legacy: Record<string, unknown> = {};
+  for (const key of legacyKeys) if (out[key] !== undefined) legacy[key] = out[key];
+  if (Object.keys(legacy).length === 0) return out;
+  out.options = deepMerge(legacy, isRecord(out.options) ? out.options : {});
+  for (const key of legacyKeys) delete out[key];
+  return out;
+}
+
+function normalizeAiAt(container: Record<string, unknown>): void {
+  if (container.ai !== undefined) container.ai = normalizeLegacyAi(container.ai);
+}
+
 function errText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -345,8 +361,9 @@ export class ConfigLoader {
     }
 
     let mergedData: Record<string, unknown> = data;
+    normalizeAiAt(mergedData);
     const local = await this.#readOptionalMapping(this.globalLocalFile, 'global local override');
-    if (local) mergedData = deepMerge(mergedData, local) as Record<string, unknown>;
+    if (local) { normalizeAiAt(local); mergedData = deepMerge(mergedData, local) as Record<string, unknown>; }
 
     // AstrBot-style provider overrides from data/provider.yaml.
     const providerOverrides = await this.#loadProviderOverrides();
@@ -407,6 +424,8 @@ export class ConfigLoader {
       const stem = name.replace(BOT_FILE_RE, '');
       const localFile = path.join(this.botsDir, `${stem}.local.yaml`);
       const local = await this.#readOptionalMapping(localFile, 'bot local override');
+      normalizeAiAt(data);
+      if(local) normalizeAiAt(local);
       const merged = local ? deepMerge(data, local) as Record<string, unknown> : data;
       this.#warnUnknownFields(file, merged, BotConfigSchema);
       entries.push({ file, stem, data: merged });
@@ -518,7 +537,8 @@ export class ConfigLoader {
   #applyAiEnv(ai: AIConfig, prefix: string): AIConfig {
     const out: AIConfig = { ...ai };
 
-    const apiKey = envValue(this.#env, `${prefix}AI_API_KEY`);
+    const apiKey = envValue(this.#env, `${prefix}AI_API_KEY`)
+      ?? (prefix === '' ? envValue(this.#env, 'NVIDIA_NIM_API_KEY') ?? envValue(this.#env, 'NVIDIA_API_KEY') : undefined);
     if (apiKey !== undefined) out.apiKey = apiKey;
 
     const model = envValue(this.#env, `${prefix}AI_MODEL`);
@@ -625,7 +645,7 @@ export class ConfigLoader {
     const localFile = path.join(this.#rootDir, 'data', 'provider.local.yaml');
     const tracked = await this.#readOptionalMapping(file, 'provider.yaml');
     const local = await this.#readOptionalMapping(localFile, 'provider.local.yaml');
-    const data = deepMerge(tracked ?? {}, local ?? {}) as Record<string, unknown>;
+    const data = normalizeLegacyAi(deepMerge(tracked ?? {}, local ?? {})) as Record<string, unknown>;
     const resolveEnv = (value: unknown): unknown => {
       if (typeof value === 'string') return value.replace(/\$\{([^}]+)\}/g, (_m, name: string) => this.#env[name] ?? '');
       if (Array.isArray(value)) return value.map(resolveEnv);

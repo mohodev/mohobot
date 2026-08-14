@@ -28,6 +28,8 @@ const ENV_KEYS = [
   'MOHO_BOT_MAIN_AI_BASE_URL',
   'VISION_SECRET',
   'OCR_SECRET',
+  'NVIDIA_API_KEY',
+  'NVIDIA_NIM_API_KEY',
 ];
 
 let rootDir = '';
@@ -120,6 +122,18 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]).toMatchObject({ id: 'legacy', name: 'Legacy' });
     expect(cfg.bots[0]).not.toHaveProperty('version');
     expect(cfg.bots[0]?.session.scope).toBe('channel');
+  });
+
+  it('maps legacy multi-provider fields into options with new options winning', async () => {
+    await writeGlobal(['ai:','  profiles:','    old: { baseUrl: https://old.example, model: old }','  defaultProfile: old','  budget: { rpm: 5 }','  options:','    defaultProfile: newer','    budget: { concurrency: 2 }',''].join('\n'));
+    const ai = (await newLoader().load()).global.ai;
+    expect(ai.options).toMatchObject({ profiles:{old:{model:'old'}}, defaultProfile:'newer', budget:{rpm:5,concurrency:2} });
+  });
+
+  it('uses canonical NVIDIA_NIM_API_KEY before NVIDIA_API_KEY alias', async () => {
+    await writeGlobal('ai:\n  apiKey: yaml\n');
+    process.env['NVIDIA_API_KEY']='alias'; process.env['NVIDIA_NIM_API_KEY']='canonical';
+    expect((await newLoader().load()).global.ai.apiKey).toBe('canonical');
   });
 
   it('reloads an isolated env snapshot without mutating process.env', async () => {
