@@ -105,6 +105,19 @@ describe('AdminAuthService', () => {
     expect((await auth.listUsers()).map((user) => user.username)).toEqual(['only']);
   });
 
+  it('rejects future and malformed user/session records without overwriting them', async()=>{
+    const{auth,storage}=await fixture();
+    await storage.save('admin-user:future',{kind:'admin-user',recordVersion:2,username:'future'});
+    await rejectCode(auth.bootstrapSession({username:'future',initialPassword:'strong bootstrap password'}),'unsupported_record');
+    expect(await storage.get<Record<string,unknown>>('admin-user:future')).toMatchObject({recordVersion:2});
+    await storage.save('admin-user:broken',{kind:'admin-user',recordVersion:1,username:'broken'});
+    await rejectCode(auth.login('broken','strong password'),'unsupported_record');
+    expect(await auth.listUsers()).toEqual([]);
+    await auth.createUser({username:'valid',password:'valid password 123',role:'viewer'});const login=await auth.login('valid','valid password 123');
+    const rows=await storage.query<Record<string,unknown>>({prefix:'admin-session:'});await storage.save(rows[0]!.key,{...rows[0]!.value,recordVersion:2});
+    expect(await auth.authenticate(login.token)).toBeUndefined();expect(await auth.listSessions()).toEqual([]);
+  });
+
   it('supports CRUD without exposing password material and revokes all user sessions', async () => {
     const { auth } = await fixture();
     const created = await auth.createUser({ username: 'viewer', password: 'viewer password 123', role: 'viewer' });

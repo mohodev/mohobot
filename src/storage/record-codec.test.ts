@@ -1,0 +1,10 @@
+import Database from'better-sqlite3';import{describe,expect,it}from'vitest';import{createNullLogger}from'../core/logger.js';import{SqliteStorage}from'./sqlite.js';
+async function fixture(){const store=new SqliteStorage({path:':memory:',logger:createNullLogger()});await store.init();return store;}
+// File fixtures exercise metadata through a second connection.
+import{mkdtempSync,rmSync}from'node:fs';import{tmpdir}from'node:os';import path from'node:path';
+async function fileStore(){const root=mkdtempSync(path.join(tmpdir(),'moho-codec-'));const file=path.join(root,'db.sqlite');const store=new SqliteStorage({path:file,logger:createNullLogger()});await store.init();return{root,file,store};}
+describe('SQLite strict record metadata',()=>{
+ it('skips mismatched and future metadata in get/query',async()=>{const f=await fileStore();await f.store.save('session:b:c:u',{ok:true});await f.store.close();const db=new Database(f.file);db.prepare("UPDATE kv SET record_type='admin-user' WHERE key='session:b:c:u'").run();db.close();const reopened=new SqliteStorage({path:f.file,logger:createNullLogger()});await reopened.init();expect(await reopened.get('session:b:c:u')).toBeUndefined();expect(await reopened.query({prefix:'session:'})).toEqual([]);await reopened.close();rmSync(f.root,{recursive:true,force:true});});
+ it('refuses to overwrite records from a future writer',async()=>{const f=await fileStore();await f.store.save('admin-user:a',{v:1});await f.store.close();const db=new Database(f.file);db.prepare("UPDATE kv SET writer_version=99 WHERE key='admin-user:a'").run();db.close();const reopened=new SqliteStorage({path:f.file,logger:createNullLogger()});await reopened.init();await expect(reopened.save('admin-user:a',{v:2})).rejects.toMatchObject({code:'future_writer_version'});expect(await reopened.get('admin-user:a')).toBeUndefined();await reopened.close();rmSync(f.root,{recursive:true,force:true});});
+ it('keeps unknown custom keys untyped and readable',async()=>{const store=await fixture();await store.save('custom:key',{ok:true});expect(await store.get('custom:key')).toEqual({ok:true});await store.close();});
+});

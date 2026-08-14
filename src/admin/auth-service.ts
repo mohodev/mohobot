@@ -22,6 +22,7 @@ export interface ScryptPasswordHash {
 
 export interface AdminUserRecord {
   kind: 'admin-user';
+  recordVersion: 1;
   id: string;
   username: string;
   normalizedUsername: string;
@@ -38,6 +39,7 @@ export interface AdminUserRecord {
 
 export interface AdminSessionRecord {
   kind: 'admin-session';
+  recordVersion: 1;
   id: string;
   tokenHash: string;
   userId: string;
@@ -65,7 +67,7 @@ export interface PublicAdminUser {
 export interface AuthenticatedAdmin {
   principal: AdminPrincipal;
   user: PublicAdminUser;
-  session: Omit<AdminSessionRecord, 'tokenHash'>;
+  session: Omit<AdminSessionRecord, 'tokenHash'|'recordVersion'>;
 }
 
 export interface AdminAuthServiceOptions {
@@ -79,7 +81,7 @@ export interface AdminAuthServiceOptions {
 }
 
 export class AdminAuthError extends Error {
-  constructor(readonly code: 'invalid_credentials'|'locked'|'disabled'|'not_found'|'username_taken'|'last_admin'|'invalid_input') {
+  constructor(readonly code: 'invalid_credentials'|'locked'|'disabled'|'not_found'|'username_taken'|'last_admin'|'invalid_input'|'unsupported_record') {
     super(code);
   }
 }
@@ -95,14 +97,42 @@ export function normalizeAdminUsername(username: string): string {
 function userKey(normalized: string): string { return `${USER_PREFIX}${encodeURIComponent(normalized)}`; }
 function sessionKey(tokenHash: string): string { return `${SESSION_PREFIX}${tokenHash}`; }
 function publicUser(user: AdminUserRecord): PublicAdminUser {
-  const { password: _password, kind: _kind, ...safe } = user;
+  const { password: _password, kind: _kind, recordVersion: _recordVersion, ...safe } = user;
   return safe;
 }
-function publicSession(session: AdminSessionRecord): Omit<AdminSessionRecord, 'tokenHash'> {
-  const { tokenHash: _tokenHash, ...safe } = session;
+function publicSession(session: AdminSessionRecord): Omit<AdminSessionRecord, 'tokenHash'|'recordVersion'> {
+  const { tokenHash: _tokenHash, recordVersion: _recordVersion, ...safe } = session;
   return safe;
 }
 function tokenDigest(token: string): string { return crypto.createHash('sha256').update(token, 'utf8').digest('hex'); }
+function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+function safeInt(value: unknown, min = 0): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value >= min; }
+function role(value: unknown): value is AdminRole { return value === 'viewer' || value === 'operator' || value === 'admin' || value === 'developer'; }
+function string(value: unknown, max = 1024): value is string { return typeof value === 'string' && value.length > 0 && value.length <= max; }
+function decodePassword(value: unknown): ScryptPasswordHash | undefined {
+  if (!object(value) || value.algorithm !== 'scrypt' || value.version !== 1 || !safeInt(value.N, 1)
+    || !safeInt(value.r, 1) || !safeInt(value.p, 1) || !safeInt(value.keyLength, 1)
+    || !string(value.salt, 256) || !string(value.hash, 512)) return undefined;
+  return value as unknown as ScryptPasswordHash;
+}
+function decodeUser(value: unknown, expectedNormalized?: string): AdminUserRecord | undefined {
+  if (!object(value) || (value.recordVersion !== undefined && value.recordVersion !== 1)
+    || value.kind !== 'admin-user' || !string(value.id, 128) || !string(value.username, 128)
+    || !string(value.normalizedUsername, 256) || (expectedNormalized !== undefined && value.normalizedUsername !== expectedNormalized)
+    || !role(value.role) || typeof value.enabled !== 'boolean' || !safeInt(value.authVersion, 1)
+    || !safeInt(value.failedLoginCount) || !safeInt(value.createdAt) || !safeInt(value.updatedAt)
+    || (value.lockedUntil !== undefined && !safeInt(value.lockedUntil)) || (value.lastLoginAt !== undefined && !safeInt(value.lastLoginAt))) return undefined;
+  const password = decodePassword(value.password); if (!password) return undefined;
+  return { ...(value as unknown as AdminUserRecord), recordVersion: 1, password };
+}
+function decodeSession(value: unknown, expectedHash?: string): AdminSessionRecord | undefined {
+  if (!object(value) || (value.recordVersion !== undefined && value.recordVersion !== 1)
+    || value.kind !== 'admin-session' || !string(value.id, 128) || !string(value.tokenHash, 128)
+    || (expectedHash !== undefined && value.tokenHash !== expectedHash) || !string(value.userId, 128)
+    || !string(value.normalizedUsername, 256) || !safeInt(value.authVersion, 1)
+    || !safeInt(value.createdAt) || !safeInt(value.expiresAt) || !safeInt(value.lastSeenAt)) return undefined;
+  return { ...(value as unknown as AdminSessionRecord), recordVersion: 1 };
+}
 
 /** Persistent administrator directory and bearer sessions over the generic Storage contract. */
 export class AdminAuthService {
@@ -129,8 +159,12 @@ export class AdminAuthService {
 
   async bootstrapLegacy(input: { username: string; password: string; role?: AdminRole }): Promise<PublicAdminUser> {
     return this.#exclusive(async () => {
-      const existing = await this.#storage.query<AdminUserRecord>({ prefix: USER_PREFIX, limit: 1 });
-      if (existing.length > 0) return publicUser(existing[0]!.value);
+      const existing = await this.#storage.query<unknown>({ prefix: USER_PREFIX, limit: 1 });
+      if (existing.length > 0) {
+        const decoded = decodeUser(existing[0]!.value);
+        if (!decoded) throw new AdminAuthError('unsupported_record');
+        return publicUser(decoded);
+      }
       return publicUser(await this.#createRecord(input.username, input.password, input.role ?? 'admin', true));
     });
   }
@@ -139,7 +173,9 @@ export class AdminAuthService {
   async bootstrapSession(input: { username: string; initialPassword: string }): Promise<{ token: string; auth: AuthenticatedAdmin }> {
     return this.#exclusive(async () => {
       const normalized = normalizeAdminUsername(input.username);
-      let user = await this.#storage.get<AdminUserRecord>(userKey(normalized));
+      const raw = await this.#storage.get<unknown>(userKey(normalized));
+      let user = raw === undefined ? undefined : decodeUser(raw, normalized);
+      if (raw !== undefined && !user) throw new AdminAuthError('unsupported_record');
       if (!user) user = await this.#createRecord(input.username, input.initialPassword, 'admin', true);
       if (!user.enabled) throw new AdminAuthError('disabled');
       return this.#createSession(user);
@@ -156,8 +192,9 @@ export class AdminAuthService {
   }
 
   async listUsers(): Promise<PublicAdminUser[]> {
-    const rows = await this.#storage.query<AdminUserRecord>({ prefix: USER_PREFIX });
-    return rows.map((row) => publicUser(row.value)).sort((a, b) => a.normalizedUsername.localeCompare(b.normalizedUsername));
+    const rows = await this.#storage.query<unknown>({ prefix: USER_PREFIX });
+    return rows.flatMap((row) => { const user = decodeUser(row.value); return user ? [publicUser(user)] : []; })
+      .sort((a, b) => a.normalizedUsername.localeCompare(b.normalizedUsername));
   }
 
   async resolveUserIdentifier(identifier: string): Promise<PublicAdminUser | undefined> {
@@ -213,7 +250,9 @@ export class AdminAuthService {
     return this.#exclusive(async () => {
       const now = this.#now();
       const normalized = normalizeAdminUsername(username);
-      const user = await this.#storage.get<AdminUserRecord>(userKey(normalized));
+      const rawUser = await this.#storage.get<unknown>(userKey(normalized));
+      const user = rawUser === undefined ? undefined : decodeUser(rawUser, normalized);
+      if (rawUser !== undefined && !user) throw new AdminAuthError('unsupported_record');
       if (!user) {
         await this.#verifyPassword(password, await this.#getDummyHash());
         throw new AdminAuthError('invalid_credentials');
@@ -243,9 +282,11 @@ export class AdminAuthService {
   async authenticate(token: string): Promise<AuthenticatedAdmin | undefined> {
     if (!token || token.length > 512) return undefined;
     const hash = tokenDigest(token);
-    const session = await this.#storage.get<AdminSessionRecord>(sessionKey(hash));
+    const rawSession = await this.#storage.get<unknown>(sessionKey(hash));
+    const session = rawSession === undefined ? undefined : decodeSession(rawSession, hash);
     if (!session || session.expiresAt <= this.#now()) return undefined;
-    const user = await this.#storage.get<AdminUserRecord>(userKey(session.normalizedUsername));
+    const rawUser = await this.#storage.get<unknown>(userKey(session.normalizedUsername));
+    const user = rawUser === undefined ? undefined : decodeUser(rawUser, session.normalizedUsername);
     if (!user || !user.enabled || user.id !== session.userId || user.authVersion !== session.authVersion) {
       await this.#storage.delete(sessionKey(hash));
       return undefined;
@@ -257,25 +298,25 @@ export class AdminAuthService {
 
   async revokeSession(token: string): Promise<void> { if (token) await this.#storage.delete(sessionKey(tokenDigest(token))); }
 
-  async listSessions(): Promise<Array<Omit<AdminSessionRecord, 'tokenHash'>>> {
-    const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
+  async listSessions(): Promise<Array<Omit<AdminSessionRecord, 'tokenHash'|'recordVersion'>>> {
+    const rows = await this.#storage.query<unknown>({ prefix: SESSION_PREFIX });
     const now = this.#now();
-    return rows.map((row) => row.value).filter((session) => session.expiresAt > now).map(publicSession);
+    return rows.flatMap((row) => { const session = decodeSession(row.value); return session && session.expiresAt > now ? [publicSession(session)] : []; });
   }
 
   async revokeSessionById(sessionId: string): Promise<boolean> {
     if (!sessionId || sessionId.length > 128) return false;
-    const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
-    const match = rows.find((row) => row.value.id === sessionId);
+    const rows = await this.#storage.query<unknown>({ prefix: SESSION_PREFIX });
+    const match = rows.find((row) => decodeSession(row.value)?.id === sessionId);
     if (!match) return false;
     await this.#storage.delete(match.key);
     return true;
   }
 
   async revokeUserSessions(userId: string): Promise<number> {
-    const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
+    const rows = await this.#storage.query<unknown>({ prefix: SESSION_PREFIX });
     let removed = 0;
-    for (const row of rows) if (row.value.userId === userId) { await this.#storage.delete(row.key); removed += 1; }
+    for (const row of rows) if (decodeSession(row.value)?.userId === userId) { await this.#storage.delete(row.key); removed += 1; }
     return removed;
   }
 
@@ -284,7 +325,7 @@ export class AdminAuthService {
     const token = `mohos_${this.#randomBytes(32).toString('base64url')}`;
     const tokenHash = tokenDigest(token);
     const session: AdminSessionRecord = {
-      kind: 'admin-session', id: this.#randomBytes(16).toString('hex'), tokenHash,
+      kind: 'admin-session', recordVersion: 1, id: this.#randomBytes(16).toString('hex'), tokenHash,
       userId: user.id, normalizedUsername: user.normalizedUsername, authVersion: user.authVersion,
       createdAt: now, expiresAt: now + this.#sessionTtlMs, lastSeenAt: now,
     };
@@ -297,7 +338,7 @@ export class AdminAuthService {
     if (await this.#storage.get(userKey(normalized))) throw new AdminAuthError('username_taken');
     const now = this.#now();
     const user: AdminUserRecord = {
-      kind: 'admin-user', id: this.#randomBytes(16).toString('hex'), username: username.trim(), normalizedUsername: normalized,
+      kind: 'admin-user', recordVersion: 1, id: this.#randomBytes(16).toString('hex'), username: username.trim(), normalizedUsername: normalized,
       role, enabled, password: await this.#hashPassword(password), authVersion: 1, failedLoginCount: 0,
       createdAt: now, updatedAt: now,
     };
@@ -325,11 +366,14 @@ export class AdminAuthService {
   }
 
   async #getDummyHash(): Promise<ScryptPasswordHash> { return this.#dummyHash ??= this.#hashPassword('dummy-password-never-valid'); }
-  async #getRecord(username: string): Promise<AdminUserRecord | undefined> { return this.#storage.get(userKey(normalizeAdminUsername(username))); }
+  async #getRecord(username: string): Promise<AdminUserRecord | undefined> {
+    const normalized = normalizeAdminUsername(username); const raw = await this.#storage.get<unknown>(userKey(normalized));
+    if (raw === undefined) return undefined; const user = decodeUser(raw, normalized); if (!user) throw new AdminAuthError('unsupported_record'); return user;
+  }
   async #requireRecord(username: string): Promise<AdminUserRecord> { const user = await this.#getRecord(username); if (!user) throw new AdminAuthError('not_found'); return user; }
   async #protectLastAdmin(excludingId: string): Promise<void> {
-    const users = await this.#storage.query<AdminUserRecord>({ prefix: USER_PREFIX });
-    if (!users.some(({ value }) => value.id !== excludingId && isEnabledAdmin(value))) throw new AdminAuthError('last_admin');
+    const users = await this.#storage.query<unknown>({ prefix: USER_PREFIX });
+    if (!users.some(({ value }) => { const user = decodeUser(value); return Boolean(user && user.id !== excludingId && isEnabledAdmin(user)); })) throw new AdminAuthError('last_admin');
   }
   #authenticated(user: AdminUserRecord, session: AdminSessionRecord): AuthenticatedAdmin {
     return { principal: { id: user.id, role: user.role, enabled: user.enabled }, user: publicUser(user), session: publicSession(session) };

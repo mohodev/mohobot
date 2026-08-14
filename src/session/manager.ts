@@ -13,6 +13,7 @@ import { nullMemoryAdapter, type MemoryAdapter, type PersistedSession, type Stor
 import type {
   Session, SessionKeyInput, SessionManagerLike, SourceMessageMutation, SourceMessageUpdate,
 } from './types.js';
+import { decodePersistedSession } from './codec.js';
 
 export interface SessionManagerOptions {
   botId: string;
@@ -47,8 +48,11 @@ export class SessionManager implements SessionManagerLike {
   readonly #memory: MemoryAdapter;
 
   readonly #cache = new Map<string, Session>();
-  /** Keys we already tried to hydrate, so a cold miss only hits storage once. */
+  /** Cold hydration is shared so concurrent callers cannot race separate sessions into cache. */
   readonly #hydrated = new Set<string>();
+  readonly #hydrating = new Map<string, Promise<Session | undefined>>();
+  /** Future payloads are read-only until an explicit clear removes them. */
+  readonly #writeBlocked = new Set<string>();
   /** Per-manager write queue, preserving append/delete order in storage. */
   #pending: Promise<void> = Promise.resolve();
 
@@ -75,8 +79,15 @@ export class SessionManager implements SessionManagerLike {
 
     let restored: Session | undefined;
     if (this.#persistEnabled && !this.#hydrated.has(key)) {
-      this.#hydrated.add(key);
-      restored = await this.#hydrate(key, input);
+      let hydration = this.#hydrating.get(key);
+      if (!hydration) {
+        hydration = this.#hydrate(key, input).finally(() => {
+          this.#hydrating.delete(key);
+          this.#hydrated.add(key);
+        });
+        this.#hydrating.set(key, hydration);
+      }
+      restored = await hydration;
     }
 
     const raced = this.#cache.get(key);
@@ -98,15 +109,25 @@ export class SessionManager implements SessionManagerLike {
     const storage = this.#storage;
     if (!storage) return undefined;
     try {
-      const stored = await storage.get<PersistedSession>(key);
-      if (!stored || !Array.isArray(stored.messages)) return undefined;
+      const raw = await storage.get<unknown>(key);
+      if (raw === undefined) return undefined;
+      const decoded = decodePersistedSession(raw, key);
+      if (!decoded.ok) {
+        if (decoded.reason === 'future_version') this.#writeBlocked.add(key);
+        this.#logger.warn({ key, reason: decoded.reason }, 'skipping unsupported persisted session');
+        return undefined;
+      }
+      if (decoded.droppedMessages > 0) {
+        this.#logger.warn({ key, dropped: decoded.droppedMessages }, 'dropped invalid persisted session messages');
+      }
+      const stored = decoded.value;
       return {
         key,
         botId: stored.botId || input.botId || this.#botId,
         channelId: stored.channelId || input.channelId,
         userId: this.#config.scope === 'channel' ? undefined : (stored.userId ?? input.userId),
         messages: [...stored.messages],
-        updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : Date.now(),
+        updatedAt: stored.updatedAt,
       };
     } catch (error) {
       this.#logger.warn({ key, error: describe(error) }, 'session hydrate failed');
@@ -203,16 +224,19 @@ export class SessionManager implements SessionManagerLike {
     if (!this.#persistEnabled || !this.#storage) return candidates;
 
     try {
-      const stored = await this.#storage.query<PersistedSession>({ prefix });
+      const stored = await this.#storage.query<unknown>({ prefix });
       for (const row of stored) {
-        if (seen.has(row.key) || !Array.isArray(row.value.messages)) continue;
+        if (seen.has(row.key)) continue;
+        const decoded = decodePersistedSession(row.value, row.key);
+        if (!decoded.ok) { this.#logger.warn({ key: row.key, reason: decoded.reason }, 'skipping unsupported persisted session'); continue; }
+        const value = decoded.value;
         const session: Session = {
           key: row.key,
-          botId: row.value.botId || input.botId || this.#botId,
-          channelId: row.value.channelId || input.channelId,
-          userId: row.value.userId,
-          messages: row.value.messages.map((message) => ({ ...message })),
-          updatedAt: row.value.updatedAt,
+          botId: value.botId || input.botId || this.#botId,
+          channelId: value.channelId || input.channelId,
+          userId: value.userId,
+          messages: value.messages.map((message) => ({ ...message })),
+          updatedAt: value.updatedAt,
         };
         this.#cache.set(row.key, session);
         this.#hydrated.add(row.key);
@@ -282,6 +306,8 @@ export class SessionManager implements SessionManagerLike {
     const key = this.keyFor(input);
     this.#cache.delete(key);
     this.#hydrated.delete(key);
+    this.#hydrating.delete(key);
+    this.#writeBlocked.delete(key);
     const storage = this.#storage;
     if (!this.#config.persist || !storage) return;
     await this.#track(key, 'session delete failed', async () => {
@@ -303,6 +329,7 @@ export class SessionManager implements SessionManagerLike {
     for (const key of keys) {
       this.#cache.delete(key);
       this.#hydrated.delete(key);
+      this.#hydrating.delete(key);
       if (this.#persistEnabled && this.#storage) await this.#track(key, 'session channel delete failed', () => this.#storage!.delete(key));
     }
     return keys.size;
@@ -315,6 +342,7 @@ export class SessionManager implements SessionManagerLike {
       if (session.updatedAt < cutoff) {
         this.#cache.delete(key);
         this.#hydrated.delete(key);
+        this.#hydrating.delete(key);
         removed += 1;
       }
     }
@@ -335,7 +363,13 @@ export class SessionManager implements SessionManagerLike {
   #save(session: Session): void {
     const storage = this.#storage;
     if (!this.#config.persist || !storage) return;
+    if (this.#writeBlocked.has(session.key)) {
+      this.#logger.warn({ key: session.key }, 'refusing to overwrite future persisted session');
+      return;
+    }
     const record: PersistedSession = {
+      kind: 'session',
+      recordVersion: 1,
       key: session.key,
       botId: session.botId,
       channelId: session.channelId,

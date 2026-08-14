@@ -41,6 +41,8 @@ export interface ScopedStorage {
 
 /** Shape persisted for one conversation session. */
 export interface PersistedSession {
+  kind: 'session';
+  recordVersion: 1;
   key: string;
   botId: string;
   channelId: string;

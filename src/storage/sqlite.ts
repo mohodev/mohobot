@@ -13,7 +13,11 @@ import Database from 'better-sqlite3';
 
 import type { Logger } from '../core/logger.js';
 import { attachChatLogDb, detachChatLogDb } from './chatlog.js';
-import { migrateSqlite, RECORD_TYPE_RULES } from './migrations.js';
+import { migrateSqlite } from './migrations.js';
+import {
+  CURRENT_RECORD_VERSION, CURRENT_WRITER_VERSION, expectedRecordType,
+  RecordMetadataError, validateRecordMetadata,
+} from './record-codec.js';
 import type { QueryFilter, Storage, StoredRecord } from './types.js';
 
 type DatabaseHandle = InstanceType<typeof Database>;
@@ -23,6 +27,9 @@ interface Row {
   value: string;
   updated_at: number;
   expires_at: number | null;
+  record_type: string | null;
+  record_version: number | null;
+  writer_version: number | null;
 }
 
 export interface SqliteStorageOptions {
@@ -31,10 +38,6 @@ export interface SqliteStorageOptions {
   logger: Logger;
   /** Defaults to a backups directory next to the database file. */
   backupDir?: string;
-}
-
-function recordTypeFor(key: string): string | null {
-  return RECORD_TYPE_RULES.find(([prefix]) => key.startsWith(prefix))?.[1] ?? null;
 }
 
 function sanitizeCount(value: number | undefined, fallback: number): number {
@@ -88,17 +91,29 @@ export class SqliteStorage implements Storage {
       typeof ttlSeconds === 'number' && Number.isFinite(ttlSeconds) && ttlSeconds > 0
         ? now + Math.trunc(ttlSeconds * 1000)
         : null;
-    const recordType = recordTypeFor(key);
+    const existing = db.prepare(
+      'SELECT record_type, record_version, writer_version FROM kv WHERE key = ?',
+    ).get(key) as Pick<Row, 'record_type'|'record_version'|'writer_version'> | undefined;
+    if (existing) {
+      validateRecordMetadata(key, {
+        recordType: existing.record_type,
+        recordVersion: existing.record_version,
+        writerVersion: existing.writer_version,
+      });
+    }
+    const recordType = expectedRecordType(key);
     db.prepare(
-      `INSERT INTO kv (key, value, updated_at, expires_at, record_type, record_version, writer_version) VALUES (?, ?, ?, ?, ?, 1, 1)
+      `INSERT INTO kv (key, value, updated_at, expires_at, record_type, record_version, writer_version) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, expires_at = excluded.expires_at,
          record_type = excluded.record_type, record_version = excluded.record_version, writer_version = excluded.writer_version`,
-    ).run(key, JSON.stringify(value ?? null), now, expiresAt, recordType);
+    ).run(key, JSON.stringify(value ?? null), now, expiresAt, recordType,
+      recordType === null ? null : CURRENT_RECORD_VERSION,
+      recordType === null ? null : CURRENT_WRITER_VERSION);
   }
 
   async get<T>(key: string): Promise<T | undefined> {
     const db = this.#must();
-    const row = db.prepare('SELECT key, value, updated_at, expires_at FROM kv WHERE key = ?').get(key) as
+    const row = db.prepare('SELECT key, value, updated_at, expires_at, record_type, record_version, writer_version FROM kv WHERE key = ?').get(key) as
       | Row
       | undefined;
     if (row === undefined) return undefined;
@@ -106,7 +121,7 @@ export class SqliteStorage implements Storage {
       db.prepare('DELETE FROM kv WHERE key = ?').run(key);
       return undefined;
     }
-    return this.#decode<T>(row.key, row.value);
+    return this.#decode<T>(row);
   }
 
   async delete(key: string): Promise<void> {
@@ -116,7 +131,7 @@ export class SqliteStorage implements Storage {
   async query<T>(filter: QueryFilter = {}): Promise<StoredRecord<T>[]> {
     const db = this.#must();
     const params: unknown[] = [Date.now()];
-    let sql = 'SELECT key, value, updated_at, expires_at FROM kv WHERE (expires_at IS NULL OR expires_at > ?)';
+    let sql = 'SELECT key, value, updated_at, expires_at, record_type, record_version, writer_version FROM kv WHERE (expires_at IS NULL OR expires_at > ?)';
 
     if (typeof filter.prefix === 'string' && filter.prefix.length > 0) {
       sql += " AND key LIKE ? || '%'";
@@ -129,7 +144,7 @@ export class SqliteStorage implements Storage {
     const rows = db.prepare(sql).all(...params) as Row[];
     const out: StoredRecord<T>[] = [];
     for (const row of rows) {
-      const value = this.#decode<T>(row.key, row.value);
+      const value = this.#decode<T>(row);
       if (value === undefined) continue;
       out.push({
         key: row.key,
@@ -164,14 +179,23 @@ export class SqliteStorage implements Storage {
     return this.#db;
   }
 
-  /** A corrupt row is a warning, never a thrown error. */
-  #decode<T>(key: string, raw: string): T | undefined {
+  /** Corrupt, mismatched, or future rows are skipped instead of reaching old business code. */
+  #decode<T>(row: Row): T | undefined {
     try {
-      return JSON.parse(raw) as T;
+      validateRecordMetadata(row.key, {
+        recordType: row.record_type,
+        recordVersion: row.record_version,
+        writerVersion: row.writer_version,
+      });
+      return JSON.parse(row.value) as T;
     } catch (error) {
       this.#log.warn(
-        { key, error: error instanceof Error ? error.message : String(error) },
-        'skipping corrupt JSON row',
+        {
+          key: row.key,
+          code: error instanceof RecordMetadataError ? error.code : 'corrupt_json',
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'skipping unreadable KV row',
       );
       return undefined;
     }

@@ -169,12 +169,33 @@ describe('SessionManager persistence', () => {
     await first.append(input, { role: 'assistant', content: 'noted' });
     await first.flush();
 
-    expect(storage.data.has('session:bot1:chan1:user1')).toBe(true);
+    expect(storage.data.get('session:bot1:chan1:user1')).toMatchObject({kind:'session',recordVersion:1});
 
     const second = new SessionManager({ botId: 'bot1', config: cfg, logger, storage });
     const restored = await second.get(input);
     expect(restored.messages.map((m) => m.content)).toEqual(['remember me', 'noted']);
     expect(restored.key).toBe('session:bot1:chan1:user1');
+  });
+
+  it('strictly decodes legacy records, drops bad messages, and rejects future sessions', async () => {
+    const storage=fakeStorage();const key='session:bot1:chan1:user1';
+    storage.data.set(key,{key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[{role:'user',content:'legacy ok'},{role:'root',content:'bad'},{role:'user',content:7}],updatedAt:10});
+    const legacy=new SessionManager({botId:'bot1',config:config({persist:true}),logger,storage});
+    expect((await legacy.get(input)).messages.map(m=>m.content)).toEqual(['legacy ok']);
+    storage.data.set(key,{kind:'session',recordVersion:2,key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[{role:'user',content:'future'}],updatedAt:11});
+    const future=new SessionManager({botId:'bot1',config:config({persist:true}),logger,storage});
+    expect((await future.get(input)).messages).toEqual([]);await future.append(input,user('must not overwrite'));await future.flush();
+    expect(storage.data.get(key)).toMatchObject({recordVersion:2});
+  });
+
+  it('deduplicates concurrent cold hydration by promise', async () => {
+    const storage=fakeStorage();const key='session:bot1:chan1:user1';let reads=0;let release!:()=>void;
+    const blocked=new Promise<void>(resolve=>{release=resolve});const original=storage.get.bind(storage);
+    storage.get=async<T>(k:string)=>{reads+=1;await blocked;return original<T>(k)};
+    storage.data.set(key,{kind:'session',recordVersion:1,key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[],updatedAt:10});
+    const manager=new SessionManager({botId:'bot1',config:config({persist:true}),logger,storage});
+    const one=manager.get(input);const two=manager.get(input);expect(reads).toBe(1);release();
+    const[a,b]=await Promise.all([one,two]);expect(a).toBe(b);expect(manager.size()).toBe(1);
   });
 
   it('serializes writes so a slow older save cannot overwrite newer context', async () => {
