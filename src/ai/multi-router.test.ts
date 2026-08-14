@@ -3,6 +3,19 @@ import { MultiProviderRouter } from './multi-router.js';
 import { createNullLogger } from '../core/logger.js';
 
 describe('MultiProviderRouter', () => {
+  it('exposes narrow per-profile probe metadata without profile credentials', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+    try {
+      const router = new MultiProviderRouter({ logger:createNullLogger(), defaultProfile:'primary', profiles:{ primary:{baseUrl:'https://secret.test/v1',apiKey:'sk-secret',model:'vendor/model'} }, routes:{} });
+      expect(router.profileIds()).toEqual(['primary']);
+      const result = await router.probeProfile('primary');
+      expect(result).toMatchObject({ id:'primary',model:'vendor/model',ok:true });
+      expect(JSON.stringify(result)).not.toContain('secret.test');
+      expect(JSON.stringify(result)).not.toContain('sk-secret');
+    } finally { globalThis.fetch = original; }
+  });
+
   it('routes a task to its selected profile and falls back after failure', async () => {
     const calls: string[] = [];
     const fetchImpl = (async (url: string) => {
