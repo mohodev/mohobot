@@ -6,7 +6,6 @@ import type { BotSnapshot } from '../bot/runtime.js';
 import { CharacterCatalog } from '../characters/catalog.js';
 import type { Logger } from '../core/logger.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
-import type { RuntimeRemoteHealth } from '../storage/remote-coordinator.js';
 import type { Storage } from '../storage/types.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
@@ -32,7 +31,7 @@ export interface AdminServerOptions {
   logger: Logger;
   storage: Storage;
   snapshots: () => BotSnapshot[];
-  remoteHealth?: () => Promise<RuntimeRemoteHealth>;
+  remoteHealth?: () => Promise<unknown>;
   configPublication?: ConfigPublicationAdapter;
   modelHealth?: () => Promise<unknown>;
 }
