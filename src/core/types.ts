@@ -26,6 +26,10 @@ export interface MohoChannel {
   guildId?: string;
   name?: string;
   dm: boolean;
+  /** Parent text/forum channel for thread and forum-post containers. */
+  parentChannelId?: string;
+  /** Stable container classification retained by the platform adapter. */
+  location?: MohoMessageLocation;
 }
 
 export interface MohoAttachment {

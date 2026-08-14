@@ -215,6 +215,25 @@ export class SessionManager implements SessionManagerLike {
     });
   }
 
+  async clearChannel(channelId: string): Promise<number> {
+    const prefix = `session:${this.#botId}:${channelId}`;
+    const matches = (key: string): boolean => key === prefix || key.startsWith(`${prefix}:`);
+    const keys = new Set([...this.#cache.keys(), ...this.#hydrated].filter(matches));
+    if (this.#persistEnabled && this.#storage) {
+      try {
+        for (const row of await this.#storage.query({ prefix })) if (matches(row.key)) keys.add(row.key);
+      } catch (error) {
+        this.#logger.warn({ prefix, error: describe(error) }, 'session channel query failed');
+      }
+    }
+    for (const key of keys) {
+      this.#cache.delete(key);
+      this.#hydrated.delete(key);
+      if (this.#persistEnabled && this.#storage) await this.#track(key, 'session channel delete failed', () => this.#storage!.delete(key));
+    }
+    return keys.size;
+  }
+
   async sweep(): Promise<number> {
     const cutoff = Date.now() - this.#config.ttlSeconds * 1000;
     let removed = 0;

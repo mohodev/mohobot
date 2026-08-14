@@ -34,6 +34,8 @@ export interface SessionManagerLike {
   /** Assemble the prompt: system + (memory) + trimmed history. */
   buildContext(input: SessionKeyInput, systemPrompt: string): Promise<ChatMessage[]>;
   clear(input: SessionKeyInput): Promise<void>;
+  /** Clear every user-scoped or channel-scoped session for one effective channel. */
+  clearChannel?(channelId: string): Promise<number>;
   /** Drop idle sessions; returns how many were removed. */
   sweep(): Promise<number>;
   size(): number;

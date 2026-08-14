@@ -371,7 +371,10 @@ export class DiscordGateway implements Gateway {
 
     const guildId = message.guildId ?? undefined;
     if (guildId && cfg.allowedGuilds.length > 0 && !cfg.allowedGuilds.includes(guildId)) return;
-    if (cfg.allowedChannels.length > 0 && !cfg.allowedChannels.includes(message.channelId)) return;
+    const location = discordMessageLocation(message);
+    if (cfg.allowedChannels.length > 0
+      && !cfg.allowedChannels.includes(message.channelId)
+      && !(location.parentChannelId && cfg.allowedChannels.includes(location.parentChannelId))) return;
 
     const isDM = guildId === undefined || message.channel.type === ChannelType.DM;
 
@@ -402,6 +405,8 @@ export class DiscordGateway implements Gateway {
       channelId: message.channelId,
       guildId,
       channelName,
+      parentChannelId: location.parentChannelId,
+      location,
       isDM,
       mentionsBot: isDM ? true : mentionsBot,
       replyToId: message.reference?.messageId ?? undefined,

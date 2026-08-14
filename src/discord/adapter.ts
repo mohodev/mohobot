@@ -51,6 +51,8 @@ export interface AdapterMessageInput {
   channelId: string;
   guildId?: string | null;
   channelName?: string | null;
+  parentChannelId?: string | null;
+  location?: import('../core/types.js').MohoMessageLocation;
   isDM: boolean;
   mentionsBot: boolean;
   replyToId?: string | null;
@@ -99,6 +101,8 @@ export function toMohoMessage(input: AdapterMessageInput): MohoMessage {
     guildId: dm ? undefined : guildId,
     name: optionalString(input.channelName),
     dm,
+    parentChannelId: optionalString(input.parentChannelId),
+    location: input.location,
   };
 
   return {

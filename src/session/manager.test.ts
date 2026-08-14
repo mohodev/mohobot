@@ -264,3 +264,37 @@ describe('SessionManager sweep', () => {
     await expect(mgr.sweep()).resolves.toBe(0);
   });
 });
+
+describe('Thread and forum context policy', () => {
+  it('isolates thread/forum containers by default', async () => {
+    const { effectiveSessionChannelId } = await import('./context-policy.js');
+    const cfg = config();
+    const thread = { channel: { id: 'thread1', dm: false, parentChannelId: 'parent1', location: { channelId: 'thread1', parentChannelId: 'parent1', guildId: 'g1', kind: 'thread' } } } as never;
+    const forum = { channel: { id: 'post1', dm: false, parentChannelId: 'forum1', location: { channelId: 'post1', parentChannelId: 'forum1', guildId: 'g1', kind: 'forum-post' } } } as never;
+    expect(effectiveSessionChannelId(cfg, thread)).toBe('thread1');
+    expect(effectiveSessionChannelId(cfg, forum)).toBe('post1');
+  });
+
+  it('inherits parent independently for thread and forum while preserving user scope', async () => {
+    const { effectiveSessionChannelId } = await import('./context-policy.js');
+    const cfg = config({ threadContext: 'inherit-parent', forumContext: 'inherit-parent', scope: 'user' });
+    const thread = { channel: { id: 'thread1', dm: false, location: { channelId: 'thread1', parentChannelId: 'parent1', kind: 'thread' } } } as never;
+    const effective = effectiveSessionChannelId(cfg, thread);
+    const mgr = new SessionManager({ botId: 'bot1', config: cfg, logger });
+    expect(effective).toBe('parent1');
+    expect((await mgr.get({ botId: 'bot1', channelId: effective, userId: 'u1' })).key).toBe('session:bot1:parent1:u1');
+    expect((await mgr.get({ botId: 'bot1', channelId: effective, userId: 'u2' })).key).toBe('session:bot1:parent1:u2');
+  });
+
+  it('clearChannel removes channel and every user-scoped child without prefix collisions', async () => {
+    const storage = fakeStorage();
+    const mgr = new SessionManager({ botId: 'bot1', config: config({ persist: true, scope: 'user' }), logger, storage });
+    await mgr.append({ botId: 'bot1', channelId: 'thread1', userId: 'u1' }, user('one'));
+    await mgr.append({ botId: 'bot1', channelId: 'thread1', userId: 'u2' }, user('two'));
+    await mgr.append({ botId: 'bot1', channelId: 'thread10', userId: 'u1' }, user('keep'));
+    await mgr.flush();
+    expect(await mgr.clearChannel('thread1')).toBe(2);
+    await mgr.flush();
+    expect([...storage.data.keys()]).toEqual(['session:bot1:thread10:u1']);
+  });
+});

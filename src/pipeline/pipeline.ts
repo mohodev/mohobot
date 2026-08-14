@@ -30,6 +30,7 @@ import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import { effectiveSessionChannelId } from '../session/context-policy.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -179,7 +180,7 @@ export class MessagePipeline {
 
   #queueKey(message: MohoMessage): string {
     const user = this.#deps.config.session.scope === 'user' ? `:${message.author.id}` : '';
-    return `${message.botId}:${message.channel.id}${user}`;
+    return `${message.botId}:${effectiveSessionChannelId(this.#deps.config.session, message)}${user}`;
   }
 
   async #handleInner(message: MohoMessage): Promise<void> {
@@ -249,7 +250,7 @@ export class MessagePipeline {
       return;
     }
 
-    const key = { botId: cfg.id, channelId: message.channel.id, userId: message.author.id };
+    const key = { botId: cfg.id, channelId: effectiveSessionChannelId(cfg.session, message), userId: message.author.id };
 
     // Persist the user turn BEFORE building context, so the model sees its
     // own prior replies in the right order (no "echo bot" / repetition bugs).
@@ -369,7 +370,7 @@ export class MessagePipeline {
 
     if (name === 'reset' || name === 'clear') {
       await this.#deps.sessions
-        .clear({ botId: cfg.id, channelId: message.channel.id, userId: message.author.id })
+        .clear({ botId: cfg.id, channelId: effectiveSessionChannelId(cfg.session, message), userId: message.author.id })
         .catch(() => {});
       await reply({ description: 'Context cleared.', color: EMBED_THEME_COLOR, footer: cfg.name });
       return true;
