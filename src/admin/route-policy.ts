@@ -7,6 +7,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'DELETE',pattern:/^\/api\/auth\/sessions\/[^/]+$/,permission:'sessions.revoke',action:'sessions.revoke',risk:'reversible',confirmation:false},
 {method:'GET',pattern:/^\/api\/metrics$/,permission:'metrics.read',action:'metrics.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/models$/,permission:'models.read',action:'models.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/models\/health$/,permission:'models.read',action:'models.health',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/status$/,permission:'status.read',action:'runtime.status',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/admin\/actions$/,permission:'admin.actions.read',action:'admin.actions.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/admin\/audit$/,permission:'audit.read',action:'audit.read',risk:'read',confirmation:false},

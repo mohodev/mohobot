@@ -1,18 +1,28 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
+import type { BotSnapshot } from '../bot/runtime.js';
 import { CharacterCatalog } from '../characters/catalog.js';
 import type { Logger } from '../core/logger.js';
-import type { BotSnapshot } from '../bot/runtime.js';
-import { WorldStore } from './world.js';
-import { AffinityStore } from './affinity.js';
-import { RuleDayPlanner } from './day-planner.js';
-import { ADMIN_ACTIONS, AuditTrail, healthSnapshot } from './actions.js';
-import { DeviceStore } from './device.js';
-import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
-import { AdminSessionStore } from './auth.js';
 import type { RuntimeRemoteHealth } from '../storage/remote-coordinator.js';
+import type { Storage } from '../storage/types.js';
+import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
+import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
+import { AffinityStore } from './affinity.js';
+import { AdminAuthError, AdminAuthService, type AuthenticatedAdmin } from './auth-service.js';
+import { ConfirmationStore } from './confirmation.js';
+import { RuleDayPlanner } from './day-planner.js';
+import { DeviceStore } from './device.js';
+import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac.js';
+import { routePolicy, type RoutePolicy } from './route-policy.js';
+import { WorldStore } from './world.js';
+
+export interface ConfigPublicationAdapter {
+  get(): Promise<unknown>;
+  publish(input: Record<string, unknown>, principal: AdminPrincipal): Promise<unknown>;
+}
 
 export interface AdminServerOptions {
   rootDir: string;
@@ -20,49 +30,93 @@ export interface AdminServerOptions {
   port: number;
   token: string;
   logger: Logger;
+  storage: Storage;
   snapshots: () => BotSnapshot[];
   remoteHealth?: () => Promise<RuntimeRemoteHealth>;
+  configPublication?: ConfigPublicationAdapter;
+  modelHealth?: () => Promise<unknown>;
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
-  const data = JSON.stringify(body);
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store' });
+interface ApiResult { status: number; body: unknown }
+interface AuditRecord extends AuditEntry { method: string; path: string; status: number }
+
+const BOOTSTRAP_USERNAME = 'bootstrap';
+const AUDIT_PREFIX = 'admin-audit:';
+const ROLES = new Set<AdminRole>(['viewer', 'operator', 'admin', 'developer']);
+
+function securityHeaders(): Record<string, string> {
+  return {
+    'cache-control': 'no-store',
+    'content-security-policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'",
+    'cross-origin-opener-policy': 'same-origin',
+    'permissions-policy': 'camera=(), microphone=(), geolocation=()',
+    'referrer-policy': 'no-referrer',
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+  };
+}
+
+function json(res: ServerResponse, status: number, value: unknown): void {
+  const data = JSON.stringify(value);
+  res.writeHead(status, { ...securityHeaders(), 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(data) });
   res.end(data);
 }
 
-async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buf.length;
-    if (size > 1_000_000) throw new Error('request body too large');
-    chunks.push(buf);
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 1_000_000) throw new HttpError(400, 'request body too large');
+    chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
-  const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('JSON object required');
-  return value as Record<string, unknown>;
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw new HttpError(400, 'invalid JSON'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new HttpError(400, 'JSON object required');
+  return parsed as Record<string, unknown>;
+}
+
+function bearer(req: IncomingMessage): string {
+  return req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? '';
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const a = crypto.createHash('sha256').update(left).digest();
+  const b = crypto.createHash('sha256').update(right).digest();
+  return crypto.timingSafeEqual(a, b) && left.length === right.length;
+}
+
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
 }
 
 export class AdminServer {
   readonly #opts: AdminServerOptions;
+  readonly #auth: AdminAuthService;
+  readonly #confirmations = new ConfirmationStore();
   readonly #characters: CharacterCatalog;
   readonly #world: WorldStore;
   readonly #affinity: AffinityStore;
   readonly #device: DeviceStore;
   readonly #catalog: ModelCatalogStore;
-  readonly #audit = new AuditTrail();
-  readonly #sessions = new AdminSessionStore();
   #server?: http.Server;
 
   constructor(opts: AdminServerOptions) {
     this.#opts = opts;
+    this.#auth = new AdminAuthService({ storage: opts.storage });
     this.#characters = new CharacterCatalog(opts.rootDir);
     this.#world = new WorldStore(opts.rootDir);
     this.#affinity = new AffinityStore(opts.rootDir);
     this.#device = new DeviceStore(opts.rootDir);
     this.#catalog = new ModelCatalogStore(opts.rootDir);
+  }
+
+  get port(): number | undefined {
+    const address = this.#server?.address();
+    return address && typeof address === 'object' ? address.port : undefined;
   }
 
   async start(): Promise<void> {
@@ -72,7 +126,7 @@ export class AdminServer {
       this.#server!.once('error', reject);
       this.#server!.listen(this.#opts.port, this.#opts.host, resolve);
     });
-    this.#opts.logger.info({ host: this.#opts.host, port: this.#opts.port }, 'admin WebUI ready');
+    this.#opts.logger.info({ host: this.#opts.host, port: this.port }, 'admin WebUI ready');
   }
 
   async stop(): Promise<void> {
@@ -83,125 +137,236 @@ export class AdminServer {
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const method = (req.method ?? 'GET').toUpperCase();
+    let pathname = '/';
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-      if (url.pathname === '/api/auth/session' && req.method === 'POST') {
-        if (!this.#masterAuthorized(req)) return json(res, 401, { ok:false, error:'unauthorized' });
-        const created=this.#sessions.create({id:String(req.headers['x-admin-actor']??'local-admin'),role:'admin',enabled:true});
-        return json(res,201,{ok:true,token:created.token,session:created.session});
+      pathname = url.pathname;
+      if (!pathname.startsWith('/api/')) return await this.#static(res, pathname);
+      const input = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? await readBody(req) : {};
+
+      if (method === 'POST' && (pathname === '/api/auth/bootstrap/session' || pathname === '/api/auth/session')) {
+        return await this.#bootstrap(req, res, method, pathname);
       }
-      if (url.pathname.startsWith('/api/')) {
-        if (!this.#authorized(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
-        return await this.#api(req, res, url);
+      if (method === 'POST' && pathname === '/api/auth/login') return await this.#login(res, input, method, pathname);
+
+      const token = bearer(req);
+      const authenticated = await this.#auth.authenticate(token);
+      if (!authenticated) {
+        await this.#audit(undefined, method, pathname, 401, 'denied', 'authentication required');
+        return json(res, 401, { ok: false, error: 'unauthorized' });
       }
-      await this.#static(res, url.pathname);
+
+      const policy = routePolicy(method, pathname);
+      if (!policy) {
+        await this.#audit(authenticated, method, pathname, 403, 'denied', 'route policy missing');
+        return json(res, 403, { ok: false, error: 'forbidden' });
+      }
+      if (policy.permission && !can(authenticated.principal, policy.permission)) {
+        await this.#audit(authenticated, method, pathname, 403, 'denied', `permission denied: ${policy.permission}`);
+        return json(res, 403, { ok: false, error: 'forbidden' });
+      }
+      if (policy.confirmation) {
+        const nonce = typeof req.headers['x-admin-confirmation'] === 'string' ? req.headers['x-admin-confirmation'] : '';
+        const valid = nonce && policy.permission && this.#confirmations.consume(nonce, {
+          principal: authenticated.principal,
+          permission: policy.permission,
+          action: `${policy.action}:${method}:${pathname}`,
+          payload: input,
+        });
+        if (!valid) {
+          await this.#audit(authenticated, method, pathname, 409, 'denied', `confirmation required: ${policy.action}`);
+          return json(res, 409, { ok: false, error: 'confirmation required' });
+        }
+      }
+
+      const result = await this.#api(req, url, input, authenticated, policy, token);
+      await this.#auditSafely(authenticated, method, pathname, result.status, 'allowed', policy.action);
+      json(res, result.status, result.body);
     } catch (error) {
-      this.#opts.logger.warn({ error: error instanceof Error ? error.message : String(error) }, 'admin request failed');
-      json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      const mapped = this.#mapError(error);
+      this.#opts.logger.warn({ method, path: pathname, error: mapped.message }, 'admin request failed');
+      await this.#audit(undefined, method, pathname, mapped.status, 'denied', mapped.message).catch(() => {});
+      json(res, mapped.status, { ok: false, error: mapped.message });
     }
   }
 
-  #masterAuthorized(req: IncomingMessage): boolean {
-    if (!this.#opts.token) return false;
-    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-    return bearer === this.#opts.token || req.headers['x-admin-token'] === this.#opts.token;
+  async #bootstrap(req: IncomingMessage, res: ServerResponse, method: string, pathname: string): Promise<void> {
+    const supplied = bearer(req) || (typeof req.headers['x-admin-token'] === 'string' ? req.headers['x-admin-token'] : '');
+    if (!this.#opts.token || !supplied || !timingSafeStringEqual(supplied, this.#opts.token)) {
+      await this.#audit(undefined, method, pathname, 401, 'denied', 'invalid master token');
+      return json(res, 401, { ok: false, error: 'unauthorized' });
+    }
+    const initialPassword = crypto.createHash('sha256').update(`bootstrap:${this.#opts.token}`).digest('base64url');
+    const result = await this.#auth.bootstrapSession({ username: BOOTSTRAP_USERNAME, initialPassword });
+    await this.#audit(result.auth, method, pathname, 201, 'allowed', 'bootstrap session exchanged');
+    json(res, 201, { ok: true, token: result.token, auth: result.auth });
   }
 
-  #authorized(req: IncomingMessage): boolean {
-    if (this.#masterAuthorized(req)) return true;
-    const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, '');
-    const token = bearer || (typeof req.headers['x-admin-token']==='string' ? req.headers['x-admin-token'] : '');
-    return Boolean(this.#sessions.authenticate(token));
+  async #login(res: ServerResponse, input: Record<string, unknown>, method: string, pathname: string): Promise<void> {
+    try {
+      const result = await this.#auth.login(String(input.username ?? ''), String(input.password ?? ''));
+      await this.#audit(result.auth, method, pathname, 201, 'allowed', 'password login');
+      json(res, 201, { ok: true, token: result.token, auth: result.auth });
+    } catch (error) {
+      const status = error instanceof AdminAuthError && error.code === 'locked' ? 409 : 401;
+      await this.#audit(undefined, method, pathname, status, 'denied', error instanceof AdminAuthError ? error.code : 'login failed');
+      json(res, status, { ok: false, error: status === 409 ? 'account locked' : 'invalid credentials' });
+    }
   }
 
-  async #api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    if (req.method === 'GET' && url.pathname === '/api/metrics') return json(res, 200, { ok: true, metrics: runtimeMetrics.snapshot() });
-    if (req.method === 'GET' && url.pathname === '/api/models') {
+  async #api(req: IncomingMessage, url: URL, input: Record<string, unknown>, auth: AuthenticatedAdmin, policy: RoutePolicy, token: string): Promise<ApiResult> {
+    const method = req.method ?? 'GET';
+    const pathname = url.pathname;
+    if (method === 'GET' && pathname === '/api/auth/me') return this.#ok({ auth, permissions: permissionsFor(auth.principal.role) });
+    if (method === 'POST' && pathname === '/api/auth/logout') { await this.#auth.revokeSession(token); return this.#ok({ loggedOut: true }); }
+    if (method === 'GET' && pathname === '/api/auth/sessions') return this.#ok({ sessions: await this.#auth.listSessions() });
+    const sessionMatch = pathname.match(/^\/api\/auth\/sessions\/([^/]+)$/);
+    if (method === 'DELETE' && sessionMatch) {
+      const revoked = await this.#auth.revokeSessionById(decodeURIComponent(sessionMatch[1]!));
+      if (!revoked) throw new HttpError(404, 'session not found');
+      return this.#ok({ revoked: true });
+    }
+    if (method === 'POST' && pathname === '/api/confirmations') return this.#issueConfirmation(auth, input);
+    if (method === 'GET' && pathname === '/api/metrics') return this.#ok({ metrics: runtimeMetrics.snapshot() });
+    if (method === 'GET' && pathname === '/api/status') return this.#ok({ now: new Date().toISOString(), bots: this.#opts.snapshots() });
+    if (method === 'GET' && pathname === '/api/models') {
       const catalog = await this.#catalog.get();
       const task = url.searchParams.get('task');
-      return json(res, 200, { ok: true, catalog, recommendations: task ? recommend(catalog, task) : undefined });
+      return this.#ok({ catalog, recommendations: task ? recommend(catalog, task) : undefined });
     }
-    if (req.method === 'GET' && url.pathname === '/api/status') {
-      return json(res, 200, { ok: true, now: new Date().toISOString(), bots: this.#opts.snapshots() });
+    if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? { configured: false } });
+    if (method === 'GET' && pathname === '/api/admin/actions') return this.#ok({ actions: ADMIN_ACTIONS });
+    if (method === 'GET' && pathname === '/api/admin/audit') {
+      const rows = await this.#opts.storage.query<AuditRecord>({ prefix: AUDIT_PREFIX, limit: 200 });
+      return this.#ok({ audit: rows.map((row) => row.value) });
     }
-    if (req.method === 'GET' && url.pathname === '/api/admin/actions') {
-      return json(res, 200, { ok: true, actions: ADMIN_ACTIONS, audit: this.#audit.list() });
+    if (method === 'GET' && pathname === '/api/admin/health') return this.#ok({ health: healthSnapshot(this.#opts.snapshots()) });
+    if (method === 'GET' && pathname === '/api/remote/health') return this.#ok({ health: await this.#opts.remoteHealth?.() ?? { configured: false } });
+    if (method === 'GET' && pathname === '/api/config/publication') return this.#ok({ publication: await this.#opts.configPublication?.get() ?? null });
+    if (method === 'POST' && pathname === '/api/config/publish') {
+      if (!this.#opts.configPublication) throw new HttpError(409, 'config publication unavailable');
+      return this.#ok({ publication: await this.#opts.configPublication.publish(input, auth.principal) });
     }
-    if (req.method === 'GET' && url.pathname === '/api/admin/health') {
-      const actor = String(req.headers['x-admin-actor'] ?? 'local-admin');
-      this.#audit.record({ actor, action: 'runtime.health', outcome: 'allowed', detail: 'read-only health snapshot' });
-      const remote = await this.#opts.remoteHealth?.();
-      return json(res, 200, { ok: true, health: healthSnapshot(this.#opts.snapshots()), remote });
+    if (method === 'GET' && pathname === '/api/admin/users') return this.#ok({ users: await this.#auth.listUsers() });
+    if (method === 'POST' && pathname === '/api/admin/users') {
+      const role = this.#role(input.role);
+      const user = await this.#auth.createUser({ username: String(input.username ?? ''), password: String(input.password ?? ''), role, enabled: input.enabled === undefined ? true : Boolean(input.enabled) });
+      return { status: 201, body: { ok: true, user } };
     }
-    if (req.method === 'GET' && url.pathname === '/api/characters') {
+    const userMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if (method === 'PATCH' && userMatch) {
+      const username = decodeURIComponent(userMatch[1]!);
+      const patch: { username?: string; role?: AdminRole; enabled?: boolean } = {};
+      if (input.username !== undefined) patch.username = String(input.username);
+      if (input.role !== undefined) {
+        if (!can(auth.principal, 'users.role.assign')) throw new HttpError(403, 'forbidden');
+        patch.role = this.#role(input.role);
+      }
+      if (input.enabled !== undefined) {
+        if (!can(auth.principal, 'users.disable')) throw new HttpError(403, 'forbidden');
+        patch.enabled = Boolean(input.enabled);
+      }
+      return this.#ok({ user: await this.#auth.updateUser(username, patch) });
+    }
+    const passwordMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/);
+    if (method === 'POST' && passwordMatch) {
+      await this.#auth.changePassword(decodeURIComponent(passwordMatch[1]!), String(input.password ?? ''));
+      return this.#ok({ changed: true });
+    }
+    if (method === 'GET' && pathname === '/api/characters') {
       const rows = await this.#characters.list();
-      return json(res, 200, { ok: true, characters: rows.map(({ prompt, ...item }) => ({ ...item, promptLength: prompt.length })) });
+      return this.#ok({ characters: rows.map(({ prompt, ...item }) => ({ ...item, promptLength: prompt.length })) });
     }
-    if (req.method === 'POST' && url.pathname === '/api/characters') {
-      const input = await body(req);
-      const saved = await this.#characters.save({
-        id: typeof input.id === 'string' ? input.id : undefined,
-        name: String(input.name ?? '').trim(),
-        prompt: String(input.prompt ?? ''),
-        source: typeof input.source === 'string' ? input.source : undefined,
-      });
-      return json(res, 201, { ok: true, character: { ...saved, promptLength: saved.prompt.length } });
+    if (method === 'POST' && pathname === '/api/characters') {
+      const saved = await this.#characters.save({ id: typeof input.id === 'string' ? input.id : undefined, name: String(input.name ?? '').trim(), prompt: String(input.prompt ?? ''), source: typeof input.source === 'string' ? input.source : undefined });
+      return { status: 201, body: { ok: true, character: { ...saved, promptLength: saved.prompt.length } } };
     }
-    if (req.method === 'GET' && url.pathname === '/api/world') return json(res, 200, { ok: true, world: await this.#world.get() });
-    if (req.method === 'GET' && url.pathname === '/api/device') return json(res, 200, { ok: true, device: await this.#device.get() });
-    if (req.method === 'POST' && url.pathname === '/api/device/transition') {
-      const input = await body(req);
+    if (method === 'GET' && pathname === '/api/world') return this.#ok({ world: await this.#world.get() });
+    if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#world.schedule({ ...input, trust: 'candidate' }) } };
+    if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
+      const id = decodeURIComponent(pathname.split('/')[4] ?? '');
+      const trust = String(input.trust ?? 'candidate');
+      if (!['candidate', 'confirmed', 'rejected'].includes(trust)) throw new HttpError(400, 'invalid trust');
+      return this.#ok({ world: await this.#world.confirmScheduled(id, trust as 'candidate'|'confirmed'|'rejected') });
+    }
+    if (method === 'POST' && pathname === '/api/world/tick') return this.#ok({ world: await this.#world.tick() });
+    if (method === 'GET' && pathname === '/api/world/day-plan') {
+      const world = await this.#world.get();
+      const plan = await new RuleDayPlanner().plan({ date: new Date().toISOString().slice(0, 10), character: 'MohoBot', world });
+      return this.#ok({ plan });
+    }
+    if (method === 'POST' && pathname === '/api/world/events') return { status: 201, body: { ok: true, world: await this.#world.event(String(input.type ?? 'social'), String(input.text ?? '').trim()) } };
+    if (method === 'GET' && pathname === '/api/device') return this.#ok({ device: await this.#device.get() });
+    if (method === 'POST' && pathname === '/api/device/transition') {
       const allowed = ['battery', 'charging', 'network', 'screen', 'doNotDisturb', 'activity', 'notificationCount'];
       const patch = Object.fromEntries(allowed.filter((key) => key in input).map((key) => [key, input[key]]));
-      return json(res, 200, { ok: true, device: await this.#device.transition(patch) });
+      return this.#ok({ device: await this.#device.transition(patch) });
     }
-    if (req.method === 'GET' && url.pathname === '/api/affinity') {
-      return json(res, 200, { ok: true, affinity: await this.#affinity.list(url.searchParams.get('botId') ?? undefined) });
+    if (method === 'GET' && pathname === '/api/affinity') return this.#ok({ affinity: await this.#affinity.list(url.searchParams.get('botId') ?? undefined) });
+    if (method === 'POST' && pathname === '/api/affinity/adjust') {
+      const row = await this.#affinity.adjust(String(input.botId ?? 'main'), String(input.userId ?? ''), Number(input.delta ?? 0), 'manual', typeof input.note === 'string' ? input.note : undefined);
+      return this.#ok({ affinity: row });
     }
-    if (req.method === 'POST' && url.pathname === '/api/affinity/adjust') {
-      const input = await body(req);
-      const row = await this.#affinity.adjust(String(input.botId ?? 'main'), String(input.userId ?? ''), Number(input.delta ?? 0), String(input.reason ?? 'manual') as 'manual', typeof input.note === 'string' ? input.note : undefined);
-      return json(res, 200, { ok: true, affinity: row });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/world/schedule') {
-      const input = await body(req);
-      return json(res, 201, { ok: true, world: await this.#world.schedule(input) });
-    }
-    if (req.method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(url.pathname)) {
-      const id = decodeURIComponent(url.pathname.split('/')[4] ?? '');
-      const input = await body(req);
-      const trust = String(input.trust ?? 'candidate');
-      if (!['candidate','confirmed','rejected'].includes(trust)) throw new Error('invalid trust');
-      return json(res, 200, { ok: true, world: await this.#world.confirmScheduled(id, trust as 'candidate'|'confirmed'|'rejected') });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/world/tick') return json(res, 200, { ok: true, world: await this.#world.tick() });
-    if (req.method === 'GET' && url.pathname === '/api/world/day-plan') {
-      const world = await this.#world.get();
-      const planner = new RuleDayPlanner();
-      const plan = await planner.plan({ date: new Date().toISOString().slice(0, 10), character: 'MohoBot', world });
-      return json(res, 200, { ok: true, plan });
-    }
-    if (req.method === 'POST' && url.pathname === '/api/world/events') {
-      const input = await body(req);
-      const state = await this.#world.event(String(input.type ?? 'social'), String(input.text ?? '').trim());
-      return json(res, 201, { ok: true, world: state });
-    }
-    json(res, 404, { ok: false, error: 'not found' });
+    throw new HttpError(403, `handler missing for policy ${policy.action}`);
   }
+
+  #issueConfirmation(auth: AuthenticatedAdmin, input: Record<string, unknown>): ApiResult {
+    const method = String(input.method ?? '').toUpperCase();
+    const pathname = String(input.path ?? '');
+    const payload = input.body === undefined ? {} : input.body;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new HttpError(400, 'confirmation body must be an object');
+    const target = routePolicy(method, pathname);
+    if (!target || !target.confirmation || !target.permission) throw new HttpError(403, 'target is not confirmable');
+    if (!can(auth.principal, target.permission)) throw new HttpError(403, 'forbidden');
+    const challenge = this.#confirmations.issue({ principal: auth.principal, permission: target.permission, action: `${target.action}:${method}:${pathname}`, payload });
+    return { status: 201, body: { ok: true, confirmation: challenge, target: { method, path: pathname, action: target.action } } };
+  }
+
+  async #auditSafely(auth: AuthenticatedAdmin | undefined, method: string, pathname: string, status: number, outcome: 'allowed'|'denied', detail: string): Promise<void> {
+    try { await this.#audit(auth, method, pathname, status, outcome, detail); }
+    catch (error) { this.#opts.logger.error({ method, path: pathname, err: error instanceof Error ? error.message : String(error) }, 'admin audit persistence failed'); }
+  }
+
+  async #audit(auth: AuthenticatedAdmin | undefined, method: string, pathname: string, status: number, outcome: 'allowed'|'denied', detail: string): Promise<void> {
+    const now = Date.now();
+    const record: AuditRecord = {
+      id: crypto.randomUUID(), at: new Date(now).toISOString(), actor: auth?.user.normalizedUsername ?? 'anonymous',
+      action: routePolicy(method, pathname)?.action ?? `${method} ${pathname}`, outcome, detail, method, path: pathname, status,
+    };
+    await this.#opts.storage.save(`${AUDIT_PREFIX}${String(now).padStart(16, '0')}:${record.id}`, record);
+  }
+
+  #mapError(error: unknown): HttpError {
+    if (error instanceof HttpError) return error;
+    if (error instanceof AdminAuthError) {
+      if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);
+      if (error.code === 'not_found') return new HttpError(404, error.code);
+      if (error.code === 'disabled') return new HttpError(403, error.code);
+      return new HttpError(400, error.code);
+    }
+    return new HttpError(400, error instanceof Error ? error.message : 'bad request');
+  }
+
+  #role(value: unknown): AdminRole {
+    const role = String(value ?? '');
+    if (!ROLES.has(role as AdminRole)) throw new HttpError(400, 'invalid role');
+    return role as AdminRole;
+  }
+
+  #ok(value: Record<string, unknown>): ApiResult { return { status: 200, body: { ok: true, ...value } }; }
 
   async #static(res: ServerResponse, pathname: string): Promise<void> {
     const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    const root = path.join(this.#opts.rootDir, 'webui');
+    const root = path.resolve(this.#opts.rootDir, 'webui');
     const file = path.resolve(root, relative);
-    if (!file.startsWith(path.resolve(root) + path.sep) && file !== path.join(path.resolve(root), 'index.html')) return json(res, 403, { error: 'forbidden' });
+    if (!file.startsWith(`${root}${path.sep}`) && file !== path.join(root, 'index.html')) return json(res, 403, { error: 'forbidden' });
     try {
       const data = await fs.readFile(file);
       const ext = path.extname(file);
       const type = ext === '.html' ? 'text/html' : ext === '.css' ? 'text/css' : ext === '.js' ? 'text/javascript' : 'application/octet-stream';
-      res.writeHead(200, { 'content-type': `${type}; charset=utf-8`, 'content-length': data.length });
+      res.writeHead(200, { ...securityHeaders(), 'cache-control': 'no-cache', 'content-type': `${type}; charset=utf-8`, 'content-length': data.length });
       res.end(data);
-    } catch {
-      json(res, 404, { error: 'not found' });
-    }
+    } catch { json(res, 404, { error: 'not found' }); }
   }
 }

@@ -168,19 +168,20 @@ export class Runtime {
     }
 
     const adminToken = process.env.MOHO_ADMIN_TOKEN?.trim() ?? '';
-    if (adminToken) {
+    if (adminToken && this.#storage) {
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: process.env.MOHO_ADMIN_HOST?.trim() || '127.0.0.1',
         port: Number.parseInt(process.env.MOHO_ADMIN_PORT ?? '3210', 10) || 3210,
         token: adminToken,
         logger: this.#logger,
+        storage: this.#storage,
         snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
         remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
       });
       await this.#admin.start();
     } else {
-      this.#logger.info('admin WebUI disabled; set MOHO_ADMIN_TOKEN in .env.local to enable it');
+      this.#logger.info(adminToken ? 'admin WebUI disabled; persistent storage is required' : 'admin WebUI disabled; set MOHO_ADMIN_TOKEN in .env.local to enable it');
     }
 
     this.#installSignalHandlers();

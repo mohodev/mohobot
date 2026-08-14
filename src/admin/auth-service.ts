@@ -135,6 +135,17 @@ export class AdminAuthService {
     });
   }
 
+  /** Create a break-glass session after AdminServer verifies the deployment master token. */
+  async bootstrapSession(input: { username: string; initialPassword: string }): Promise<{ token: string; auth: AuthenticatedAdmin }> {
+    return this.#exclusive(async () => {
+      const normalized = normalizeAdminUsername(input.username);
+      let user = await this.#storage.get<AdminUserRecord>(userKey(normalized));
+      if (!user) user = await this.#createRecord(input.username, input.initialPassword, 'admin', true);
+      if (!user.enabled) throw new AdminAuthError('disabled');
+      return this.#createSession(user);
+    });
+  }
+
   async createUser(input: { username: string; password: string; role: AdminRole; enabled?: boolean }): Promise<PublicAdminUser> {
     return this.#exclusive(async () => publicUser(await this.#createRecord(input.username, input.password, input.role, input.enabled ?? true)));
   }
@@ -220,15 +231,7 @@ export class AdminAuthService {
       user.lastLoginAt = now;
       user.updatedAt = now;
       await this.#storage.save(userKey(normalized), user);
-      const token = `mohos_${this.#randomBytes(32).toString('base64url')}`;
-      const tokenHash = tokenDigest(token);
-      const session: AdminSessionRecord = {
-        kind: 'admin-session', id: this.#randomBytes(16).toString('hex'), tokenHash,
-        userId: user.id, normalizedUsername: normalized, authVersion: user.authVersion,
-        createdAt: now, expiresAt: now + this.#sessionTtlMs, lastSeenAt: now,
-      };
-      await this.#storage.save(sessionKey(tokenHash), session, Math.ceil(this.#sessionTtlMs / 1000));
-      return { token, auth: this.#authenticated(user, session) };
+      return this.#createSession(user);
     });
   }
 
@@ -249,11 +252,39 @@ export class AdminAuthService {
 
   async revokeSession(token: string): Promise<void> { if (token) await this.#storage.delete(sessionKey(tokenDigest(token))); }
 
+  async listSessions(): Promise<Array<Omit<AdminSessionRecord, 'tokenHash'>>> {
+    const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
+    const now = this.#now();
+    return rows.map((row) => row.value).filter((session) => session.expiresAt > now).map(publicSession);
+  }
+
+  async revokeSessionById(sessionId: string): Promise<boolean> {
+    if (!sessionId || sessionId.length > 128) return false;
+    const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
+    const match = rows.find((row) => row.value.id === sessionId);
+    if (!match) return false;
+    await this.#storage.delete(match.key);
+    return true;
+  }
+
   async revokeUserSessions(userId: string): Promise<number> {
     const rows = await this.#storage.query<AdminSessionRecord>({ prefix: SESSION_PREFIX });
     let removed = 0;
     for (const row of rows) if (row.value.userId === userId) { await this.#storage.delete(row.key); removed += 1; }
     return removed;
+  }
+
+  async #createSession(user: AdminUserRecord): Promise<{ token: string; auth: AuthenticatedAdmin }> {
+    const now = this.#now();
+    const token = `mohos_${this.#randomBytes(32).toString('base64url')}`;
+    const tokenHash = tokenDigest(token);
+    const session: AdminSessionRecord = {
+      kind: 'admin-session', id: this.#randomBytes(16).toString('hex'), tokenHash,
+      userId: user.id, normalizedUsername: user.normalizedUsername, authVersion: user.authVersion,
+      createdAt: now, expiresAt: now + this.#sessionTtlMs, lastSeenAt: now,
+    };
+    await this.#storage.save(sessionKey(tokenHash), session, Math.ceil(this.#sessionTtlMs / 1000));
+    return { token, auth: this.#authenticated(user, session) };
   }
 
   async #createRecord(username: string, password: string, role: AdminRole, enabled: boolean): Promise<AdminUserRecord> {
