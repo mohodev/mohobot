@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { RemoteStorageConfigSchema } from '../storage/remote-config.js';
 
 export const LogLevelSchema = z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 
@@ -208,6 +209,7 @@ export type HotReloadConfig = z.infer<typeof HotReloadConfigSchema>;
 export const GlobalConfigSchema = z.object({
   logLevel: LogLevelSchema.default('info'),
   storage: StorageConfigSchema.default({}),
+  remoteStorage: RemoteStorageConfigSchema.default({}),
   supervisor: SupervisorConfigSchema.default({}),
   hotReload: HotReloadConfigSchema.default({}),
   plugins: z

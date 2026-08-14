@@ -12,8 +12,6 @@ export const RemoteStorageConfigSchema = z.object({
     leaseMs:z.number().int().positive().default(30000),
     retryDelayMs:z.number().int().nonnegative().default(5000),
   }).default({}),
-}).superRefine((value,ctx)=>{
-  if(value.mode==='remote-authoritative'&&!value.mysql.enabled)ctx.addIssue({code:z.ZodIssueCode.custom,message:'remote-authoritative requires mysql.enabled',path:['mysql','enabled']});
 });
 export type RemoteStorageConfig=z.infer<typeof RemoteStorageConfigSchema>;
 
