@@ -15,6 +15,7 @@ import { ConfirmationStore } from './confirmation.js';
 import { RuleDayPlanner } from './day-planner.js';
 import { DeviceStore } from './device.js';
 import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac.js';
+import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { WorldStore } from './world.js';
 
@@ -36,6 +37,7 @@ export interface AdminServerOptions {
   remoteHealth?: () => Promise<unknown>;
   configPublication?: ConfigPublicationAdapter;
   modelHealth?: () => Promise<unknown>;
+  botControl?: BotControlFacade;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -140,6 +142,7 @@ export class AdminServer {
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const method = (req.method ?? 'GET').toUpperCase();
     let pathname = '/';
+    let auditAuth: AuthenticatedAdmin | undefined;
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
       pathname = url.pathname;
@@ -153,6 +156,7 @@ export class AdminServer {
 
       const token = bearer(req);
       const authenticated = await this.#auth.authenticate(token);
+      auditAuth = authenticated;
       if (!authenticated) {
         await this.#audit(undefined, method, pathname, 401, 'denied', 'authentication required');
         return json(res, 401, { ok: false, error: 'unauthorized' });
@@ -187,7 +191,7 @@ export class AdminServer {
     } catch (error) {
       const mapped = this.#mapError(error);
       this.#opts.logger.warn({ method, path: pathname, error: mapped.message }, 'admin request failed');
-      await this.#audit(undefined, method, pathname, mapped.status, 'denied', mapped.message).catch(() => {});
+      await this.#audit(auditAuth, method, pathname, mapped.status, 'denied', mapped.message).catch(() => {});
       json(res, mapped.status, { ok: false, error: mapped.message });
     }
   }
@@ -236,7 +240,18 @@ export class AdminServer {
       const task = url.searchParams.get('task');
       return this.#ok({ catalog, recommendations: task ? recommend(catalog, task) : undefined });
     }
-    if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? { configured: false } });
+    if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? this.#opts.botControl?.modelHealth() ?? { configured: false } });
+    if (method === 'GET' && pathname === '/api/bots') return this.#ok({ bots: this.#control().list() });
+    const botMatch = pathname.match(/^\/api\/bots\/([^/]+)$/);
+    if (method === 'GET' && botMatch) return this.#ok({ bot: this.#control().get(decodeURIComponent(botMatch[1]!)) });
+    const gatewayMatch = pathname.match(/^\/api\/bots\/([^/]+)\/gateway$/);
+    if (method === 'GET' && gatewayMatch) return this.#ok({ gateway: this.#control().gateway(decodeURIComponent(gatewayMatch[1]!)) });
+    const pluginsMatch = pathname.match(/^\/api\/bots\/([^/]+)\/plugins$/);
+    if (method === 'GET' && pluginsMatch) return this.#ok({ plugins: this.#control().plugins(decodeURIComponent(pluginsMatch[1]!)) });
+    const restartMatch = pathname.match(/^\/api\/bots\/([^/]+)\/restart$/);
+    if (method === 'POST' && restartMatch) return this.#ok({ bot: await this.#control().restart(decodeURIComponent(restartMatch[1]!)) });
+    const reloadMatch = pathname.match(/^\/api\/bots\/([^/]+)\/plugins\/([^/]+)\/reload$/);
+    if (method === 'POST' && reloadMatch) return this.#ok({ plugin: await this.#control().reloadPlugin(decodeURIComponent(reloadMatch[1]!), decodeURIComponent(reloadMatch[2]!)) });
     if (method === 'GET' && pathname === '/api/admin/actions') return this.#ok({ actions: ADMIN_ACTIONS });
     if (method === 'GET' && pathname === '/api/admin/audit') {
       const rows = await this.#opts.storage.query<AuditRecord>({ prefix: AUDIT_PREFIX, limit: 200 });
@@ -344,8 +359,18 @@ export class AdminServer {
     await this.#opts.storage.save(`${AUDIT_PREFIX}${String(now).padStart(16, '0')}:${record.id}`, record);
   }
 
+  #control(): BotControlFacade {
+    if (!this.#opts.botControl) throw new HttpError(409, 'bot control unavailable');
+    return this.#opts.botControl;
+  }
+
   #mapError(error: unknown): HttpError {
     if (error instanceof HttpError) return error;
+    if (error instanceof BotControlError) {
+      if (error.code === 'bot_not_found' || error.code === 'plugin_not_found') return new HttpError(404, error.code);
+      if (error.code === 'busy') return new HttpError(409, error.code);
+      return new HttpError(409, error.code);
+    }
     if (error instanceof AdminAuthError) {
       if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);
       if (error.code === 'not_found') return new HttpError(404, error.code);
