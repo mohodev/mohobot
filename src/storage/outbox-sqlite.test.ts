@@ -11,7 +11,7 @@ import { SqliteStorage } from './sqlite.js';
 const roots: string[] = [];
 const opened: SqliteStorage[] = [];
 
-async function pair(): Promise<{ first: Outbox; second: Outbox }> {
+async function pair(): Promise<{ first: Outbox; second: Outbox; firstStorage:SqliteStorage;secondStorage:SqliteStorage }> {
   const root = await mkdtemp(path.join(tmpdir(), 'mohobot-outbox-atomic-'));
   roots.push(root);
   const databasePath = path.join(root, 'outbox.sqlite');
@@ -21,7 +21,7 @@ async function pair(): Promise<{ first: Outbox; second: Outbox }> {
   const secondStorage = new SqliteStorage({ path: databasePath, logger });
   await secondStorage.init();
   opened.push(firstStorage, secondStorage);
-  return { first: new Outbox(firstStorage), second: new Outbox(secondStorage) };
+  return { first: new Outbox(firstStorage), second: new Outbox(secondStorage),firstStorage,secondStorage };
 }
 
 afterEach(async () => {
@@ -43,6 +43,8 @@ describe('SQLite atomic outbox claims', () => {
     expect([...a, ...b][0]).toMatchObject({ eventId: 'shared', status: 'processing', attempts: 1 });
     expect([...a, ...b][0]?.claimToken).toMatch(/^[0-9a-f-]{36}$/i);
   });
+
+  it('atomically retries failed events without overwriting a concurrent claim',async()=>{const{first,second,firstStorage,secondStorage}=await pair();await first.append({eventId:'retry-race',type:'test',payload:{},nextAttemptAt:1});const[claimed]=await first.claim('worker',{now:1,leaseMs:10,limit:1});await first.release('retry-race','worker',{claimToken:claimed!.claimToken!,error:'failed',now:2});const[retried,reclaimed]=await Promise.all([firstStorage.retryFailedOutboxAtomic('retry-race',3),second.claim('worker-2',{now:3,leaseMs:10,limit:1})]);expect(retried||reclaimed.length).toBeTruthy();const current=await second.get('retry-race');if(reclaimed.length){expect(current).toMatchObject({status:'processing',attempts:2,claimToken:reclaimed[0]!.claimToken});}else{expect(current).toMatchObject({status:'pending',attempts:1});}expect(secondStorage).toBeDefined();});
 
   it('fences a late release even when the workerId is reused', async () => {
     const { first, second } = await pair();

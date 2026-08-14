@@ -32,6 +32,7 @@ import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtim
 import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 import { BotControlFacade } from './admin/bot-control.js';
+import{OpsControlFacade}from'./admin/ops-control.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -196,6 +197,7 @@ export class Runtime {
         modelHealth: async () => botControl.modelHealth(),
         remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
         configPublication:publicationAdmin,
+        ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
       });
       await this.#admin.start();
     } else {
