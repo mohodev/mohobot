@@ -12,6 +12,8 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/providers$/,permission:'providers.read',action:'providers.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/providers\/[^/]+\/probe$/,permission:'providers.probe',action:'providers.probe',risk:'reversible',confirmation:false},
 {method:'GET',pattern:/^\/api\/status$/,permission:'status.read',action:'runtime.status',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/debug\/chat\/capabilities$/,permission:'debug.chat',action:'debug.chat.capabilities',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/debug\/chat$/,permission:'debug.chat',action:'debug.chat',risk:'reversible',confirmation:false},
 {method:'GET',pattern:/^\/api\/bots$/,permission:'gateway.read',action:'bots.list',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/bots\/[^/]+$/,permission:'gateway.read',action:'bots.get',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/bots\/[^/]+\/gateway$/,permission:'gateway.read',action:'gateway.read',risk:'read',confirmation:false},

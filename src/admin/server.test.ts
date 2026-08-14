@@ -7,6 +7,7 @@ import { LogBuffer } from '../core/log-buffer.js';
 import { MemoryStorage } from '../storage/memory.js';
 import { AdminServer } from './server.js';
 import { OpsControlFacade } from './ops-control.js';
+import { DebugChatFacade } from './debug-chat.js';
 
 interface Reply { status: number; headers: Headers; data: Record<string, any> }
 
@@ -30,6 +31,7 @@ describe('AdminServer production authorization chain', () => {
       remoteHealth: async () => ({ mysql: { ok: true } }), modelHealth: async () => ({ reply: { ok: true } }),
       configPublication: { get: async () => ({ version: 1 }), publish: async (input, principal) => ({ ...input, actor: principal.id }) },
       ops:new OpsControlFacade({storage,listTasks:()=>[{id:'task-1',name:'world:tick',kind:'interval',state:'pending',createdAt:1,runs:2,errors:0}]}),logs,
+      debugChat:new DebugChatFacade({providers:()=>[{id:'main',provider:{name:'mock',model:'mock-model',health:async()=>({ok:true}),chat:async()=>({content:'debug response',model:'mock-model',ms:1})}}],logger:createNullLogger(),requestsPerMinute:1,maxInputChars:8}),
     });
     await server.start();
     base = `http://127.0.0.1:${server.port}`;
@@ -64,6 +66,8 @@ describe('AdminServer production authorization chain', () => {
     expect(result.status).toBe(201);
     return result.data.confirmation.nonce as string;
   }
+
+  it('offers isolated debug chat only to operators with bounded input and redacted traces',async()=>{const admin=await bootstrap();const create={username:'operator-debug',password:'long operator password',role:'operator',enabled:true};const nonce=await confirmation(admin,'POST','/api/admin/users',create);await request('POST','/api/admin/users',{token:admin,confirmation:nonce,body:create});const login=await request('POST','/api/auth/login',{body:{username:'operator-debug',password:'long operator password'}});const operator=login.data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:operator})).data.capabilities.bots).toEqual([{id:'main',model:'mock-model',available:true}]);const reply=await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'hello'}});expect(reply.status).toBe(200);expect(reply.data.reply.content).toBe('debug response');expect(JSON.stringify(reply.data.reply.trace)).not.toContain('hello');expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'too long input'}})).status).toBe(400);expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'again'}})).status).toBe(429);const viewerCreate={username:'viewer-debug',password:'long viewer password',role:'viewer',enabled:true};const viewerNonce=await confirmation(admin,'POST','/api/admin/users',viewerCreate);await request('POST','/api/admin/users',{token:admin,confirmation:viewerNonce,body:viewerCreate});const viewer=(await request('POST','/api/auth/login',{body:{username:'viewer-debug',password:'long viewer password'}})).data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:viewer})).status).toBe(403);});
 
   it('uses master token only for fixed bootstrap exchange and fails closed', async () => {
     expect((await request('GET', '/api/status', { master })).status).toBe(401);

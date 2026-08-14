@@ -22,6 +22,7 @@ import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
 import { ProviderControlError,type ProviderControl } from './provider-control.js';
+import{DebugChatError,type DebugChatFacade}from'./debug-chat.js';
 import { WorldStore } from './world.js';
 import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
 import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
@@ -48,6 +49,7 @@ export interface AdminServerOptions {
   ops?: OpsControlFacade;
   logs?: LogBuffer;
   providers?: ProviderControl;
+  debugChat?: DebugChatFacade;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -260,6 +262,8 @@ export class AdminServer {
       return this.#ok({logs:this.#opts.logs.query({after,limit,level:level as LogLevel|undefined,component})});
     }
     if (method === 'GET' && pathname === '/api/status') return this.#ok({ now: new Date().toISOString(), bots: this.#opts.snapshots() });
+    if(method==='GET'&&pathname==='/api/debug/chat/capabilities'){if(!this.#opts.debugChat)throw new HttpError(409,'debug chat unavailable');return this.#ok({capabilities:this.#opts.debugChat.capabilities()});}
+    if(method==='POST'&&pathname==='/api/debug/chat'){if(!this.#opts.debugChat)throw new HttpError(409,'debug chat unavailable');const botId=typeof input.botId==='string'?input.botId:'';const content=typeof input.content==='string'?input.content:'';const result=await this.#opts.debugChat.chat({actorId:auth.principal.id,botId,content,task:'admin'});return this.#ok({reply:result});}
     if (method === 'GET' && pathname === '/api/models') {
       const catalog = await this.#catalog.get();
       const task = url.searchParams.get('task');
@@ -418,6 +422,7 @@ export class AdminServer {
       return new HttpError(409, error.code);
     }
     if(error instanceof ProviderControlError)return new HttpError(404,error.code);
+    if(error instanceof DebugChatError){if(error.code==='bot_not_found')return new HttpError(404,error.code);if(error.code==='provider_unavailable')return new HttpError(409,error.code);if(error.code==='rate_limited')return new HttpError(429,error.code);if(error.code==='input_invalid')return new HttpError(400,error.code);return new HttpError(502,error.code);}
     if(error instanceof OpsControlError){if(error.code==='not_found')return new HttpError(404,error.message);if(error.code==='invalid_state')return new HttpError(409,error.message);return new HttpError(400,error.message);}
     if (error instanceof AdminAuthError) {
       if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);
