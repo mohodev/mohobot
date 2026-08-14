@@ -162,6 +162,12 @@ export interface ChatMessage {
   content: string;
   /** Optional display name, forwarded to providers that support it. */
   name?: string;
+  /** Platform message identity for lifecycle corrections. */
+  sourceMessageId?: string;
+  sourcePlatform?: Platform;
+  createdAt?: number;
+  /** Tombstones remain persisted but are excluded from model context. */
+  deleted?: boolean;
 }
 
 export type ComponentState =

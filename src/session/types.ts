@@ -3,12 +3,24 @@
  * Long-term memory arrives later behind MemoryAdapter (src/storage/types.ts).
  */
 
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, Platform } from '../core/types.js';
 
 export interface SessionKeyInput {
   botId: string;
   channelId: string;
   userId: string;
+}
+
+export interface SourceMessageMutation {
+  botId: string;
+  channelId: string;
+  userId?: string;
+  sourceMessageId: string;
+  sourcePlatform: Platform;
+}
+
+export interface SourceMessageUpdate extends SourceMessageMutation {
+  content: string;
 }
 
 export interface Session {
@@ -31,6 +43,10 @@ export interface SessionManagerLike {
    * pipeline falls back to a plain append.
    */
   completeExchange?(input: SessionKeyInput, user: ChatMessage, assistant: ChatMessage): Promise<void>;
+  /** Correct a persisted user turn by its source message identity. */
+  updateSourceMessage?(input: SourceMessageUpdate): Promise<boolean>;
+  /** Preserve a tombstone while removing the turn from future model context. */
+  deleteSourceMessage?(input: SourceMessageMutation): Promise<boolean>;
   /** Assemble the prompt: system + (memory) + trimmed history. */
   buildContext(input: SessionKeyInput, systemPrompt: string): Promise<ChatMessage[]>;
   clear(input: SessionKeyInput): Promise<void>;

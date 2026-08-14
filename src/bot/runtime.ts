@@ -186,12 +186,33 @@ export class BotRuntime implements Managed {
         void this.#pipeline?.handle(message as MohoMessage);
       }),
       this.#deps.events.on('message:update', (event) => {
-        if (event.botId !== cfg.id || !messageSync) return;
-        void messageSync.update(event).catch((error) => this.#logger.warn({ err: error }, 'message update sync failed'));
+        if (event.botId !== cfg.id) return;
+        void (async () => {
+          const indexed = messageSync ? await messageSync.update(event) : undefined;
+          const content = indexed?.content ?? event.content;
+          if (content === undefined || indexed?.tombstone) return;
+          await this.#sessions?.updateSourceMessage({
+            botId: event.botId,
+            channelId: event.location.channelId,
+            userId: event.authorId ?? indexed?.authorId,
+            sourceMessageId: event.messageId,
+            sourcePlatform: event.platform,
+            content,
+          });
+        })().catch((error) => this.#logger.warn({ err: error }, 'message update correction failed'));
       }),
       this.#deps.events.on('message:delete', (event) => {
-        if (event.botId !== cfg.id || !messageSync) return;
-        void messageSync.delete(event).catch((error) => this.#logger.warn({ err: error }, 'message delete sync failed'));
+        if (event.botId !== cfg.id) return;
+        void (async () => {
+          const indexed = messageSync ? await messageSync.delete(event) : undefined;
+          await this.#sessions?.deleteSourceMessage({
+            botId: event.botId,
+            channelId: event.location.channelId,
+            userId: event.authorId ?? indexed?.authorId,
+            sourceMessageId: event.messageId,
+            sourcePlatform: event.platform,
+          });
+        })().catch((error) => this.#logger.warn({ err: error }, 'message delete correction failed'));
       }),
       this.#deps.events.on('thread:lifecycle', (event) => {
         if (event.botId !== cfg.id || !threadLifecycle || !this.#sessions) return;
