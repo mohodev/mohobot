@@ -96,6 +96,19 @@ describe('Supervisor', () => {
     await sup.shutdown();
   });
 
+  it('defers a retryAt failure without consuming the ordinary restart budget', async () => {
+    const sup = makeSupervisor({ autoRestart: true, maxRestarts: 1 });
+    const c = new FakeComponent('quota-limited');
+    sup.register(c);
+    await sup.startComponent('quota-limited');
+    const error = Object.assign(new Error('Discord session starts exhausted'), { retryAt: Date.now() + 60_000 });
+    sup.reportFailure('quota-limited', error);
+    await tick(80);
+    expect(c.starts).toBe(1);
+    expect(sup.status()[0]?.restarts).toBe(0);
+    await sup.shutdown();
+  });
+
   it('gives up after maxRestarts and calls onFatal for a critical component', async () => {
     const sup = makeSupervisor({ autoRestart: true, maxRestarts: 2 });
     const onFatal = vi.fn();

@@ -92,6 +92,24 @@ export function toThreadLifecycleEvent(botId: BotId, action: MohoThreadLifecycle
   return { botId, platform: 'discord', action, channelId: thread.id, parentChannelId: thread.parentId ?? undefined, guildId: thread.guildId, name: thread.name, forumPost: parent?.type === ChannelType.GuildForum || parent?.type === ChannelType.GuildMedia, archived: thread.archived ?? undefined, locked: thread.locked ?? undefined, partial: false, occurredAt: now };
 }
 
+export class DiscordSessionStartLimitError extends Error {
+  readonly retryAt: number;
+
+  constructor(message: string, retryAt: number) {
+    super(message);
+    this.name = 'DiscordSessionStartLimitError';
+    this.retryAt = retryAt;
+  }
+}
+
+function sessionStartRetryAt(error: unknown): number | undefined {
+  const message = describeError(error);
+  if (!/not enough sessions remaining to spawn/i.test(message)) return undefined;
+  const match = /resets at\s+([^\s]+)/i.exec(message);
+  const parsed = match?.[1] ? Date.parse(match[1]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > Date.now() ? parsed : undefined;
+}
+
 export class DiscordGateway implements Gateway {
   readonly botId: BotId;
   readonly platform = 'discord' as const;
@@ -205,6 +223,11 @@ export class DiscordGateway implements Gateway {
         settled = true;
         clearTimeout(timer);
         this.#lastError = describeError(error);
+        const retryAt = sessionStartRetryAt(error);
+        if (retryAt) {
+          reject(new DiscordSessionStartLimitError(`[${this.botId}] Discord login failed: ${this.#lastError}`, retryAt));
+          return;
+        }
         reject(new Error(`[${this.botId}] Discord login failed: ${this.#lastError}`));
       });
     });
