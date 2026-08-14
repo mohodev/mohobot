@@ -32,6 +32,7 @@ import type { OptionalRemoteDrivers } from './storage/remote-factory.js';
 import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtime.js';
 import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
+import{ProviderControlFacade}from'./admin/provider-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
 
@@ -201,6 +202,7 @@ export class Runtime {
         configPublication:publicationAdmin,
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
         logs:this.#logs,
+        providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
       });
       await this.#admin.start();
     } else {
