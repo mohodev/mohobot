@@ -20,6 +20,7 @@ import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac
 import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
+import { ProviderControlError,type ProviderControl } from './provider-control.js';
 import { WorldStore } from './world.js';
 import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
 import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
@@ -45,6 +46,7 @@ export interface AdminServerOptions {
   botControl?: BotControlFacade;
   ops?: OpsControlFacade;
   logs?: LogBuffer;
+  providers?: ProviderControl;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -261,6 +263,8 @@ export class AdminServer {
       return this.#ok({ catalog, recommendations: task ? recommend(catalog, task) : undefined });
     }
     if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? this.#opts.botControl?.modelHealth() ?? { configured: false } });
+    if(method==='GET'&&pathname==='/api/providers')return this.#ok({providers:this.#providers().list()});
+    const providerProbe=pathname.match(/^\/api\/providers\/([^/]+)\/probe$/);if(method==='POST'&&providerProbe)return this.#ok({probe:await this.#providers().probe(decodeURIComponent(providerProbe[1]!))});
     if (method === 'GET' && pathname === '/api/bots') return this.#ok({ bots: this.#control().list() });
     const botMatch = pathname.match(/^\/api\/bots\/([^/]+)$/);
     if (method === 'GET' && botMatch) return this.#ok({ bot: this.#control().get(decodeURIComponent(botMatch[1]!)) });
@@ -388,6 +392,8 @@ export class AdminServer {
     await this.#opts.storage.save(`${AUDIT_PREFIX}${String(now).padStart(16, '0')}:${record.id}`, record);
   }
 
+  #providers():ProviderControl{if(!this.#opts.providers)throw new HttpError(409,'provider control unavailable');return this.#opts.providers;}
+
   #control(): BotControlFacade {
     if (!this.#opts.botControl) throw new HttpError(409, 'bot control unavailable');
     return this.#opts.botControl;
@@ -400,6 +406,7 @@ export class AdminServer {
       if (error.code === 'busy') return new HttpError(409, error.code);
       return new HttpError(409, error.code);
     }
+    if(error instanceof ProviderControlError)return new HttpError(404,error.code);
     if(error instanceof OpsControlError){if(error.code==='not_found')return new HttpError(404,error.message);if(error.code==='invalid_state')return new HttpError(409,error.message);return new HttpError(400,error.message);}
     if (error instanceof AdminAuthError) {
       if (error.code === 'username_taken' || error.code === 'last_admin' || error.code === 'locked') return new HttpError(409, error.code);
