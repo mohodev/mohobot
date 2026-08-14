@@ -34,6 +34,7 @@ import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./confi
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 import{DebugChatFacade}from'./admin/debug-chat.js';
 import{ProviderControlFacade}from'./admin/provider-control.js';
+import{ExtensionsControlFacade}from'./admin/extensions-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
 import{TaskControlFacade}from'./admin/task-control.js';
@@ -207,6 +208,7 @@ export class Runtime {
         taskControl:new TaskControlFacade({tasks:this.#tasks}),
         logs:this.#logs,
         providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
+        extensions:new ExtensionsControlFacade(registries),
         debugChat,
       });
       await this.#admin.start();
