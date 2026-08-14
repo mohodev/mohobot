@@ -9,6 +9,7 @@ import {
   AIConfigSchema,
   BotConfigSchema,
   MemoryConfigSchema,
+  MediaConfigSchema,
   SessionConfigSchema,
   type ResolvedBotConfig,
 } from '../config/schema.js';
@@ -48,6 +49,7 @@ function makeBotConfig(): ResolvedBotConfig {
     ai: AIConfigSchema.parse(base.ai),
     session: SessionConfigSchema.parse(base.session),
     memory: MemoryConfigSchema.parse(base.memory),
+    media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}};})(),
   };
 }
 

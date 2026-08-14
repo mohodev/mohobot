@@ -29,6 +29,7 @@ import { decideSocially } from './social-decision.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
+import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 
@@ -78,6 +79,8 @@ export interface PipelineDeps {
   logger: Logger;
   send: (out: OutboundMessage) => Promise<void>;
   typing?: (channelId: string) => Promise<void>;
+  /** Omitted unless media is explicitly enabled and has a usable provider. */
+  media?: Pick<MediaRuntime, 'process'>;
 }
 
 export interface PipelineStats {
@@ -225,7 +228,11 @@ export class MessagePipeline {
     // Persona bots intentionally have no text command prefix. `!foo` is an
     // ordinary chat message; operational actions live behind authenticated
     // admin UI/Discord interactions, never in public text command parsing.
-    const attachments = preprocessAttachments(message.attachments);
+    const attachments = preprocessAttachments(message.attachments, {
+      maxAttachments: cfg.media.maxAttachments,
+      maxFileBytes: cfg.media.maxFileBytes,
+      maxTotalBytes: cfg.media.maxTotalBytes,
+    });
     const prompt = [content.trim(), attachments.accepted.length || attachments.rejected.length ? attachments.context : ''].filter(Boolean).join('\n\n');
     if (prompt.length === 0) {
       this.#stats.skipped += 1;
@@ -279,11 +286,21 @@ export class MessagePipeline {
 
     // Inject a live time/context anchor so the model is never temporally
     // disoriented. Appended to (not replacing) the static system prompt.
+    let mediaContext: string | undefined;
+    if (cfg.media.enabled && this.#deps.media && attachments.accepted.length > 0) {
+      try {
+        const observed = await this.#deps.media.process(attachments.accepted, content.trim() || undefined);
+        if (observed.items.some((item) => item.status === 'observed' || item.status === 'degraded')) mediaContext = observed.context;
+      } catch (error) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'media observation failed; using attachment metadata');
+      }
+    }
     const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context()]);
     messages = [
       { role: 'system', content: cfg.systemPrompt },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
+      ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
       ...messages.filter((m) => m.role !== 'system'),
     ];
 
