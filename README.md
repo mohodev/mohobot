@@ -113,7 +113,9 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 ## 配置
 
-优先级：Schema 默认值 < `data/provider.yaml` < `config/global.yaml` < `config/bots/*.yaml` < 环境变量。
+优先级：Schema 默认值 < `data/provider.yaml` < `data/provider.local.yaml` < `config/global.yaml` < `config/global.local.yaml` < `config/bots/*.yaml` < `config/bots/*.local.yaml` < 环境变量。
+
+`*.local.yaml` 用于机器私有覆盖并已加入 `.gitignore`。对象会递归合并，数组和标量整体替换；例如 `config/bots/main.local.yaml` 只覆盖 `main.yaml`，不会被加载成第二个 Bot。旧配置文件无需改名，`version` 字段可选。可从 `config/global.local.example.yaml` 复制所需结构。
 
 | 环境变量 | 用途 |
 |---|---|
@@ -126,7 +128,7 @@ Extension registries: Provider / Gateway / Storage / Memory
 | `MOHO_STORAGE_PATH` | SQLite 路径 |
 | `LOG_LEVEL` | 日志级别 |
 
-`config/global.yaml` 保存运行参数；`data/provider.yaml` 保存 Provider 默认项；密钥不得写进 YAML，哪怕只是注释。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
+`config/global.yaml` 保存可跟踪的运行参数；`data/provider.yaml` 保存可跟踪的 Provider 默认项；对应的 `.local.yaml` 只放机器差异，仍不得写入密钥（密钥只从环境变量读取）。新版本增加的未知字段在旧版运行时只会告警并忽略，不会阻断启动。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
 
 可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
 

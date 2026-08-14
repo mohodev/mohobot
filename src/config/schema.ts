@@ -118,7 +118,11 @@ const MediaConfigOverrideSchema = MediaConfigSchema.partial().extend({
   ocr: MediaProviderConfigSchema.partial().optional(),
 });
 
+export const ConfigVersionSchema = z.union([z.string().min(1), z.number().int().nonnegative()]).optional();
+
 export const BotConfigSchema = z.object({
+  /** Optional format marker for forward-compatible tooling; not required at runtime. */
+  version: ConfigVersionSchema,
   id: z.string().min(1),
   name: z.string().default('MohoBot'),
   enabled: z.boolean().default(true),
@@ -209,6 +213,8 @@ export const HotReloadConfigSchema = z.object({
 export type HotReloadConfig = z.infer<typeof HotReloadConfigSchema>;
 
 export const GlobalConfigSchema = z.object({
+  /** Optional format marker for forward-compatible tooling; not required at runtime. */
+  version: ConfigVersionSchema,
   logLevel: LogLevelSchema.default('info'),
   storage: StorageConfigSchema.default({}),
   remoteStorage: RemoteStorageConfigSchema.default({}),
