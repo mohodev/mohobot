@@ -34,8 +34,58 @@ printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 回归测试 |
 | `npm run build` | 构建到 `dist/` |
+| `npm run check-update` | 只检查本地 Git/Node 状态，不联网、不修改 |
+| `npm run update` | 保守生产更新（会 fetch、备份、验证，详见下文） |
 | `npx tsx scripts/verify-hotreload.ts` | 验证插件热加载 |
 | `npx tsx scripts/verify-extensibility.ts` | 验证四类扩展点 |
+
+## 生产更新
+
+先做完全离线的检查：
+
+```bash
+npm run check-update
+```
+
+`check-update` 只检查 Node.js ≥ 22、Git 仓库、当前分支/upstream、未合并文件、tracked 工作树和 ahead/behind；**不会执行 `git fetch`、安装依赖、备份或重启**。未跟踪的日志和运行数据不会阻止检查，但 tracked 文件或 index 有改动时会拒绝继续。
+
+确认维护窗口后再执行更新：
+
+```bash
+npm run update
+```
+
+更新器会按以下固定顺序执行：
+
+1. 原子创建 `.mohobot-update.lock/`，防止两个更新进程并行；
+2. 检查分支、upstream、tracked dirty/unmerged 和提交图；
+3. 根据 `MOHO_STORAGE_PATH` / `.env.local` / `config/global.yaml` 定位 SQLite；
+4. 使用 `better-sqlite3` backup API 备份到 `data/backups/`，再以只读方式运行 `PRAGMA quick_check`；
+5. `git fetch --prune` 后再次检查提交图，只执行 `git merge --ff-only @{u}`；
+6. 依次执行 `npm ci`、非交互 setup/migration preflight、typecheck、test、build；
+7. 仅在明确给出时执行 restart argv，随后可等待 HTTP health。
+
+默认不允许本地分支领先 upstream。审核确认本地提交是预期部署内容后，才使用：
+
+```bash
+npm run update -- --allow-ahead
+```
+
+更新器不会使用 `reset`，失败时也不会自动恢复数据库或代码。它会打印更新前 HEAD、当前 HEAD 和已验证备份路径，留给运维人员判断恢复方式。
+
+### 可选重启与健康检查
+
+restart command 必须是 **JSON argv 数组**，不会经过 shell：
+
+```bash
+npm run update -- \
+  --restart-command='["systemctl","restart","mohobot"]' \
+  --health-url='http://127.0.0.1:3210/api/status'
+```
+
+不要传 `systemctl restart mohobot` 这类 shell 字符串；更新器会拒绝。复杂流程请先写成受审计的独立脚本，再以 `['/absolute/path/to/script','arg']` 的 argv 形式调用。health URL 只接受 HTTP/HTTPS，默认最多等待 90 秒，可用 `--health-timeout-ms=120000` 调整。
+
+锁目录不会在崩溃后被自动强行接管。确认没有更新进程后，才能人工删除 `.mohobot-update.lock/`。更新命令本身会访问配置的 Git upstream；只有用户实际运行 `npm run update` 时才会发生外部 fetch。
 
 ## 架构
 
