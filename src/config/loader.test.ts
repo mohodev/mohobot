@@ -195,7 +195,7 @@ describe('ConfigLoader', () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(
       path.join(rootDir, 'data', 'provider.yaml'),
-      ['provider: kilo', 'model: provider-model', 'temperature: 0.1', 'options:', '  budget:', '    maxTokens:', '      reply: 2048', ''].join('\n'),
+      ['provider: kilo', 'model: tencent/hy3:free', 'maxTokens: 2048', 'temperature: 0.1', 'options:', '  budget:', '    maxTokens:', '      reply: 2048', ''].join('\n'),
       'utf8',
     );
     await writeGlobal(['ai:', '  model: global-model', '  temperature: 0.7', ''].join('\n'));
@@ -203,6 +203,7 @@ describe('ConfigLoader', () => {
 
     const cfg = await newLoader().load();
     expect(cfg.global.ai.provider).toBe('kilo');
+    expect(cfg.global.ai.maxTokens).toBe(2048);
     expect(cfg.global.ai.model).toBe('global-model');
     expect(cfg.global.ai.temperature).toBe(0.7);
     expect(cfg.global.ai.options).toMatchObject({ budget: { maxTokens: { reply: 2048 } } });
