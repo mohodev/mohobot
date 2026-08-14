@@ -250,6 +250,9 @@ export class AdminServer {
     if (method === 'GET' && pathname === '/api/auth/me') return this.#ok({ auth, permissions: permissionsFor(auth.principal.role) });
     if (method === 'POST' && pathname === '/api/auth/logout') { await this.#auth.revokeSession(token); return this.#ok({ loggedOut: true }); }
     if (method === 'GET' && pathname === '/api/auth/sessions') return this.#ok({ sessions: await this.#auth.listSessions() });
+    if(method==='GET'&&pathname==='/api/auth/temporary-tokens')return this.#ok({tokens:await this.#auth.listTemporaryTokens()});
+    if(method==='POST'&&pathname==='/api/auth/temporary-tokens'){const role=this.#role(input.role);if(!can(auth.principal,'tokens.create'))throw new HttpError(403,'forbidden');const ranks:Record<AdminRole,number>={viewer:0,operator:1,admin:2,developer:3};if(ranks[role]>ranks[auth.principal.role])throw new HttpError(403,'cannot create higher-role token');const ttlMinutes=Number(input.ttlMinutes);if(!Number.isSafeInteger(ttlMinutes))throw new HttpError(400,'ttlMinutes required');const created=await this.#auth.createTemporaryToken({label:String(input.label??''),role,createdBy:auth.principal.id,ttlMs:ttlMinutes*60_000});return{status:201,body:{ok:true,...created}};}
+    const tempTokenMatch=pathname.match(/^\/api\/auth\/temporary-tokens\/([^/]+)$/);if(method==='DELETE'&&tempTokenMatch){if(!await this.#auth.revokeTemporaryToken(decodeURIComponent(tempTokenMatch[1]!)))throw new HttpError(404,'temporary token not found');return this.#ok({revoked:true});}
     const sessionMatch = pathname.match(/^\/api\/auth\/sessions\/([^/]+)$/);
     if (method === 'DELETE' && sessionMatch) {
       const revoked = await this.#auth.revokeSessionById(decodeURIComponent(sessionMatch[1]!));
