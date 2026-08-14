@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>MohoBot 管理控制台</title>
   <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/ops.css">
 </head>
 <body>
   <section id="login-view" class="login-view">
@@ -31,6 +32,11 @@
       <div class="brand">墨染荷韵<small>MohoBot Console</small></div>
       <nav id="navigation">
         <button data-tab="overview" data-permission="status.read" class="active">仪表盘</button>
+        <button data-tab="bots" data-permission="status.read">Bot 与平台</button>
+        <button data-tab="plugins" data-permission="plugin.read">插件管理</button>
+        <button data-tab="operations" data-permission="sessions.chat.read">运行数据</button>
+        <button data-tab="memory" data-permission="memory.metadata.read">记忆管理</button>
+        <button data-tab="behavior" data-permission="behavior.dry-run">行为调试</button>
         <button data-tab="users" data-permission="users.read">用户管理</button>
         <button data-tab="health" data-permission="status.read">服务健康</button>
         <button data-tab="models" data-permission="models.read">模型阵列</button>
