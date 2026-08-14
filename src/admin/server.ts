@@ -12,6 +12,7 @@ import { DeviceStore } from './device.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import { AdminSessionStore } from './auth.js';
+import type { RuntimeRemoteHealth } from '../storage/remote-coordinator.js';
 
 export interface AdminServerOptions {
   rootDir: string;
@@ -20,6 +21,7 @@ export interface AdminServerOptions {
   token: string;
   logger: Logger;
   snapshots: () => BotSnapshot[];
+  remoteHealth?: () => Promise<RuntimeRemoteHealth>;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -128,7 +130,8 @@ export class AdminServer {
     if (req.method === 'GET' && url.pathname === '/api/admin/health') {
       const actor = String(req.headers['x-admin-actor'] ?? 'local-admin');
       this.#audit.record({ actor, action: 'runtime.health', outcome: 'allowed', detail: 'read-only health snapshot' });
-      return json(res, 200, { ok: true, health: healthSnapshot(this.#opts.snapshots()) });
+      const remote = await this.#opts.remoteHealth?.();
+      return json(res, 200, { ok: true, health: healthSnapshot(this.#opts.snapshots()), remote });
     }
     if (req.method === 'GET' && url.pathname === '/api/characters') {
       const rows = await this.#characters.list();

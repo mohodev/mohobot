@@ -27,12 +27,19 @@ import { BotRuntime } from './bot/runtime.js';
 import { createStorage } from './storage/index.js';
 import type { Storage } from './storage/types.js';
 import { AdminServer } from './admin/server.js';
+import type { OptionalRemoteDrivers } from './storage/remote-factory.js';
+import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtime.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
 const ROOT_DIR = process.env.MOHO_ROOT ?? process.cwd();
 
-class Runtime {
+export interface RuntimeOptions {
+  remoteDrivers?: OptionalRemoteDrivers;
+  exit?: (code: number) => never | void;
+}
+
+export class Runtime {
   #logger: Logger;
   #events: EventBus;
   #tasks!: TaskManager;
@@ -43,9 +50,12 @@ class Runtime {
   #bots = new Map<string, BotRuntime>();
   #hotReload?: HotReloader;
   #admin?: AdminServer;
+  #remote?: RemoteRuntime;
   #shuttingDown = false;
+  readonly #options: RuntimeOptions;
 
-  constructor() {
+  constructor(options: RuntimeOptions = {}) {
+    this.#options = options;
     // Bootstrap logger; replaced once config is known.
     this.#logger = createLogger({ name: 'mohobot' });
     this.#events = new EventBus({
@@ -93,6 +103,28 @@ class Runtime {
         'storage init failed; continuing without persistence',
       );
       this.#storage = undefined;
+    }
+
+    const remoteConfig = this.#config.global.remoteStorage;
+    if (!this.#storage && remoteConfig.mode === 'remote-authoritative') {
+      throw new Error('remote-authoritative requires initialized local coordination storage');
+    }
+    if (this.#storage) {
+      this.#remote = createRemoteRuntime({
+        config: remoteConfig,
+        storage: this.#storage,
+        events: this.#events,
+        logger: this.#logger,
+        drivers: this.#options.remoteDrivers,
+      });
+      this.#remote.coordinator.start();
+      const remoteHealth = await this.#remote.coordinator.health();
+      const unavailable = Object.entries(remoteHealth.remote)
+        .filter(([, status]) => status.enabled && !status.ok)
+        .map(([name]) => name);
+      if (remoteConfig.mode === 'async-mirror' && unavailable.length > 0) {
+        this.#logger.warn({ unavailable }, 'remote mirror degraded; local outbox remains authoritative');
+      }
     }
 
     this.#logGatewayEvents();
@@ -144,6 +176,7 @@ class Runtime {
         token: adminToken,
         logger: this.#logger,
         snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
+        remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
       });
       await this.#admin.start();
     } else {
@@ -266,7 +299,7 @@ class Runtime {
 
     const timeout = setTimeout(() => {
       this.#logger.error('graceful shutdown timed out; forcing exit');
-      process.exit(code === 0 ? 1 : code);
+      (this.#options.exit ?? process.exit)(code === 0 ? 1 : code);
     }, this.#config?.global.supervisor.shutdownTimeoutMs ?? 10_000);
     timeout.unref?.();
 
@@ -275,20 +308,25 @@ class Runtime {
       await this.#hotReload?.stop();
       await this.#tasks?.stopAll(3000);
       await this.#supervisor?.shutdown();
+      await this.#remote?.stopEventBridge();
+      await this.#remote?.coordinator.stop();
       await this.#storage?.close();
     } catch (error) {
       this.#logger.error({ err: error instanceof Error ? error.message : String(error) }, 'shutdown error');
     } finally {
       clearTimeout(timeout);
       this.#logger.info('bye');
-      process.exit(code);
+      (this.#options.exit ?? process.exit)(code);
     }
   }
 }
 
-const runtime = new Runtime();
-runtime.boot().catch((error: unknown) => {
-  // Boot failure is the ONE place where exiting is correct: nothing is running yet.
-  console.error('[mohobot] fatal boot error:', error instanceof Error ? error.stack : error);
-  process.exit(1);
-});
+const isMain = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  const runtime = new Runtime();
+  runtime.boot().catch((error: unknown) => {
+    // Boot failure is the ONE place where exiting is correct: nothing is running yet.
+    console.error('[mohobot] fatal boot error:', error instanceof Error ? error.stack : error);
+    process.exit(1);
+  });
+}
