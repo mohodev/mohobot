@@ -122,6 +122,19 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.session.scope).toBe('channel');
   });
 
+  it('reloads an isolated env snapshot without mutating process.env', async () => {
+    await writeGlobal('logLevel: info\n');
+    await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=file-one\nSNAPSHOT_ONLY=present\n');
+    const loader = newLoader();
+    expect((await loader.load()).global.ai.model).toBe('file-one');
+    expect(process.env['SNAPSHOT_ONLY']).toBeUndefined();
+    await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=file-two\n');
+    expect((await loader.reload()).global.ai.model).toBe('file-two');
+    expect(process.env['SNAPSHOT_ONLY']).toBeUndefined();
+    await rm(path.join(rootDir, '.env.local'));
+    expect((await loader.reload()).global.ai.model).not.toBe('file-two');
+  });
+
   it('deep-merges global, bot and provider local overrides without creating duplicate bots', async () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeGlobal(['logLevel: info', 'session:', '  maxMessages: 5', '  ttlSeconds: 60', 'ai:', '  options:', '    budget:', '      rpm: 10', '      concurrency: 2', ''].join('\n'));
