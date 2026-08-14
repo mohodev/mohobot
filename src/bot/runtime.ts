@@ -25,6 +25,10 @@ import type { MemoryAdapter, Storage } from '../storage/types.js';
 import { WorldStore } from '../admin/world.js';
 import { MessageSync } from '../session/message-sync.js';
 import { ThreadLifecycleStore } from '../session/thread-lifecycle.js';
+import { SafeMediaDownloader } from '../media/downloader.js';
+import { VisionRouter } from '../media/vision.js';
+import { MediaRuntime } from '../media/runtime.js';
+import { OpenAICompatibleOcrProvider, OpenAICompatibleVisionProvider } from '../media/openai-compatible.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -164,6 +168,20 @@ export class BotRuntime implements Managed {
       botId: cfg.id,
     });
 
+    let media: MediaRuntime | undefined;
+    if (cfg.media.enabled && (cfg.media.vision.enabled || cfg.media.ocr.enabled)) {
+      const vision = cfg.media.vision.enabled ? new OpenAICompatibleVisionProvider(cfg.media.vision) : undefined;
+      const ocr = cfg.media.ocr.enabled ? new OpenAICompatibleOcrProvider(cfg.media.ocr) : undefined;
+      media = new MediaRuntime({
+        downloader: new SafeMediaDownloader({ maxBytes: cfg.media.maxFileBytes, hostAllowlist: cfg.media.hostAllowlist }),
+        vision: new VisionRouter({ vision, ocr, maxVisionBytes: cfg.media.maxFileBytes, maxOcrBytes: cfg.media.maxFileBytes, cacheTtlMs: cfg.media.cacheTtlMs }),
+        maxAttachments: cfg.media.maxAttachments,
+        maxTotalBytes: cfg.media.maxTotalBytes,
+        concurrency: cfg.media.concurrency,
+        cacheTtlMs: cfg.media.cacheTtlMs,
+      });
+    }
+
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -172,6 +190,7 @@ export class BotRuntime implements Managed {
       events: this.#deps.events,
       logger: this.#logger,
       send,
+      media,
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },

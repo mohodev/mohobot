@@ -84,6 +84,39 @@ export const MemoryConfigSchema = z.object({
 });
 export type MemoryConfig = z.infer<typeof MemoryConfigSchema>;
 
+export const MediaProviderConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  baseUrl: z.string().url().default('https://api.openai.com/v1'),
+  model: z.string().min(1).default('gpt-4o-mini'),
+  /** Name of the environment variable containing the secret. Never the secret itself. */
+  apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/).default('AI_API_KEY'),
+  timeoutMs: z.number().int().positive().max(120000).default(30000),
+});
+export type MediaProviderConfig = z.infer<typeof MediaProviderConfigSchema>;
+
+export const MediaConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Exact download hosts. Redirect targets are checked against the same list. */
+  hostAllowlist: z.array(z.string().trim().min(1)).min(1).default(['cdn.discordapp.com', 'media.discordapp.net']),
+  maxAttachments: z.number().int().positive().max(10).default(4),
+  maxFileBytes: z.number().int().positive().default(10 * 1024 * 1024),
+  maxTotalBytes: z.number().int().positive().default(20 * 1024 * 1024),
+  concurrency: z.number().int().positive().max(8).default(2),
+  cacheTtlMs: z.number().int().positive().default(24 * 60 * 60 * 1000),
+  vision: MediaProviderConfigSchema.default({}),
+  ocr: MediaProviderConfigSchema.default({}),
+});
+export type MediaConfig = z.infer<typeof MediaConfigSchema>;
+export interface ResolvedMediaProviderConfig extends MediaProviderConfig { apiKey: string; }
+export interface ResolvedMediaConfig extends Omit<MediaConfig, 'vision' | 'ocr'> {
+  vision: ResolvedMediaProviderConfig;
+  ocr: ResolvedMediaProviderConfig;
+}
+const MediaConfigOverrideSchema = MediaConfigSchema.partial().extend({
+  vision: MediaProviderConfigSchema.partial().optional(),
+  ocr: MediaProviderConfigSchema.partial().optional(),
+});
+
 export const BotConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().default('MohoBot'),
@@ -106,6 +139,7 @@ export const BotConfigSchema = z.object({
   ai: AIConfigSchema.partial().default({}),
   session: SessionConfigSchema.partial().default({}),
   memory: MemoryConfigSchema.partial().default({}),
+  media: MediaConfigOverrideSchema.default({}),
   /** Plugin ids disabled for this bot only. */
   disabledPlugins: z.array(z.string()).default([]),
   /**
@@ -193,6 +227,7 @@ export const GlobalConfigSchema = z.object({
   ai: AIConfigSchema.default({}),
   session: SessionConfigSchema.default({}),
   memory: MemoryConfigSchema.default({}),
+  media: MediaConfigSchema.default({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 
@@ -205,8 +240,9 @@ export interface ResolvedConfig {
 }
 
 /** A bot config with global defaults + env secrets already merged in. */
-export interface ResolvedBotConfig extends Omit<BotConfig, 'ai' | 'session' | 'memory'> {
+export interface ResolvedBotConfig extends Omit<BotConfig, 'ai' | 'session' | 'memory' | 'media'> {
   ai: AIConfig;
   session: SessionConfig;
   memory: MemoryConfig;
+  media: ResolvedMediaConfig;
 }

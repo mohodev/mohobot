@@ -40,6 +40,15 @@ describe('SafeMediaDownloader', () => {
     expect(result.finalUrl).toBe('https://media.example/final');
   });
 
+  it('enforces an exact host allowlist on initial and redirected URLs', async () => {
+    const fetchImpl = vi.fn(async () => response(null, { status: 302, headers: { location: 'https://evil.example/file' } })) as unknown as typeof fetch;
+    const downloader = new SafeMediaDownloader({ fetchImpl, hostAllowlist: ['cdn.discordapp.com', 'media.discordapp.net'] });
+    await expect(downloader.download('https://example.com/file')).rejects.toSatisfy((error: unknown) => code(error) === 'UNSAFE_URL');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(downloader.download('https://cdn.discordapp.com/start')).rejects.toSatisfy((error: unknown) => code(error) === 'UNSAFE_URL');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects redirects to private or local targets before fetching them', async () => {
     const fetchImpl = vi.fn(async () => response(null, { status: 302, headers: { location: 'http://127.0.0.1/secret' } })) as unknown as typeof fetch;
     await expect(new SafeMediaDownloader({ fetchImpl }).download('https://media.example/start')).rejects.toSatisfy((error: unknown) => code(error) === 'UNSAFE_URL');

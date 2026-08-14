@@ -26,6 +26,8 @@ const ENV_KEYS = [
   'MOHO_BOT_MAIN_AI_MODEL',
   'MOHO_BOT_MAIN_AI_API_KEY',
   'MOHO_BOT_MAIN_AI_BASE_URL',
+  'VISION_SECRET',
+  'OCR_SECRET',
 ];
 
 let rootDir = '';
@@ -124,6 +126,20 @@ describe('ConfigLoader', () => {
     expect(cfg.global.ai.model).toBe('global-model');
     expect(cfg.global.ai.temperature).toBe(0.7);
   });
+
+  it('keeps media disabled by default and resolves inherited per-bot providers from env key names', async () => {
+    await writeGlobal(['media:','  enabled: true','  hostAllowlist: [cdn.discordapp.com]','  vision:','    enabled: true','    model: global-vision','    apiKeyEnv: VISION_SECRET','  ocr:','    enabled: true','    apiKeyEnv: OCR_SECRET',''].join('\n'));
+    await writeBot('main.yaml',['media:','  vision:','    model: bot-vision',''].join('\n'));
+    process.env['VISION_SECRET']='vision-secret-value';
+    const cfg=await newLoader().load(); const media=cfg.bots[0]!.media;
+    expect(media.enabled).toBe(true); expect(media.hostAllowlist).toEqual(['cdn.discordapp.com']);
+    expect(media.vision).toMatchObject({enabled:true,model:'bot-vision',apiKey:'vision-secret-value',apiKeyEnv:'VISION_SECRET'});
+    expect(media.ocr.enabled).toBe(false); expect(media.ocr.apiKey).toBe('');
+    delete process.env['VISION_SECRET'];
+    const zero=await newLoader().load(); expect(zero.bots[0]!.media.vision.enabled).toBe(false);
+  });
+
+  it('keeps synthesized zero-config media disabled',async()=>{await writeGlobal('logLevel: info\n');const cfg=await newLoader().load();expect(cfg.bots[0]?.media.enabled).toBe(false);expect(cfg.bots[0]?.media.hostAllowlist).toEqual(['cdn.discordapp.com','media.discordapp.net']);expect(cfg.bots[0]?.media.vision.enabled).toBe(false);});
 
   it('lets a bot override inherited global ai/session values', async () => {
     await writeGlobal(

@@ -7,6 +7,8 @@ export interface MediaDownloadOptions {
   maxBytes?: number;
   /** Redirect hops. Capped at three even if a larger value is supplied. */
   maxRedirects?: number;
+  /** Exact DNS hosts allowed for the initial request and every redirect. */
+  hostAllowlist?: readonly string[];
 }
 
 export interface DownloadedMedia {
@@ -68,15 +70,27 @@ export class SafeMediaDownloader {
   readonly #timeoutMs: number;
   readonly #maxBytes: number;
   readonly #maxRedirects: number;
+  readonly #hostAllowlist?: ReadonlySet<string>;
 
   constructor(options: MediaDownloadOptions = {}) {
     this.#fetch = options.fetchImpl ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.#maxRedirects = Math.min(3, options.maxRedirects ?? DEFAULT_MAX_REDIRECTS);
+    if (options.hostAllowlist) {
+      const hosts = options.hostAllowlist.map((host) => host.trim().toLowerCase().replace(/\.$/, ''));
+      if (hosts.length === 0 || hosts.some((host) => !host || host.includes('/') || host.includes(':'))) throw new Error('hostAllowlist must contain valid exact DNS hosts');
+      this.#hostAllowlist = new Set(hosts);
+    }
     if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs <= 0) throw new Error('timeoutMs must be a positive safe integer');
     if (!Number.isSafeInteger(this.#maxBytes) || this.#maxBytes <= 0) throw new Error('maxBytes must be a positive safe integer');
     if (!Number.isSafeInteger(this.#maxRedirects) || this.#maxRedirects < 0) throw new Error('maxRedirects must be a non-negative safe integer');
+  }
+
+  #allowed(value: string): boolean {
+    if (!isSafeAttachmentUrl(value)) return false;
+    if (!this.#hostAllowlist) return true;
+    try { return this.#hostAllowlist.has(new URL(value).hostname.toLowerCase().replace(/\.$/, '')); } catch { return false; }
   }
 
   async download(sourceUrl: string): Promise<DownloadedMedia> {
@@ -87,7 +101,7 @@ export class SafeMediaDownloader {
     timer.unref?.();
     try {
       while (true) {
-        if (!isSafeAttachmentUrl(current)) throw new MediaDownloadError('UNSAFE_URL', 'unsafe media URL');
+        if (!this.#allowed(current)) throw new MediaDownloadError('UNSAFE_URL', 'media URL host is not allowed');
         let response: Response;
         try {
           response = await this.#fetch(current, {
@@ -108,7 +122,7 @@ export class SafeMediaDownloader {
           let next: string;
           try { next = new URL(location, current).toString(); }
           catch { throw new MediaDownloadError('INVALID_REDIRECT', 'redirect Location is invalid'); }
-          if (!isSafeAttachmentUrl(next)) throw new MediaDownloadError('UNSAFE_URL', 'redirect points to an unsafe URL');
+          if (!this.#allowed(next)) throw new MediaDownloadError('UNSAFE_URL', 'redirect points to a disallowed host');
           current = next;
           redirects += 1;
           continue;

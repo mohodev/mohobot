@@ -23,6 +23,8 @@ import {
   GlobalConfigSchema,
   LogLevelSchema,
   MemoryConfigSchema,
+  MediaConfigSchema,
+  MediaProviderConfigSchema,
   SessionConfigSchema,
   type AIConfig,
   type BotConfig,
@@ -411,6 +413,19 @@ export class ConfigLoader {
       `bot ${bot.id} memory`,
     );
 
+    const inheritedMedia = this.#parseOr(
+      MediaConfigSchema,
+      { ...global.media, ...pruneUndefined(bot.media), vision: { ...global.media.vision, ...pruneUndefined(bot.media.vision) }, ocr: { ...global.media.ocr, ...pruneUndefined(bot.media.ocr) } },
+      global.media,
+      `bot ${bot.id} media`,
+    );
+    const resolveMediaProvider = (provider: typeof inheritedMedia.vision, label: string) => {
+      const apiKey = provider.enabled ? (envValue(provider.apiKeyEnv!) ?? '') : '';
+      if (provider.enabled && !apiKey) this.#log.warn({ bot: bot.id, provider: label, env: provider.apiKeyEnv }, 'media provider enabled but secret env is unset; provider disabled');
+      return { ...MediaProviderConfigSchema.parse(provider), enabled: provider.enabled && apiKey.length > 0, apiKey };
+    };
+    const media = { ...inheritedMedia, vision: resolveMediaProvider(inheritedMedia.vision, 'vision'), ocr: resolveMediaProvider(inheritedMedia.ocr, 'ocr') };
+
     const discord = { ...bot.discord };
     const token = envValue(`${prefix}DISCORD_TOKEN`) ?? envValue('DISCORD_TOKEN');
     if (token !== undefined) discord.token = token;
@@ -444,7 +459,7 @@ export class ConfigLoader {
       }
     }
 
-    return { ...bot, adapter, discord, ai, session, memory, systemPrompt };
+    return { ...bot, adapter, discord, ai, session, memory, media, systemPrompt };
   }
 
   #applyGlobalEnv(global: GlobalConfig): GlobalConfig {
@@ -454,6 +469,7 @@ export class ConfigLoader {
       ai: { ...global.ai },
       session: { ...global.session },
       memory: { ...global.memory },
+      media: { ...global.media, vision: { ...global.media.vision }, ocr: { ...global.media.ocr } },
     };
 
     const level = envValue('LOG_LEVEL');
@@ -523,6 +539,8 @@ export class ConfigLoader {
     for (const bot of bots) {
       if (bot.ai.apiKey.length > 0) registerSecret(bot.ai.apiKey);
       if (bot.discord.token.length > 0) registerSecret(bot.discord.token);
+      if (bot.media.vision.apiKey.length > 0) registerSecret(bot.media.vision.apiKey);
+      if (bot.media.ocr.apiKey.length > 0) registerSecret(bot.media.ocr.apiKey);
     }
   }
 
