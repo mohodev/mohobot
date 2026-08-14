@@ -144,7 +144,7 @@ export class OutboxWorker {
     const started=Date.now();
     try {
       await this.#mirror.send(event);
-      await this.#outbox.release(event.eventId, this.#workerId, { done: true });
+      await this.#outbox.release(event.eventId, this.#workerId, { claimToken: event.claimToken!, done: true });
       this.#stats.sent += 1;
       runtimeMetrics.outbox.record(Date.now()-started,true);
     } catch (error) {
@@ -153,6 +153,7 @@ export class OutboxWorker {
         ? this.#retryDelay(event, error)
         : this.#retryDelay);
       await this.#outbox.release(event.eventId, this.#workerId, {
+        claimToken: event.claimToken!,
         error: error instanceof Error ? error.message : String(error),
         retryAfterMs,
       });
