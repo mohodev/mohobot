@@ -1,5 +1,6 @@
 import type { Logger } from '../core/logger.js';
 import type { RerankProvider } from '../memory/semantic-memory.js';
+import { runtimeMetrics } from '../core/runtime-metrics.js';
 
 export interface RerankConfig {
   baseUrl: string;
@@ -42,6 +43,7 @@ export class OpenAIRerankProvider implements RerankProvider {
     const controller = new AbortController();
     const timeoutMs = this.#config.timeoutMs ?? 20_000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const started = Date.now();
 
     try {
       const response = await fetch(`${this.#config.baseUrl.replace(/\/$/, '')}/rerank`, {
@@ -96,8 +98,10 @@ export class OpenAIRerankProvider implements RerankProvider {
       });
 
       if (output.length > topN) throw new Error('rerank response exceeds requested top_n');
+      runtimeMetrics.rerank.record(Date.now()-started,true);
       return output;
     } catch (error) {
+      runtimeMetrics.rerank.record(Date.now()-started,false);
       this.#logger.debug({ err: error }, 'rerank request failed');
       throw error;
     } finally {

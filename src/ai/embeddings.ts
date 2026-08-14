@@ -1,4 +1,5 @@
 import type { Logger } from '../core/logger.js';
+import { runtimeMetrics } from '../core/runtime-metrics.js';
 
 export interface EmbeddingProvider { readonly name: string; readonly model: string; embed(input: string | string[], options?: { timeoutMs?: number }): Promise<number[][]>; }
 export interface EmbeddingConfig { baseUrl: string; apiKey: string; model: string; timeoutMs?: number; }
@@ -13,14 +14,16 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
   async embed(input: string | string[], options: { timeoutMs?: number } = {}): Promise<number[][]> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? this.#cfg.timeoutMs ?? 20_000);
+    const started=Date.now();
     try {
       const response = await fetch(`${this.#cfg.baseUrl.replace(/\/$/, '')}/embeddings`, { method: 'POST', headers: { 'content-type': 'application/json', ...(this.#cfg.apiKey ? { authorization: `Bearer ${this.#cfg.apiKey}` } : {}) }, body: JSON.stringify({ model: this.#cfg.model, input }), signal: controller.signal });
       if (!response.ok) throw new Error(`embedding request failed: HTTP ${response.status}`);
       const payload = await response.json() as { data?: Array<{ embedding?: unknown; index?: number }> };
       const rows = (payload.data ?? []).sort((a,b)=>(a.index ?? 0)-(b.index ?? 0));
       if (!rows.length || rows.some((row) => !Array.isArray(row.embedding) || row.embedding.some((value) => typeof value !== 'number'))) throw new Error('embedding response has invalid vectors');
+      runtimeMetrics.embedding.record(Date.now()-started,true);
       return rows.map((row) => row.embedding as number[]);
-    } catch (error) { this.#logger.debug({ err: error }, 'embedding request failed'); throw error; }
+    } catch (error) { runtimeMetrics.embedding.record(Date.now()-started,false);this.#logger.debug({ err: error }, 'embedding request failed'); throw error; }
     finally { clearTimeout(timer); }
   }
 }
