@@ -16,6 +16,36 @@ import type { SessionManagerLike } from '../session/types.js';
 import { buildContextAnchor, MessagePipeline } from './pipeline.js';
 
 describe('MessagePipeline ordering', () => {
+  it('persists source identity on the user turn', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456' }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+    };
+    const appended: Array<import('../core/types.js').ChatMessage> = [];
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: appended, updatedAt: 0 }; },
+      async append(_key, message) { appended.push(message); },
+      async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }, ...appended]; },
+      async clear() {}, async sweep() { return 0; }, size() { return 1; },
+    };
+    const pipeline = new MessagePipeline({
+      config,
+      provider: { name: 'test', model: 'test', async chat() { return { content: 'ok', model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      sessions, events: new EventBus(), logger: createNullLogger(), send: async () => {},
+    });
+    await pipeline.handle({
+      id: 'source-42', platform: 'discord', botId: 'main', channel: { id: 'c', dm: true },
+      author: { id: 'u', username: 'user', bot: false }, content: 'hello', mentionsBot: true,
+      attachments: [], createdAt: 1234,
+    });
+    expect(appended[0]).toMatchObject({
+      role: 'user', content: 'hello', sourceMessageId: 'source-42', sourcePlatform: 'discord', createdAt: 1234,
+    });
+  });
+
   it('serializes concurrent messages in the same user session', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {

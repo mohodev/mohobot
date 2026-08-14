@@ -10,7 +10,9 @@ import type { SessionConfig } from '../config/schema.js';
 import type { Logger } from '../core/logger.js';
 import type { ChatMessage } from '../core/types.js';
 import { nullMemoryAdapter, type MemoryAdapter, type PersistedSession, type Storage } from '../storage/types.js';
-import type { Session, SessionKeyInput, SessionManagerLike } from './types.js';
+import type {
+  Session, SessionKeyInput, SessionManagerLike, SourceMessageMutation, SourceMessageUpdate,
+} from './types.js';
 
 export interface SessionManagerOptions {
   botId: string;
@@ -152,6 +154,77 @@ export class SessionManager implements SessionManagerLike {
     }
   }
 
+  async updateSourceMessage(input: SourceMessageUpdate): Promise<boolean> {
+    return this.#mutateSourceMessage(input, (message) => {
+      if (message.deleted || message.content === input.content) return false;
+      message.content = input.content;
+      return true;
+    });
+  }
+
+  async deleteSourceMessage(input: SourceMessageMutation): Promise<boolean> {
+    return this.#mutateSourceMessage(input, (message) => {
+      if (message.deleted) return false;
+      message.deleted = true;
+      return true;
+    });
+  }
+
+  async #mutateSourceMessage(
+    input: SourceMessageMutation,
+    mutate: (message: ChatMessage) => boolean,
+  ): Promise<boolean> {
+    const sessions = await this.#sourceCandidates(input);
+    for (const session of sessions) {
+      const message = session.messages.find((candidate) => candidate.role === 'user'
+        && candidate.sourceMessageId === input.sourceMessageId
+        && candidate.sourcePlatform === input.sourcePlatform);
+      if (!message) continue;
+      if (!mutate(message)) return false;
+      session.updatedAt = Date.now();
+      this.#save(session);
+      return true;
+    }
+    return false;
+  }
+
+  async #sourceCandidates(input: SourceMessageMutation): Promise<Session[]> {
+    if (this.#config.scope === 'channel' || input.userId) {
+      return [await this.get({
+        botId: input.botId,
+        channelId: input.channelId,
+        userId: input.userId ?? '',
+      })];
+    }
+
+    const prefix = `session:${input.botId || this.#botId}:${input.channelId}:`;
+    const candidates = [...this.#cache.values()].filter((session) => session.key.startsWith(prefix));
+    const seen = new Set(candidates.map((session) => session.key));
+    if (!this.#persistEnabled || !this.#storage) return candidates;
+
+    try {
+      const stored = await this.#storage.query<PersistedSession>({ prefix });
+      for (const row of stored) {
+        if (seen.has(row.key) || !Array.isArray(row.value.messages)) continue;
+        const session: Session = {
+          key: row.key,
+          botId: row.value.botId || input.botId || this.#botId,
+          channelId: row.value.channelId || input.channelId,
+          userId: row.value.userId,
+          messages: row.value.messages.map((message) => ({ ...message })),
+          updatedAt: row.value.updatedAt,
+        };
+        this.#cache.set(row.key, session);
+        this.#hydrated.add(row.key);
+        candidates.push(session);
+        seen.add(row.key);
+      }
+    } catch (error) {
+      this.#logger.warn({ prefix, error: describe(error) }, 'session source lookup failed');
+    }
+    return candidates;
+  }
+
   /** Enforce maxMessages then maxChars, dropping the oldest turns first. */
   #trim(session: Session): void {
     const maxMessages = this.#config.maxMessages;
@@ -176,9 +249,10 @@ export class SessionManager implements SessionManagerLike {
   async buildContext(input: SessionKeyInput, systemPrompt: string): Promise<ChatMessage[]> {
     const session = await this.get(input);
 
+    const activeMessages = session.messages.filter((message) => !message.deleted);
     let query = '';
-    for (let i = session.messages.length - 1; i >= 0; i -= 1) {
-      const m = session.messages[i];
+    for (let i = activeMessages.length - 1; i >= 0; i -= 1) {
+      const m = activeMessages[i];
       if (m && m.role === 'user') {
         query = m.content;
         break;
@@ -201,7 +275,7 @@ export class SessionManager implements SessionManagerLike {
       );
     }
 
-    return [{ role: 'system', content: systemPrompt }, ...recalled, ...session.messages];
+    return [{ role: 'system', content: systemPrompt }, ...recalled, ...activeMessages];
   }
 
   async clear(input: SessionKeyInput): Promise<void> {

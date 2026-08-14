@@ -34,8 +34,10 @@ function fakeStorage(): Storage & { data: Map<string, unknown>; saves: number } 
     async delete(key: string): Promise<void> {
       data.delete(key);
     },
-    async query<T>(_filter: QueryFilter): Promise<StoredRecord<T>[]> {
-      return [];
+    async query<T>(filter: QueryFilter): Promise<StoredRecord<T>[]> {
+      return [...data.entries()]
+        .filter(([key]) => !filter.prefix || key.startsWith(filter.prefix))
+        .map(([key, value]) => ({ key, value: value as T, updatedAt: Date.now() }));
     },
     async purgeExpired(): Promise<number> {
       return 0;
@@ -247,6 +249,60 @@ describe('SessionManager persistence', () => {
 
     await expect(mgr.clear(input)).resolves.toBeUndefined();
     await expect(mgr.flush()).resolves.toBeUndefined();
+  });
+});
+
+describe('SessionManager source lifecycle corrections', () => {
+  const sourced = (content: string): ChatMessage => ({
+    role: 'user', content, sourceMessageId: 'discord-message-1', sourcePlatform: 'discord', createdAt: 100,
+  });
+
+  it('updates a persisted user-scoped session after restart without authorId', async () => {
+    const storage = fakeStorage();
+    const cfg = config({ persist: true, scope: 'user' });
+    const first = new SessionManager({ botId: 'bot1', config: cfg, logger, storage });
+    await first.append(input, sourced('before edit'));
+    await first.flush();
+
+    const restarted = new SessionManager({ botId: 'bot1', config: cfg, logger, storage });
+    const update = {
+      botId: 'bot1', channelId: 'chan1', sourceMessageId: 'discord-message-1', sourcePlatform: 'discord' as const, content: 'after edit',
+    };
+    await expect(restarted.updateSourceMessage(update)).resolves.toBe(true);
+    await expect(restarted.updateSourceMessage(update)).resolves.toBe(false);
+    await restarted.flush();
+
+    const restored = await restarted.get(input);
+    expect(restored.messages[0]).toMatchObject({ content: 'after edit', sourceMessageId: 'discord-message-1' });
+    expect(restored.messages[0]).not.toHaveProperty('deleted');
+  });
+
+  it('keeps a delete tombstone persisted and excludes it from model context', async () => {
+    const storage = fakeStorage();
+    const cfg = config({ persist: true, scope: 'user' });
+    const manager = new SessionManager({ botId: 'bot1', config: cfg, logger, storage });
+    await manager.append(input, sourced('remove me'));
+    await expect(manager.deleteSourceMessage({
+      ...input, sourceMessageId: 'discord-message-1', sourcePlatform: 'discord',
+    })).resolves.toBe(true);
+    await manager.flush();
+
+    expect((await manager.get(input)).messages[0]).toMatchObject({ content: 'remove me', deleted: true });
+    expect((await manager.buildContext(input, 'SYS')).map((message) => message.content)).toEqual(['SYS']);
+
+    const restarted = new SessionManager({ botId: 'bot1', config: cfg, logger, storage });
+    expect((await restarted.get(input)).messages[0]).toMatchObject({ content: 'remove me', deleted: true });
+    expect((await restarted.buildContext(input, 'SYS')).map((message) => message.content)).toEqual(['SYS']);
+  });
+
+  it('does not let a late update revive a deleted source message', async () => {
+    const manager = new SessionManager({ botId: 'bot1', config: config({ scope: 'channel' }), logger });
+    await manager.append(input, sourced('original'));
+    const mutation = { botId: 'bot1', channelId: 'chan1', sourceMessageId: 'discord-message-1', sourcePlatform: 'discord' as const };
+    await expect(manager.deleteSourceMessage(mutation)).resolves.toBe(true);
+    await expect(manager.deleteSourceMessage(mutation)).resolves.toBe(false);
+    await expect(manager.updateSourceMessage({ ...mutation, content: 'late edit' })).resolves.toBe(false);
+    expect((await manager.get(input)).messages[0]).toMatchObject({ content: 'original', deleted: true });
   });
 });
 

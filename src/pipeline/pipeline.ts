@@ -259,6 +259,9 @@ export class MessagePipeline {
         role: 'user',
         content: prompt,
         name: message.author.username,
+        sourceMessageId: message.id,
+        sourcePlatform: message.platform,
+        createdAt: message.createdAt,
       });
     } catch (error) {
       this.#logger.warn({ err: String(error) }, 'failed to persist user turn');
@@ -328,7 +331,10 @@ export class MessagePipeline {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
       if (typeof sessions.completeExchange === 'function') {
-        await sessions.completeExchange(key, { role: 'user', content: prompt, name: message.author.username }, assistantTurn);
+        await sessions.completeExchange(key, {
+          role: 'user', content: prompt, name: message.author.username,
+          sourceMessageId: message.id, sourcePlatform: message.platform, createdAt: message.createdAt,
+        }, assistantTurn);
       } else {
         await sessions.append(key, assistantTurn);
       }
