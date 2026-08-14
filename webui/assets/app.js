@@ -67,7 +67,7 @@ function askConfirmation(description) {
 
 async function confirmedRequest(path, options, confirmation) {
   if (!await askConfirmation(confirmation.description)) throw new ApiError('操作已取消', 0, {});
-  const issued = await request('/confirmations', { method: 'POST', body: body({ permission: confirmation.permission, action: confirmation.action, payload: confirmation.payload }) });
+  const issued = await request('/confirmations', { method: 'POST', body: body({ method: options.method || 'POST', path, body: confirmation.payload }) });
   const nonce = valueOf(issued.confirmation, ['nonce'], issued.nonce);
   if (!nonce) throw new ApiError('确认服务没有返回 nonce', 500, issued);
   return request(path, { ...options, headers: { ...(options.headers || {}), 'X-Admin-Confirmation': nonce } });
@@ -105,7 +105,7 @@ loginForm.addEventListener('submit', async (event) => {
   try {
     let result;
     if (legacyMode) {
-      result = await fetch('/api/auth/session', { method: 'POST', headers: { 'x-admin-token': document.querySelector('#bootstrap-token').value, 'x-admin-actor': document.querySelector('#bootstrap-actor').value || 'local-admin', accept: 'application/json' } });
+      result = await fetch('/api/auth/session', { method: 'POST', headers: { 'x-admin-token': document.querySelector('#bootstrap-token').value, accept: 'application/json' } });
     } else {
       result = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: body({ username: document.querySelector('#username').value, password: document.querySelector('#password').value }) });
     }
