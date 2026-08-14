@@ -346,6 +346,9 @@ export class BotRuntime implements Managed {
     await this.#plugins?.unload(pluginId);
   }
 
+  /** Debug-only provider access. It deliberately excludes pipeline, gateway and state stores. */
+  debugProvider(): AIProvider | undefined { return this.#provider; }
+
   snapshot(): BotSnapshot {
     return {
       id: this.#config.id,

@@ -32,6 +32,7 @@ import type { OptionalRemoteDrivers } from './storage/remote-factory.js';
 import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtime.js';
 import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
+import{DebugChatFacade}from'./admin/debug-chat.js';
 import{ProviderControlFacade}from'./admin/provider-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
@@ -188,6 +189,7 @@ export class Runtime {
         },
         reloadPlugin: async (botId, pluginId) => this.#bots.get(botId)?.reloadPlugin(pluginId) ?? false,
       });
+      const debugChat=new DebugChatFacade({providers:()=>[...this.#bots.entries()].map(([id,bot])=>({id,provider:bot.debugProvider()})),logger:this.#logger});
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,
@@ -203,6 +205,7 @@ export class Runtime {
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
         logs:this.#logs,
         providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
+        debugChat,
       });
       await this.#admin.start();
     } else {
