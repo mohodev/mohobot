@@ -139,6 +139,8 @@ describe('PluginManager', () => {
     expect(registries.providers.has('leaked-provider')).toBe(false);
   });
 
+  it('tags registry ownership with bot and plugin ids',async()=>{await writePlugin('shared',`export default { onLoad(ctx){ctx.registry.providers.register('provider-a',()=>({}),{});}}`);const registries=createRegistries();const first=makeManager({registries,botConfig:{...makeBotConfig(),id:'first'}});expect(await first.load('shared')).toBe(true);expect(registries.providers.list().find(x=>x.name==='provider-a')?.source).toBe('plugin:first:shared');await first.unload('shared');expect(registries.providers.has('provider-a')).toBe(false);});
+
   it('survives a plugin with a syntax error', async () => {
     await writePlugin('broken', `export default { name: 'broken', ;;; }`);
     await writePlugin('ok', `export default { name: 'ok' };`);
