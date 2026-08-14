@@ -31,6 +31,7 @@ printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 |---|---|
 | `npm start` | 启动 Runtime |
 | `npm run dev` | 监听源码并重启 |
+| `npm run preflight` | 离线检查配置、目录写权限与 SQLite 迁移 |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 回归测试 |
 | `npm run build` | 构建到 `dist/` |
