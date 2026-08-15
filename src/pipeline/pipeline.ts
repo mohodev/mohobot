@@ -84,6 +84,8 @@ export interface PipelineDeps {
   /** Omitted unless media is explicitly enabled and has a usable provider. */
   media?: Pick<MediaRuntime, 'process'>;
   traces?: ChatTraceStore;
+  /** Root for World/Device state. Defaults to MOHO_ROOT/process cwd for compatibility. */
+  stateRoot?: string;
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
 }
 
@@ -193,7 +195,7 @@ export class MessagePipeline {
     this.#deps = deps;
     this.#logger = deps.logger.child({ component: 'pipeline' });
     this.#traces = deps.traces ?? new ChatTraceStore();
-    const root = process.env.MOHO_ROOT || process.cwd();
+    const root = deps.stateRoot ?? (process.env.MOHO_ROOT || process.cwd());
     this.#device = new DeviceStore(root);
     this.#world = new WorldStore(root);
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
