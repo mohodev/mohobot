@@ -8,8 +8,9 @@ name: 墨染荷韵
 # Only this designated administrator persona may process `?` commands.
 # Put actual Discord user IDs here; everyone else receives no response.
 admin:
-  enabled: false
-  userIds: []
+  enabled: true
+  userIds:
+    - "1352719954222383115"
 
 # Optional coarse public activity in Discord, projected from the character
 # world state. It never exposes relationship scores, diary text or exact device data.
