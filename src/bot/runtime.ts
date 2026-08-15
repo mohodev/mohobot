@@ -20,6 +20,7 @@ import { HealthCoordinator, type HealthSnapshot } from '../ai/health-coordinator
 import { createGateway } from '../discord/index.js';
 import type { Gateway, GatewayStatus } from '../discord/types.js';
 import { SessionManager } from '../session/manager.js';
+import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { scopeStorage } from '../storage/index.js';
@@ -93,6 +94,10 @@ export class BotRuntime implements Managed {
 
   get pluginManager(): PluginManager | undefined {
     return this.#plugins;
+  }
+
+  get gateway(): Gateway | undefined {
+    return this.#gateway;
   }
 
   async start(): Promise<void> {
@@ -191,6 +196,7 @@ export class BotRuntime implements Managed {
       });
     }
 
+    const reflection = this.#deps.storage ? new ProfileReflectionWorker(this.#deps.storage, this.#logger) : undefined;
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -200,15 +206,33 @@ export class BotRuntime implements Managed {
       logger: this.#logger,
       send,
       media,
+      reflection,
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },
     });
 
+    // Redacted operational summaries go to the configured private log channel.
+    // Never include user text, prompts, model output, tokens, or credentials.
+    const logChannelId = cfg.discord.logChannelId;
+    const reportOperational = async (title: string, fields: Record<string, string | number | boolean | undefined>): Promise<void> => {
+      if (!logChannelId || !this.#gateway) return;
+      const detail = Object.entries(fields).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}: ${value}`).join(' · ');
+      try { await this.#gateway.send({ channelId: logChannelId, content: `⚠️ ${title}${detail ? `\n${detail}` : ''}`, suppressMentions: true }); }
+      catch (error) { this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'failed to deliver operational log'); }
+    };
+
     // Only react to events addressed to THIS bot.
     const messageSync = this.#deps.storage ? new MessageSync({ storage: this.#deps.storage }) : undefined;
     const threadLifecycle = this.#deps.storage ? new ThreadLifecycleStore(this.#deps.storage, this.#logger) : undefined;
     this.#unsubscribe.push(
+      this.#deps.events.on('chat:trace', ({ botId, traceId, messageId, channelId, event }) => {
+        if (botId !== cfg.id) return;
+        if (event.stage === 'model_failed' || event.stage === 'delivery_failed') void reportOperational('聊天链路异常', { trace: traceId, message: messageId, channel: channelId, stage: event.stage, kind: typeof event.detail?.kind === 'string' ? event.detail.kind : undefined });
+      }),
+      this.#deps.events.on('gateway:disconnect', ({ botId }) => { if (botId === cfg.id) void reportOperational('Discord 网关断开', { bot: cfg.id }); }),
+      this.#deps.events.on('gateway:error', ({ botId }) => { if (botId === cfg.id) void reportOperational('Discord 网关错误', { bot: cfg.id }); }),
+      this.#deps.events.on('config:reload:failed', () => { void reportOperational('配置重载失败', { bot: cfg.id }); }),
       this.#deps.events.on('message:create', ({ message }) => {
         if (message.botId !== cfg.id) return;
         void this.#pipeline?.handle(message as MohoMessage);
@@ -247,8 +271,8 @@ export class BotRuntime implements Managed {
         void threadLifecycle.apply(event, cfg.session, this.#sessions)
           .catch((error) => this.#logger.warn({ err: error }, 'thread lifecycle sync failed'));
       }),
-      this.#deps.events.on('interaction:create', ({ botId, name, userId, reply }) => {
-        if (botId !== cfg.id || name !== 'status' || !cfg.admin.enabled || !cfg.admin.userIds.includes(userId)) return;
+      this.#deps.events.on('interaction:create', ({ botId, name, isBotManager, reply }) => {
+        if (botId !== cfg.id || name !== 'status' || !cfg.admin.enabled || isBotManager !== true) return;
         const snapshot = this.snapshot();
         void reply(`状态：${snapshot.running ? '运行中' : '已停止'}\n网关：${snapshot.gateway.connected ? '已连接' : '未连接'}\n模型：${snapshot.provider} / ${snapshot.model}\n会话：${snapshot.sessions}｜已回复：${snapshot.pipeline.replied}｜AI 失败：${snapshot.pipeline.aiFailures}`);
       }),

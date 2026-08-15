@@ -21,6 +21,7 @@ import {
   type ThreadChannel,
   type MessageCreateOptions,
   type SendableChannels,
+  type NonThreadGuildBasedChannel,
 } from 'discord.js';
 
 import type { ResolvedBotConfig } from '../config/schema.js';
@@ -32,6 +33,7 @@ import type { Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
 import { WorldStore } from '../admin/world.js';
 import { presenceFromWorld } from './presence.js';
+import type { GuildInventory, GuildPlan } from './guild-admin.js';
 
 export interface DiscordGatewayOptions {
   botId: BotId;
@@ -285,6 +287,59 @@ export class DiscordGateway implements Gateway {
     };
   }
 
+  async guildInventory(guildId: string): Promise<GuildInventory> {
+    const client = this.#client;
+    if (!client?.isReady()) throw new Error('Discord gateway is not ready');
+    const guild = await client.guilds.fetch(guildId);
+    const channels = await guild.channels.fetch();
+    const views = [...channels.values()].filter((channel): channel is NonThreadGuildBasedChannel => channel !== null).map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      kind: channel.type === ChannelType.GuildCategory ? 'category' as const : channel.type === ChannelType.GuildText ? 'text' as const : channel.type === ChannelType.GuildVoice ? 'voice' as const : 'other' as const,
+      ...(channel.parentId ? { parentId: channel.parentId } : {}),
+      position: channel.position,
+      ...(channel.type === ChannelType.GuildText && channel.topic ? { topic: channel.topic } : {}),
+    }));
+    const roles = [...(await guild.roles.fetch()).values()].map((role) => ({ id: role.id, name: role.name, position: role.position, managed: role.managed }));
+    return { guildId: guild.id, name: guild.name, ownerId: guild.ownerId, communityEnabled: guild.features.includes('COMMUNITY'), channels: views, roles };
+  }
+
+  async applyGuildPlan(plan: GuildPlan): Promise<{ applied: number; skipped: number }> {
+    const client = this.#client;
+    if (!client?.isReady()) throw new Error('Discord gateway is not ready');
+    if (!plan.guildId || plan.communityEnabled !== false || plan.actions.length > 100) throw new Error('guild plan is invalid');
+    const guild = await client.guilds.fetch(plan.guildId);
+    const allowed = new Set(['create-category', 'create-text', 'create-voice', 'move-channel', 'set-topic']);
+    if (plan.actions.some((action) => !allowed.has(action.kind))) throw new Error('guild plan contains a forbidden action');
+    let applied = 0; let skipped = 0;
+    const categories = async () => new Map((await guild.channels.fetch()).filter((channel): channel is NonThreadGuildBasedChannel => channel !== null && channel.type === ChannelType.GuildCategory).map((channel) => [channel.name.toLowerCase(), channel]));
+    for (const action of plan.actions) {
+      if (action.kind === 'create-category') {
+        const found = (await categories()).get(action.name.toLowerCase());
+        if (found) { skipped += 1; continue; }
+        await guild.channels.create({ name: action.name, type: ChannelType.GuildCategory }); applied += 1;
+      } else if (action.kind === 'create-text' || action.kind === 'create-voice') {
+        const parent = (await categories()).get(action.category.toLowerCase());
+        if (!parent) throw new Error(`category missing: ${action.category}`);
+        const current = (await guild.channels.fetch()).find((channel) => channel?.name.toLowerCase() === action.name.toLowerCase() && channel.parentId === parent.id);
+        if (current) { skipped += 1; continue; }
+        await guild.channels.create({ name: action.name, type: action.kind === 'create-text' ? ChannelType.GuildText : ChannelType.GuildVoice, parent: parent.id, ...(action.kind === 'create-text' ? { topic: action.topic } : {}) }); applied += 1;
+      } else {
+        const channel = await guild.channels.fetch(action.channelId);
+        if (!channel) { skipped += 1; continue; }
+        if (action.kind === 'move-channel') {
+          const parent = (await categories()).get(action.category.toLowerCase());
+          if (!parent || channel.parentId === parent.id) { skipped += 1; continue; }
+          await guild.channels.edit(channel.id, { parent: parent.id, lockPermissions: false }); applied += 1;
+        } else if (action.kind === 'set-topic' && channel.type === ChannelType.GuildText) {
+          if (channel.topic === action.topic) { skipped += 1; continue; }
+          await channel.setTopic(action.topic); applied += 1;
+        }
+      }
+    }
+    return { applied, skipped };
+  }
+
   // ---------------------------------------------------------------- listeners
 
   /** Attach a listener that can never throw into discord.js' emitter. */
@@ -412,6 +467,7 @@ export class DiscordGateway implements Gateway {
 
     if (content.trim().length === 0 && message.attachments.size === 0) return;
 
+    const isBotManager = await this.#isBotManager(guildId, message.author.id);
     const channel = message.channel;
     const channelName =
       'name' in channel && typeof channel.name === 'string' ? channel.name : undefined;
@@ -424,6 +480,7 @@ export class DiscordGateway implements Gateway {
         username: message.author.username,
         globalName: message.author.globalName,
         bot: message.author.bot,
+        isBotManager,
       },
       channelId: message.channelId,
       guildId,
@@ -463,6 +520,20 @@ export class DiscordGateway implements Gateway {
     this.#events.emit('thread:lifecycle', toThreadLifecycleEvent(this.botId, action, thread));
   }
 
+  async #isBotManager(guildId: string | undefined, userId: string): Promise<boolean> {
+    if (!guildId || (this.#config.admin.guildIds.length > 0 && !this.#config.admin.guildIds.includes(guildId))) return false;
+    if (this.#config.admin.userIds.includes(userId)) return true;
+    const names = new Set(this.#config.admin.roleNames.map((name) => name.trim().toLowerCase()).filter(Boolean));
+    if (names.size === 0) return false;
+    try {
+      const guild = await this.#client?.guilds.fetch(guildId);
+      const member = await guild?.members.fetch(userId);
+      return Boolean(member?.roles.cache.some((role) => names.has(role.name.trim().toLowerCase())));
+    } catch {
+      return false;
+    }
+  }
+
   async #isReplyToBot(message: Message, selfId: string): Promise<boolean> {
     const referencedId = message.reference?.messageId;
     if (!referencedId) return false;
@@ -480,10 +551,10 @@ export class DiscordGateway implements Gateway {
     }
   }
 
-  #onInteraction(interaction: Interaction): void {
+  async #onInteraction(interaction: Interaction): Promise<void> {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== 'status') return;
-    if (!this.#config.admin.enabled || !this.#config.admin.userIds.includes(interaction.user.id)) {
+    if (!this.#config.admin.enabled || !(await this.#isBotManager(interaction.guildId ?? undefined, interaction.user.id))) {
       void interaction.reply({ content: '这个入口只对授权管理员开放。', flags: MessageFlags.Ephemeral }).catch(() => {});
       return;
     }
@@ -521,6 +592,7 @@ export class DiscordGateway implements Gateway {
       name: interaction.commandName,
       channelId: interaction.channelId,
       userId: interaction.user.id,
+      isBotManager: await this.#isBotManager(interaction.guildId ?? undefined, interaction.user.id),
       options,
       reply,
     });

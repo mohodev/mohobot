@@ -14,6 +14,7 @@ import { createNullLogger } from '../core/logger.js';
 import type { MohoMessage } from '../core/types.js';
 import type { SessionManagerLike } from '../session/types.js';
 import { buildContextAnchor, MessagePipeline, type PipelineDeps } from './pipeline.js';
+import { ChatTraceStore } from './chat-trace.js';
 
 describe('MessagePipeline ordering', () => {
   it('persists source identity on the user turn', async () => {
@@ -36,10 +37,11 @@ describe('MessagePipeline ordering', () => {
     const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
     const first = `${'a'.repeat(180)}。`;
     const full = `${first}尾句。`;
+    const traces = new ChatTraceStore();
     const pipeline = new MessagePipeline({
       config,
       provider: { name: 'test', model: 'test', async chat(_messages, options) { seenMaxTokens = options?.maxTokens; options?.onDelta?.(first); options?.onDelta?.('尾句。'); return { content: full, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
-      sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { outgoing.push(out); },
+      sessions, events: new EventBus(), logger: createNullLogger(), traces, send: async (out) => { outgoing.push(out); },
     });
     await pipeline.handle({
       id: 'source-42', platform: 'discord', botId: 'main', channel: { id: 'c', dm: false },
@@ -53,6 +55,7 @@ describe('MessagePipeline ordering', () => {
     expect(outgoing).toHaveLength(2);
     expect(outgoing[0]).toMatchObject({ content: `<@u> ${first}`, replyToId: 'source-42', mentionUserId: 'u' });
     expect(outgoing[1]).toMatchObject({ content: '尾句。' });
+    expect(traces.list()[0]?.events.map((event) => event.stage)).toEqual(expect.arrayContaining(['observed','context','model_started','delta','model_completed','delivered','memory_written']));
   });
 
   it('serializes concurrent messages in the same user session', async () => {
@@ -94,6 +97,7 @@ describe('MessagePipeline ordering', () => {
       async health() { return { ok: true }; },
     };
     const sent: string[] = [];
+    const traces = new ChatTraceStore();
     const pipeline = new MessagePipeline({
       config,
       provider,
@@ -170,10 +174,12 @@ describe('admin ? commands', () => {
     const sessions: SessionManagerLike = { async get() { return { key: 'k', botId: 'admin', channelId: 'c', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext() { return []; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } };
     const sent: string[] = [];
     const pipeline = new MessagePipeline({ config, provider: { name: 'x', model: 'x', async chat() { throw new Error('must not call model'); }, async health() { return { ok: true }; } }, sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { sent.push(out.content); } });
-    const make = (author: string): MohoMessage => ({ id: author, platform: 'console', botId: 'admin', channel: { id: 'c', dm: true }, author: { id: author, username: author, bot: false }, content: '?status', mentionsBot: true, attachments: [], createdAt: 0 });
+    const make = (author: string, isBotManager = false): MohoMessage => ({ id: author, platform: 'console', botId: 'admin', channel: { id: 'c', dm: true }, author: { id: author, username: author, bot: false, ...(isBotManager ? { isBotManager: true } : {}) }, content: '?status', mentionsBot: true, attachments: [], createdAt: 0 });
     await pipeline.handle(make('guest'));
     expect(sent).toEqual([]);
     await pipeline.handle(make('owner'));
+    expect(sent).toEqual([]);
+    await pipeline.handle(make('owner', true));
     expect(sent).toHaveLength(1);
     expect(sent[0]).toContain('管理状态');
   });

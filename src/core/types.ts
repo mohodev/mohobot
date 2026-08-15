@@ -17,6 +17,8 @@ export interface MohoUser {
   username: string;
   displayName?: string;
   bot: boolean;
+  /** Set only by an authenticated gateway after checking a configured guild role. */
+  isBotManager?: boolean;
 }
 
 export interface MohoChannel {

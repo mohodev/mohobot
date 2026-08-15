@@ -110,7 +110,7 @@ describe('ConfigLoader', () => {
   it('resolves an opt-in administrator bot allowlist', async () => {
     await writeBot('main.yaml', ['name: 墨染荷韵', 'admin:', '  enabled: true', '  userIds:', '    - "123"', ''].join('\n'));
     const cfg = await newLoader().load();
-    expect(cfg.bots[0]?.admin).toEqual({ enabled: true, userIds: ['123'] });
+    expect(cfg.bots[0]?.admin).toEqual({ enabled: true, userIds: ['123'], roleNames: ['Bot 管理'], guildIds: [] });
   });
 
   it('keeps legacy tracked-only fixtures working unchanged', async () => {

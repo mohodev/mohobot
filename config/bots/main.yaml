@@ -9,8 +9,13 @@ name: 墨染荷韵
 # Put actual Discord user IDs here; everyone else receives no response.
 admin:
   enabled: true
+  # Emergency break-glass owner only. Normal Discord admin access is role-based.
   userIds:
     - "1352719954222383115"
+  roleNames:
+    - "Bot 管理"
+  guildIds:
+    - "1535564960929681418"
 
 # Optional coarse public activity in Discord, projected from the character
 # world state. It never exposes relationship scores, diary text or exact device data.
@@ -33,11 +38,18 @@ discord:
   ignoreBots: true
   typingIndicator: true
   maxReplyLength: 1900
+  # #记录：only redacted failures and lifecycle warnings, never chat bodies.
+  logChannelId: "1538031083893817345"
 
 session:
   # One shared timeline per group/channel, so the persona can follow the room.
   scope: channel
   maxMessages: 20
+
+# Persist successful exchanges for safe semantic recall; embeddings remain optional.
+memory:
+  enabled: true
+  adapter: semantic
 
 disabledPlugins: []
 

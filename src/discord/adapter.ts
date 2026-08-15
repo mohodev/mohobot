@@ -28,6 +28,7 @@ export interface AdapterAuthorInput {
   /** Discord "global name"; becomes MohoUser.displayName. */
   globalName?: string | null;
   bot: boolean;
+  isBotManager?: boolean;
 }
 
 export interface AdapterAttachmentInput {
@@ -78,6 +79,7 @@ function mapAuthor(author: AdapterAuthorInput): MohoUser {
     username: author.username,
     displayName: optionalString(author.globalName) ?? author.username,
     bot: author.bot === true,
+    ...(author.isBotManager === true ? { isBotManager: true } : {}),
   };
 }
 

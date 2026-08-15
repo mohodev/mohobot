@@ -6,6 +6,7 @@
  */
 
 import type { BotId, Managed, OutboundMessage } from '../core/types.js';
+import type { GuildInventory, GuildPlan } from './guild-admin.js';
 
 export interface GatewayStatus {
   connected: boolean;
@@ -24,4 +25,6 @@ export interface Gateway extends Managed {
   /** Show a typing indicator; no-op when unsupported. Must never throw. */
   typing(channelId: string): Promise<void>;
   status(): GatewayStatus;
+  guildInventory?(guildId: string): Promise<GuildInventory>;
+  applyGuildPlan?(plan: GuildPlan): Promise<{ applied: number; skipped: number }>;
 }
