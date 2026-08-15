@@ -39,3 +39,7 @@ VISION_ROUTER_TODO.md
 data/bots/
 
 SECURITY_MULTICHAR_TODO.md
+
+.secrets-inbox/
+
+RESIGN_UNCOMMITTED_TODO.md
