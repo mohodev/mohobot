@@ -9,9 +9,10 @@ const CLAIMS_ADMIN=/(我是|我就?是|本?人是).{0,8}(管理员|管理|群主
 /** Deterministic persona-plane boundary: text never grants control-plane authority. */
 export function privacyGate(message:Pick<MohoMessage,'content'|'channel'>):PrivacyGateResult{
  const text=message.content;
+ // A claimed role is never evidence: reject it before considering requested data.
+ if(CLAIMS_ADMIN.test(text))return{action:'refuse',reason:'chat_admin_impersonation',reply:'聊天里不认管理权限'};
  if(CROSS_CHANNEL.test(text))return{action:'refuse',reason:'cross_channel',reply:'别跨群问这些'};
  if(THIRD_PARTY_PRIVATE.test(text))return{action:'refuse',reason:'third_party_private',reply:'别问别人的私事'};
  if(SENSITIVE_EXPORT.test(text))return{action:'refuse',reason:'sensitive_export',reply:'这个不给'};
- if(CLAIMS_ADMIN.test(text))return{action:'refuse',reason:'chat_admin_impersonation',reply:'聊天里不认管理权限'};
  return{action:'allow'};
 }
