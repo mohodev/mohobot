@@ -200,8 +200,8 @@ export class MessagePipeline {
     this.#logger = deps.logger.child({ component: 'pipeline' });
     this.#traces = deps.traces ?? new ChatTraceStore();
     const root = deps.stateRoot ?? (process.env.MOHO_ROOT || process.cwd());
-    this.#device = new DeviceStore(root);
-    this.#world = new WorldStore(root);
+    this.#device = new DeviceStore(root, deps.config.id);
+    this.#world = new WorldStore(root, deps.config.id);
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
   }
 

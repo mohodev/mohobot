@@ -40,6 +40,7 @@ export interface DiscordGatewayOptions {
   config: ResolvedBotConfig;
   events: EventBus;
   logger: Logger;
+  rootDir?: string;
 }
 
 const LOGIN_TIMEOUT_MS = 30_000;
@@ -120,6 +121,7 @@ export class DiscordGateway implements Gateway {
   readonly #config: ResolvedBotConfig;
   readonly #events: EventBus;
   readonly #logger: Logger;
+  readonly #rootDir?: string;
 
   #client: Client | null = null;
   #ready = false;
@@ -132,6 +134,7 @@ export class DiscordGateway implements Gateway {
     this.botId = opts.botId;
     this.#config = opts.config;
     this.#events = opts.events;
+    this.#rootDir = opts.rootDir;
     this.#logger = opts.logger.child({ gateway: 'discord', botId: opts.botId });
     this.name = `gateway:discord:${opts.botId}`;
   }
@@ -263,7 +266,8 @@ export class DiscordGateway implements Gateway {
       const user = this.#client?.user;
       if (!user) return;
       try {
-        const presence = presenceFromWorld(await new WorldStore(process.env.MOHO_ROOT || process.cwd()).get());
+        const rootDir = this.#rootDir ?? process.env.MOHO_ROOT ?? process.cwd();
+        const presence = presenceFromWorld(await new WorldStore(rootDir, this.botId).get());
         user.setPresence({ status: presence.status, afk: presence.afk, activities: [{ name: presence.activity, type: ActivityType.Custom, state: presence.activity }] });
       } catch (error) {
         this.#logger.debug({ err: error }, 'presence projection failed');

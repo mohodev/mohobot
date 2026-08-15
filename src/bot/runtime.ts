@@ -135,7 +135,7 @@ export class BotRuntime implements Managed {
       memory,
     });
 
-    this.#gateway = createGateway(cfg, { events: this.#deps.events, logger: this.#logger });
+    this.#gateway = createGateway(cfg, { events: this.#deps.events, logger: this.#logger, rootDir: this.#deps.rootDir });
 
     const send = async (out: OutboundMessage): Promise<void> => {
       if (!this.#gateway) throw new Error('gateway not started');
@@ -198,7 +198,7 @@ export class BotRuntime implements Managed {
     }
 
     const reflection = this.#deps.storage ? new ProfileReflectionWorker(this.#deps.storage, this.#logger) : undefined;
-    const publicRelationships = await PublicRelationshipStore.load(this.#deps.rootDir);
+    const publicRelationships = await PublicRelationshipStore.load(this.#deps.rootDir, cfg.id);
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -294,7 +294,7 @@ export class BotRuntime implements Managed {
     );
 
     this.#worldTickTaskId = this.#deps.tasks.spawn(
-      async () => { await new WorldStore(this.#deps.rootDir).tick(); },
+      async () => { await new WorldStore(this.#deps.rootDir, cfg.id).tick(); },
       { name: `${this.name}:world-tick`, intervalMs: 60_000, timeoutMs: 5_000 },
     );
 

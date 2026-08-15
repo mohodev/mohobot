@@ -30,6 +30,8 @@ export type ProviderFactory = (cfg: AIConfig, deps: ProviderFactoryDeps) => AIPr
 export interface GatewayFactoryDeps {
   events: EventBus;
   logger: Logger;
+  /** Project state root for gateway-owned projections. */
+  rootDir?: string;
 }
 export type GatewayFactory = (cfg: ResolvedBotConfig, deps: GatewayFactoryDeps) => Gateway;
 
