@@ -7,7 +7,9 @@ export interface SocialDecision { action: SocialAction; urgency: 'low' | 'normal
 export function decideSocially(message: MohoMessage, input: { recentReplies: number; energy: number; stress: number; deviceDelay?: boolean } = { recentReplies: 0, energy: .65, stress: .2 }): SocialDecision {
   const text = message.content.trim();
   const urgent = /[?？]|怎么办|救命|急/.test(text);
-  if ((message.channel.dm || message.mentionsBot) && (!input.deviceDelay || urgent)) return { action: 'reply', urgency: urgent ? 'high' : 'normal', reason: 'direct' };
+  // A direct @, reply-to-bot, or DM is an explicit invitation: simulated device
+  // delay may affect timing, never silently discard it.
+  if (message.channel.dm || message.mentionsBot) return { action: 'reply', urgency: urgent ? 'high' : 'normal', reason: 'direct' };
   if (input.deviceDelay) return { action: 'ignore', urgency: 'low', reason: 'device unavailable' };
   if (input.stress >= .9 || input.energy <= .08) return { action: 'ignore', urgency: 'low', reason: 'character unavailable' };
   if (input.recentReplies >= 2 && text.length < 16 && !/[?？]/.test(text)) return { action: 'ignore', urgency: 'low', reason: 'recently spoke' };
