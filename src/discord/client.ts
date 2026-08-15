@@ -533,6 +533,9 @@ export class DiscordGateway implements Gateway {
     if (!client) throw new Error(`[${this.botId}] gateway is not started`);
 
     const suppress = out.suppressMentions === true;
+    const allowedMentions = out.mentionUserId
+      ? { parse: [] as [], users: [out.mentionUserId], repliedUser: false }
+      : suppress ? { parse: [] as [], repliedUser: false } : undefined;
 
     // Embed path: render a rich card when present and within Discord's hard limits.
     if (out.embed && this.#embedFits(out.embed)) {
@@ -542,9 +545,7 @@ export class DiscordGateway implements Gateway {
         if (out.replyToId) {
           payload.reply = { messageReference: out.replyToId, failIfNotExists: false };
         }
-        if (suppress) {
-          payload.allowedMentions = { parse: [], repliedUser: false };
-        }
+        if (allowedMentions) payload.allowedMentions = allowedMentions;
         await channel.send(payload);
         return;
       } catch (error) {
@@ -568,9 +569,7 @@ export class DiscordGateway implements Gateway {
         if (index === 0 && out.replyToId) {
           payload.reply = { messageReference: out.replyToId, failIfNotExists: false };
         }
-        if (suppress) {
-          payload.allowedMentions = { parse: [], repliedUser: false };
-        }
+        if (allowedMentions) payload.allowedMentions = allowedMentions;
         await channel.send(payload);
         if (index < chunks.length - 1) await sleep(CHUNK_DELAY_MS);
       }

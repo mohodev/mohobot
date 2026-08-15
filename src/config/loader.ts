@@ -725,6 +725,7 @@ export class ConfigLoader {
       provider: sourceProvider === 'kilo' ? 'kilo' : 'openai-compatible', baseUrl, apiKey: key, model,
       timeoutMs: timeoutSeconds && timeoutSeconds > 0 ? Math.round(timeoutSeconds * 1000) : undefined,
       retries: retries && retries >= 0 ? Math.round(retries) : undefined,
+      stream: settings['streaming_response'] === true,
       options: { dataConfig: { providerId: defaultId, sourceId, rateLimit: { time: numberValue(rateLimit['time']), count: numberValue(rateLimit['count']), strategy: rateLimit['strategy'] } } },
     };
     this.#log.info({ file, providerId: defaultId, sourceId, model }, 'loaded selected data config provider');

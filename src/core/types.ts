@@ -145,6 +145,8 @@ export interface OutboundMessage {
   replyToId?: string;
   /** Suppress @everyone / role pings regardless of content. */
   suppressMentions?: boolean;
+  /** Permit exactly this user mention; all other user/role/everyone mentions stay suppressed. */
+  mentionUserId?: string;
   /**
    * Optional rich embed card. When present and within the gateway's limits the
    * message renders as an embed; otherwise the plain `content` is sent.

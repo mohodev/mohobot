@@ -23,7 +23,8 @@ adapter: discord
 systemPromptFile: data/prompts/moho-system.md
 
 discord:
-  respondToMentionsOnly: true
+  # Observe group conversation and let the local social decision choose whether to speak.
+  respondToMentionsOnly: false
   respondToDM: true
   allowedGuilds: []
   allowedChannels: []
@@ -33,7 +34,8 @@ discord:
   maxReplyLength: 1900
 
 session:
-  scope: user
+  # One shared timeline per group/channel, so the persona can follow the room.
+  scope: channel
   maxMessages: 20
 
 disabledPlugins: []

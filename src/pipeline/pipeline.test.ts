@@ -20,7 +20,7 @@ describe('MessagePipeline ordering', () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {
       ...base,
-      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: true }),
       session: SessionConfigSchema.parse({ ...base.session, persist: false }),
       memory: MemoryConfigSchema.parse(base.memory),
       media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
@@ -33,13 +33,16 @@ describe('MessagePipeline ordering', () => {
       async clear() {}, async sweep() { return 0; }, size() { return 1; },
     };
     let seenMaxTokens: number | undefined = 1;
+    const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
+    const first = `${'a'.repeat(180)}。`;
+    const full = `${first}尾句。`;
     const pipeline = new MessagePipeline({
       config,
-      provider: { name: 'test', model: 'test', async chat(_messages, options) { seenMaxTokens = options?.maxTokens; return { content: 'ok', model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
-      sessions, events: new EventBus(), logger: createNullLogger(), send: async () => {},
+      provider: { name: 'test', model: 'test', async chat(_messages, options) { seenMaxTokens = options?.maxTokens; options?.onDelta?.(first); options?.onDelta?.('尾句。'); return { content: full, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { outgoing.push(out); },
     });
     await pipeline.handle({
-      id: 'source-42', platform: 'discord', botId: 'main', channel: { id: 'c', dm: true },
+      id: 'source-42', platform: 'discord', botId: 'main', channel: { id: 'c', dm: false },
       author: { id: 'u', username: 'user', bot: false }, content: 'hello', mentionsBot: true,
       attachments: [], createdAt: 1234,
     });
@@ -47,13 +50,16 @@ describe('MessagePipeline ordering', () => {
       role: 'user', content: 'hello', sourceMessageId: 'source-42', sourcePlatform: 'discord', createdAt: 1234,
     });
     expect(seenMaxTokens).toBeUndefined();
+    expect(outgoing).toHaveLength(2);
+    expect(outgoing[0]).toMatchObject({ content: `<@u> ${first}`, replyToId: 'source-42', mentionUserId: 'u' });
+    expect(outgoing[1]).toMatchObject({ content: '尾句。' });
   });
 
   it('serializes concurrent messages in the same user session', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {
       ...base,
-      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: true }),
       session: SessionConfigSchema.parse({ ...base.session, persist: false, scope: 'user' }),
       memory: MemoryConfigSchema.parse(base.memory),
       media: { ...MediaConfigSchema.parse(base.media), vision: { ...MediaConfigSchema.parse(base.media).vision, apiKey: '' }, ocr: { ...MediaConfigSchema.parse(base.media).ocr, apiKey: '' } },
