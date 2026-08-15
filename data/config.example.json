@@ -1,0 +1,42 @@
+{
+  "config_version": 2,
+  "platform_settings": {
+    "unique_session": false,
+    "rate_limit": { "time": 60, "count": 30, "strategy": "stall" },
+    "segmented_reply": { "enable": true, "interval": "0.1,0.5", "words_count_threshold": 150 },
+    "reply_with_mention": false,
+    "reply_with_quote": true,
+    "ignore_bot_self_message": true,
+    "ignore_at_all": true
+  },
+  "provider_sources": [
+    {
+      "id": "primary",
+      "provider": "openai-compatible",
+      "type": "openai_chat_completion",
+      "enable": true,
+      "api_base": "https://api.example.com/v1",
+      "key": ["replace-with-private-key"],
+      "timeout": 120
+    }
+  ],
+  "provider": [
+    {
+      "id": "primary/example-model",
+      "enable": true,
+      "provider_source_id": "primary",
+      "model": "example-model",
+      "modalities": ["text"]
+    }
+  ],
+  "provider_settings": {
+    "enable": true,
+    "default_provider_id": "primary/example-model",
+    "fallback_chat_models": [],
+    "request_max_retries": 2
+  },
+  "mohobot": {
+    "discord": { "token": "replace-with-private-bot-token" },
+    "admin": { "token": "replace-with-private-admin-token", "host": "127.0.0.1", "port": 3210 }
+  }
+}
