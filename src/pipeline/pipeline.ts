@@ -28,6 +28,7 @@ import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { decideSocially } from './social-decision.js';
+import { privacyGate } from './privacy-gate.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
@@ -319,6 +320,14 @@ export class MessagePipeline {
     const prompt = [content.trim(), attachments.accepted.length || attachments.rejected.length ? attachments.context : ''].filter(Boolean).join('\n\n');
     if (prompt.length === 0) {
       this.#stats.skipped += 1;
+      return;
+    }
+
+    const gate=privacyGate(message);
+    if(gate.action==='refuse'){
+      this.#stats.handled+=1;this.#stats.replied+=1;
+      await this.#deps.send({channelId:message.channel.id,content:gate.reply,replyToId:message.id});
+      this.#trace(trace,'delivered',{localGate:gate.reason});
       return;
     }
 

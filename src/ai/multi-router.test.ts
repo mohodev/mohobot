@@ -16,6 +16,8 @@ describe('MultiProviderRouter', () => {
     } finally { globalThis.fetch = original; }
   });
 
+  it('tries an ordered fallback chain until a provider succeeds',async()=>{const calls:string[]=[];const original=globalThis.fetch;globalThis.fetch=(async(url:string)=>{calls.push(url);if(!url.startsWith('https://third.test'))return new Response('down',{status:503});return new Response(JSON.stringify({model:'third',choices:[{message:{content:'ok'}}]}),{status:200,headers:{'content-type':'application/json'}});})as typeof fetch;try{const router=new MultiProviderRouter({logger:createNullLogger(),defaultProfile:'first',profiles:{first:{baseUrl:'https://first.test/v1',model:'first',retries:0},second:{baseUrl:'https://second.test/v1',model:'second',retries:0},third:{baseUrl:'https://third.test/v1',model:'third',retries:0}},routes:{reply:{primary:'first',fallback:['second','third']}}});await expect(router.chat([{role:'user',content:'x'}])).resolves.toMatchObject({content:'ok'});expect(calls).toEqual(['https://first.test/v1/chat/completions','https://second.test/v1/chat/completions','https://third.test/v1/chat/completions']);}finally{globalThis.fetch=original;}});
+
   it('routes a task to its selected profile and falls back after failure', async () => {
     const calls: string[] = [];
     const fetchImpl = (async (url: string) => {
