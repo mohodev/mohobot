@@ -37,7 +37,9 @@ export class TopicBuffer {
     }
     this.#pending.clear();
   }
-  #timer(key: string): NodeJS.Timeout { const timer = setTimeout(() => void this.#flush(key), this.#options.quietMs); timer.unref?.(); return timer; }
+  // A buffered turn is live work. Keep this timer referenced so a CLI/runtime
+  // cannot exit before the pending callers receive their merged message.
+  #timer(key: string): NodeJS.Timeout { return setTimeout(() => void this.#flush(key), this.#options.quietMs); }
   #flush(key: string): Promise<MohoMessage> {
     const item = this.#pending.get(key);
     if (!item) return Promise.reject(new Error('topic buffer was already flushed'));

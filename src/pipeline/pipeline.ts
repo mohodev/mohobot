@@ -29,6 +29,7 @@ import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { decideSocially } from './social-decision.js';
 import { privacyGate } from './privacy-gate.js';
+import { PublicRelationshipStore } from './public-relationships.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
@@ -87,6 +88,8 @@ export interface PipelineDeps {
   traces?: ChatTraceStore;
   /** Root for World/Device state. Defaults to MOHO_ROOT/process cwd for compatibility. */
   stateRoot?: string;
+  /** Explicit public-only relation facts; never derived from affinity or DMs. */
+  publicRelationships?: PublicRelationshipStore;
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
 }
 
@@ -323,6 +326,13 @@ export class MessagePipeline {
       return;
     }
 
+    const publicRelation=this.#deps.publicRelationships?.describe(message.content);
+    if(publicRelation){
+      this.#stats.handled+=1;this.#stats.replied+=1;
+      await this.#deps.send({channelId:message.channel.id,content:publicRelation,replyToId:message.id});
+      this.#trace(trace,'delivered',{localPublicRelation:true});
+      return;
+    }
     const gate=privacyGate(message);
     if(gate.action==='refuse'){
       this.#stats.handled+=1;this.#stats.replied+=1;

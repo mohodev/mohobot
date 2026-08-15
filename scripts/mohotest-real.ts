@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { OpenAICompatibleProvider } from '../src/ai/openai-compatible.js';
 import { MultiProviderRouter } from '../src/ai/multi-router.js';
+import { PublicRelationshipStore, type PublicRelationship } from '../src/pipeline/public-relationships.js';
 import { OpenAIEmbeddingProvider } from '../src/ai/embeddings.js';
 import { AffinityStore } from '../src/admin/affinity.js';
 import { DeviceStore } from '../src/admin/device.js';
@@ -57,6 +58,8 @@ type TestTurn={content:string;authorId?:string;authorName?:string;channelId?:str
 const suppliedTurns:unknown=process.env.MOHOTEST_TURNS_JSON?JSON.parse(process.env.MOHOTEST_TURNS_JSON):defaultTurns;
 if(!Array.isArray(suppliedTurns)||!suppliedTurns.every(x=>typeof x==='string'||(x&&typeof x==='object'&&typeof (x as TestTurn).content==='string')))throw new Error('MOHOTEST_TURNS_JSON must be a JSON string array or turn objects');
 const turns:TestTurn[]=suppliedTurns.map(x=>typeof x==='string'?{content:x}:{...(x as TestTurn)});
+const publicRelationships:PublicRelationship[]=process.env.MOHOTEST_PUBLIC_RELATIONSHIPS?JSON.parse(process.env.MOHOTEST_PUBLIC_RELATIONSHIPS):[];
+if(!Array.isArray(publicRelationships))throw new Error('MOHOTEST_PUBLIC_RELATIONSHIPS must be a JSON array');
 async function main(){
  await fs.rm(root,{recursive:true,force:true});await fs.mkdir(root,{recursive:true});
  const persona=await fs.readFile(promptFile,'utf8');
@@ -72,26 +75,28 @@ async function main(){
  const memory=new SemanticMemoryAdapter({storage,logger,embedding,recallLimit:3,candidateLimit:20,channelDomain:id=>id==='console-dm'?`dm:${operatorId}`:`channel:${id}`,allowedScopes:()=>['private']});
  const sessions=new SessionManager({botId:config.id,config:config.session,storage,logger,memory});
  const provider=new MultiProviderRouter({logger,defaultProfile:'hy3',profiles:{hy3:{baseUrl:chatBaseUrl,apiKey:kiloKey,model:chatModel,maxTokens:0,timeoutMs:90_000,retries:0},step:{baseUrl:chatBaseUrl,apiKey:kiloKey,model:'stepfun/step-3.7-flash:free',maxTokens:0,timeoutMs:90_000,retries:0},laguna:{baseUrl:chatBaseUrl,apiKey:kiloKey,model:'poolside/laguna-s-2.1:free',maxTokens:0,timeoutMs:90_000,retries:0}},routes:{reply:{primary:'hy3',fallback:['step','laguna']},planner:{primary:'hy3',fallback:['step','laguna']},reflection:{primary:'hy3',fallback:['step','laguna']},profile:{primary:'hy3',fallback:['step','laguna']},world:{primary:'hy3',fallback:['step','laguna']},admin:{primary:'hy3',fallback:['step','laguna']}}});const traces=new ChatTraceStore();const delivered:OutboundMessage[]=[];
- const pipeline=new MessagePipeline({config,provider,sessions,events:new EventBus(),logger,traces,stateRoot:root,send:async out=>{delivered.push(out)}});
+ const pipeline=new MessagePipeline({config,provider,sessions,events:new EventBus(),logger,traces,stateRoot:root,publicRelationships:new PublicRelationshipStore(publicRelationships),send:async out=>{delivered.push(out)}});
  const world=new WorldStore(root);const device=new DeviceStore(root);const affinity=new AffinityStore(root);
  const beforeWorld=await world.get();await world.tick();const afterWorld=await world.get();
- await device.transition({battery:37,network:'weak',activity:'coding',dnd:false,notificationCount:2});await affinity.adjust({botId:config.id,userId:operatorId,delta:5,note:'MohoTest conversation'});
+ await device.transition({battery:37,network:'weak',activity:'coding',doNotDisturb:true,notificationCount:2});await affinity.adjust(config.id,operatorId,5,'helpful','MohoTest conversation');
  const selectedTurns=Number(process.env.MOHOTEST_TURNS??turns.length); if(!Number.isInteger(selectedTurns)||selectedTurns<1||selectedTurns>turns.length)throw new Error(`MOHOTEST_TURNS must be 1..${turns.length}`);
  const delayMs=Number(process.env.MOHOTEST_DELAY_MS??0);if(!Number.isFinite(delayMs)||delayMs<0||delayMs>120_000)throw new Error('MOHOTEST_DELAY_MS must be 0..120000');
  for(let i=0;i<selectedTurns;i++){
    if(i>0&&delayMs>0)await new Promise<void>(resolve=>setTimeout(resolve,delayMs));
    const turn=turns[i]!;const user=turn.content;const authorId=turn.authorId??operatorId;const authorName=turn.authorName??operatorName;const channelId=turn.channelId??'console-dm';const dm=turn.dm??true;const start=delivered.length;
    const message:MohoMessage={id:`console-${i+1}`,platform:'console',botId:config.id,channel:{id:channelId,dm},author:{id:authorId,username:authorName,bot:false},content:user,mentionsBot:turn.mentionsBot??true,attachments:[],createdAt:Date.now()};
-   await pipeline.handle(message);const answer=delivered.slice(start).map(x=>x.content).join('');transcript.push(`[${authorName} @ ${channelId}] ${user}\n[${botDisplayName}] ${answer||'[no delivery]'}`);
+   try{await pipeline.handle(message);const answer=delivered.slice(start).map(x=>x.content).join('');transcript.push(`[${authorName} @ ${channelId}] ${user}\n[${botDisplayName}] ${answer||'[no delivery]'}`);}catch(error){const detail=error instanceof Error?error.message:String(error);transcript.push(`[${authorName} @ ${channelId}] ${user}\n[${botDisplayName}] [pipeline error: ${detail}]`);}
  }
  const session=await sessions.get({botId:config.id,channelId:'console-dm',userId:operatorId});
+ const sessionKeys=[...new Map(turns.slice(0,selectedTurns).map(turn=>{const key={channelId:turn.channelId??'console-dm',userId:turn.authorId??operatorId,dm:turn.dm??true};return[`${key.channelId}:${key.userId}`,key] as const;})).values()];
+ const sessionSnapshots=await Promise.all(sessionKeys.map(key=>sessions.get({botId:config.id,channelId:key.channelId,userId:key.userId})));
  await sessions.flush();
- const restartMemory=new SemanticMemoryAdapter({storage,logger,embedding,recallLimit:3,candidateLimit:20,channelDomain:id=>id==='console-dm'?`dm:${operatorId}`:`channel:${id}`,allowedScopes:()=>['private']});
- const recalled=await restartMemory.recall({botId:config.id,channelId:'console-dm',userId:operatorId,query:'升级 SQLite 数据 茉莉花茶'});
- const records=await storage.query({prefix:'semantic-memory:mohotest:'});
- const traceRows=traces.list();const fallbackDeliveries=delivered.filter(row=>row.content==='[chat unavailable]').length;const report={chatModel,embeddingModel,turns:selectedTurns,deliveries:delivered.length,fallbackDeliveries,sessionMessages:session.messages.length,sessionCapacity:config.session.maxMessages,traces:traceRows.length,modelCompleted:traceRows.filter(trace=>trace.events.some(event=>event.stage==='model_completed')).length,modelFailed:traceRows.filter(trace=>trace.events.some(event=>event.stage==='model_failed')).length,semanticRecords:records.length,embeddedRecords:records.filter(r=>Array.isArray((r.value as any).vector)&&((r.value as any).vector as number[]).length>0).length,recalled:recalled.length,worldTickAdvanced:JSON.stringify(beforeWorld)!==JSON.stringify(afterWorld),device:await device.get(),affinity:await affinity.get(config.id,operatorId),transcript};
+ const postCheckErrors:string[]=[];let recalled=0;let records:Awaited<ReturnType<typeof storage.query>>=[];
+ try{const restartMemory=new SemanticMemoryAdapter({storage,logger,embedding,recallLimit:3,candidateLimit:20,channelDomain:id=>id==='console-dm'?`dm:${operatorId}`:`channel:${id}`,allowedScopes:()=>['private']});recalled=(await restartMemory.recall({botId:config.id,channelId:'console-dm',userId:operatorId,query:'升级 SQLite 数据 茉莉花茶'})).length;}catch(error){postCheckErrors.push(`recall: ${error instanceof Error?error.message:String(error)}`);}
+ try{records=await storage.query({prefix:'semantic-memory:mohotest:'});}catch(error){postCheckErrors.push(`storage: ${error instanceof Error?error.message:String(error)}`);}
+ const traceRows=traces.list();const fallbackDeliveries=delivered.filter(row=>row.content==='[chat unavailable]').length;const report={chatModel,embeddingModel,turns:selectedTurns,deliveries:delivered.length,fallbackDeliveries,sessionMessages:session.messages.length,sessionCapacity:config.session.maxMessages,allSessions:sessionSnapshots.map((snapshot,index)=>({channelId:sessionKeys[index]!.channelId,userId:sessionKeys[index]!.userId,messages:snapshot.messages.length})),traces:traceRows.length,modelCompleted:traceRows.filter(trace=>trace.events.some(event=>event.stage==='model_completed')).length,modelFailed:traceRows.filter(trace=>trace.events.some(event=>event.stage==='model_failed')).length,semanticRecords:records.length,embeddedRecords:records.filter(r=>Array.isArray((r.value as any).vector)&&((r.value as any).vector as number[]).length>0).length,recalled,postCheckErrors,worldTickAdvanced:JSON.stringify(beforeWorld)!==JSON.stringify(afterWorld),device:await device.get(),affinity:await affinity.get(config.id,operatorId),transcript};
  await fs.writeFile(path.join(root,'report.json'),JSON.stringify(report,null,2));await fs.writeFile(path.join(root,'transcript.txt'),transcript.join('\n\n')+'\n');
- console.log(JSON.stringify({chatModel,embeddingModel,turns:report.turns,deliveries:report.deliveries,sessionMessages:report.sessionMessages,traces:report.traces,semanticRecords:report.semanticRecords,embeddedRecords:report.embeddedRecords,recalled:report.recalled,worldTickAdvanced:report.worldTickAdvanced},null,2));
+ console.log(JSON.stringify({chatModel,embeddingModel,turns:report.turns,deliveries:report.deliveries,sessionMessages:report.sessionMessages,traces:report.traces,semanticRecords:report.semanticRecords,embeddedRecords:report.embeddedRecords,recalled:report.recalled,postCheckErrors:report.postCheckErrors,worldTickAdvanced:report.worldTickAdvanced},null,2));
  await storage.close();
 }
 main().catch(error=>{console.error(error instanceof Error?error.stack:error);process.exitCode=1});
