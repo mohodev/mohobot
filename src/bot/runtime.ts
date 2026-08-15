@@ -23,6 +23,7 @@ import { SessionManager } from '../session/manager.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
+import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { scopeStorage } from '../storage/index.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
 import { WorldStore } from '../admin/world.js';
@@ -197,6 +198,7 @@ export class BotRuntime implements Managed {
     }
 
     const reflection = this.#deps.storage ? new ProfileReflectionWorker(this.#deps.storage, this.#logger) : undefined;
+    const publicRelationships = await PublicRelationshipStore.load(this.#deps.rootDir);
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -206,6 +208,7 @@ export class BotRuntime implements Managed {
       logger: this.#logger,
       send,
       media,
+      publicRelationships,
       reflection,
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
