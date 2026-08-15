@@ -36,3 +36,6 @@ logs/
 *_TODO.md
 .DS_Store
 VISION_ROUTER_TODO.md
+data/bots/
+
+SECURITY_MULTICHAR_TODO.md

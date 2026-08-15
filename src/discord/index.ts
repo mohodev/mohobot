@@ -24,13 +24,15 @@ import type { Gateway } from './types.js';
 export interface GatewayDeps {
   events: EventBus;
   logger: Logger;
+  /** Project state root used by gateway projections such as Presence. */
+  rootDir?: string;
 }
 
 export const DISCORD_GATEWAY = 'discord';
 export const CONSOLE_GATEWAY = 'console';
 
 const discordFactory: GatewayFactory = (cfg, deps) =>
-  new DiscordGateway({ botId: cfg.id, config: cfg, events: deps.events, logger: deps.logger });
+  new DiscordGateway({ botId: cfg.id, config: cfg, events: deps.events, logger: deps.logger, rootDir: deps.rootDir });
 const consoleFactory: GatewayFactory = (cfg, deps) =>
   new ConsoleGateway({ botId: cfg.id, config: cfg, events: deps.events, logger: deps.logger });
 

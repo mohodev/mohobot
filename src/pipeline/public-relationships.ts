@@ -9,7 +9,7 @@ export class PublicRelationshipStore{
  readonly #rows:PublicRelationship[];
  constructor(rows:PublicRelationship[]=[]){this.#rows=rows.filter(valid);}
  /** Missing file is an empty roster; malformed data fails closed rather than exposing any relation. */
- static async load(rootDir:string):Promise<PublicRelationshipStore>{try{const raw=JSON.parse(await fs.readFile(path.join(rootDir,'data','relationships','public.json'),'utf8'));return new PublicRelationshipStore(Array.isArray(raw)?raw:[]);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return new PublicRelationshipStore();return new PublicRelationshipStore();}}
+ static async load(rootDir:string,botId?:string):Promise<PublicRelationshipStore>{try{const file=botId?path.join(rootDir,'data','bots',botId,'relationships','public.json'):path.join(rootDir,'data','relationships','public.json');const raw=JSON.parse(await fs.readFile(file,'utf8'));return new PublicRelationshipStore(Array.isArray(raw)?raw:[]);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return new PublicRelationshipStore();return new PublicRelationshipStore();}}
  findNamed(text:string):PublicRelationship|undefined{return this.#rows.find(row=>text.includes(row.leftName)&&text.includes(row.rightName));}
  describe(text:string):string|undefined{const row=this.findNamed(text);if(!row)return undefined;const names=[row.leftName,row.rightName];if(row.relation==='close_friends')return`${names[0]}和${names[1]}关系很好`;
  if(row.relation==='friends')return`${names[0]}和${names[1]}是朋友`;

@@ -29,8 +29,9 @@ const DEFAULT_WORLD: WorldState = {
 export class WorldStore {
   readonly #store: VersionedJsonStore<WorldState>;
   readonly #cache = new TtlCache<WorldState>(2_000);
-  constructor(rootDir: string) {
-    this.#store = new VersionedJsonStore({ file: path.join(rootDir, 'data', 'world', 'state.json'), defaultValue: () => structuredClone(DEFAULT_WORLD), normalize: normalizeWorld });
+  constructor(rootDir: string, botId?: string) {
+    const file = botId ? path.join(rootDir, 'data', 'bots', botId, 'world', 'state.json') : path.join(rootDir, 'data', 'world', 'state.json');
+    this.#store = new VersionedJsonStore({ file, defaultValue: () => structuredClone(DEFAULT_WORLD), normalize: normalizeWorld });
   }
 
   async get(): Promise<WorldState> { const cached=this.#cache.get();if(cached)return structuredClone(cached);const value=await this.#store.get();this.#cache.set(value);return structuredClone(value); }

@@ -17,7 +17,7 @@ function normalizeDevice(value: unknown): DeviceState {
 export class DeviceStore {
   readonly #store: VersionedJsonStore<DeviceState>;
   readonly #cache = new TtlCache<DeviceState>(2_000);
-  constructor(rootDir: string) { this.#store = new VersionedJsonStore({ file: path.join(rootDir, 'data', 'world', 'device.json'), defaultValue: () => structuredClone(DEFAULT), normalize: normalizeDevice }); }
+  constructor(rootDir: string, botId?: string) { const file = botId ? path.join(rootDir, 'data', 'bots', botId, 'world', 'device.json') : path.join(rootDir, 'data', 'world', 'device.json'); this.#store = new VersionedJsonStore({ file, defaultValue: () => structuredClone(DEFAULT), normalize: normalizeDevice }); }
   async get(): Promise<DeviceState> { const cached = this.#cache.get(); if (cached) return structuredClone(cached); const value = await this.#store.get(); this.#cache.set(value); return structuredClone(value); }
   async save(state: DeviceState): Promise<void> { const saved = await this.#store.save(state); this.#cache.set(saved.data); }
   async transition(patch: Partial<DeviceState>): Promise<DeviceState> {
