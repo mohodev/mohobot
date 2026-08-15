@@ -319,8 +319,10 @@ export class OpenAICompatibleProvider implements AIProvider {
       choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
     };
     const choice = payload.choices?.[0];
+    const content=choice?.message?.content;
+    if(typeof content!=='string'||content.trim().length===0)throw new AIError('provider returned an empty completion',{kind:'server',status:res.status,retryable:true});
     return {
-      content: choice?.message?.content ?? '',
+      content,
       model: payload.model ?? model,
       usage: toUsage(payload.usage),
       finishReason: choice?.finish_reason,
@@ -411,6 +413,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       }
     }
 
+    if(content.trim().length===0)throw new AIError('provider returned an empty streamed completion',{kind:'server',status:res.status,retryable:true});
     return {
       content,
       model: resolvedModel,

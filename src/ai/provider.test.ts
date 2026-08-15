@@ -47,6 +47,8 @@ function abortError(): Error {
 }
 
 describe('OpenAICompatibleProvider', () => {
+  it('rejects HTTP-success empty completions instead of treating them as chat success',async()=>{const fetchImpl=(async()=>jsonResponse({id:'x',choices:[{message:{content:''},finish_reason:'length'}]}))as unknown as typeof fetch;const provider=new OpenAICompatibleProvider(cfg({retries:0}),{logger,fetchImpl});await expect(provider.chat(messages)).rejects.toMatchObject({name:'AIError',kind:'server'});});
+
   it('returns content, usage and duration on the happy path', async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = (async (url: unknown, init: unknown) => {
