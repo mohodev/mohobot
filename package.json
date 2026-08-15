@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "serve": "exec tsx src/index.ts",
     "setup": "tsx scripts/setup.ts",
     "preflight": "tsx scripts/preflight.ts",
     "check-update": "tsx scripts/update.ts --check-only",

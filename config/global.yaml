@@ -20,7 +20,9 @@ hotReload:
   enabled: true
   paths:
     - config
-    - data
+    - data/provider.yaml
+    - data/provider.local.yaml
+    - data/config.json
     - plugins
   debounceMs: 300
 
