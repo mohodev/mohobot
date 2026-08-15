@@ -6,7 +6,7 @@ import { BudgetedProvider, ModelBudgetError, type ModelBudget, type ModelTask } 
 import { AIError, type AIProvider, type AIResponse, type ChatOptions } from './types.js';
 import { CircuitBreaker, CircuitOpenError, type CircuitSnapshot } from './circuit-breaker.js';
 
-export interface ProviderProfile {baseUrl:string;apiKey?:string;model:string;budget?:Partial<ModelBudget>;circuit?:{failureThreshold?:number;openMs?:number};}
+export interface ProviderProfile {baseUrl:string;apiKey?:string;model:string;maxTokens?:number;temperature?:number;timeoutMs?:number;budget?:Partial<ModelBudget>;circuit?:{failureThreshold?:number;openMs?:number};}
 export interface TaskRoute { primary:string; fallback?:string; }
 interface ProfileRuntime{provider:AIProvider;breaker:CircuitBreaker;model:string;lastProbe?:{ok:boolean;checkedAt:number;detail?:string};}
 function fallbackEligible(error:unknown):boolean{if(error instanceof AIError)return ['network','timeout','server','rate_limit','auth'].includes(error.kind);return error instanceof ModelBudgetError||error instanceof CircuitOpenError;}
@@ -15,7 +15,7 @@ function failureKind(error:unknown):string|undefined{if(error instanceof AIError
 /** Health-aware task router with bounded fallback and per-profile circuit breakers. */
 export class MultiProviderRouter implements AIProvider {
  readonly #profiles:Map<string,ProfileRuntime>;readonly #routes:Partial<Record<ModelTask,TaskRoute>>;readonly #default:string;
- constructor(input:{profiles:Record<string,ProviderProfile>;routes:Partial<Record<ModelTask,TaskRoute>>;defaultProfile:string;logger:Logger}){this.#profiles=new Map(Object.entries(input.profiles).map(([id,p])=>{const cfg={provider:'openai-compatible',baseUrl:p.baseUrl,apiKey:p.apiKey??'',model:p.model,temperature:.7,maxTokens:1024,timeoutMs:60_000,retries:2,retryBaseDelayMs:500,stream:false,fallbackReply:'',options:{}}satisfies AIConfig;const provider=new BudgetedProvider(new OpenAICompatibleProvider(cfg,{logger:input.logger.child({providerProfile:id})}),p.budget);return[id,{provider,breaker:new CircuitBreaker(p.circuit),model:p.model}]}));this.#routes=input.routes;this.#default=input.defaultProfile;}
+ constructor(input:{profiles:Record<string,ProviderProfile>;routes:Partial<Record<ModelTask,TaskRoute>>;defaultProfile:string;logger:Logger}){this.#profiles=new Map(Object.entries(input.profiles).map(([id,p])=>{const cfg={provider:'openai-compatible',baseUrl:p.baseUrl,apiKey:p.apiKey??'',model:p.model,temperature:p.temperature??.7,maxTokens:p.maxTokens??0,timeoutMs:p.timeoutMs??60_000,retries:2,retryBaseDelayMs:500,stream:false,fallbackReply:'',options:{}}satisfies AIConfig;const provider=new BudgetedProvider(new OpenAICompatibleProvider(cfg,{logger:input.logger.child({providerProfile:id})}),p.budget);return[id,{provider,breaker:new CircuitBreaker(p.circuit),model:p.model}]}));this.#routes=input.routes;this.#default=input.defaultProfile;}
  get name():string{return'multi-provider-router';}get model():string{return this.#profiles.get(this.#default)?.model??'unconfigured';}
  async health():Promise<{ok:boolean;detail?:string}>{const results=await this.probeAll();const ok=results.some(x=>x.ok);return{ok,detail:results.map(x=>`${x.id}:${x.ok?'ok':'down'}`).join(', ')||'no profiles'};}
  profileIds():string[]{return[...this.#profiles.keys()];}
