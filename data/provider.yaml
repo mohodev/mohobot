@@ -8,7 +8,7 @@ provider: kilo
 model: tencent/hy3:free
 # 0 omits max_tokens so Kilo enforces the selected model's own hard limit.
 maxTokens: 0
-baseUrl: https://api.kilo.ai/api/gateway/v1
+baseUrl: https://apx.ntbsd.eu.org/v1
 apiKey: ${KILO_API_KEY}
 temperature: 0.8
 options:

@@ -337,7 +337,10 @@ export function resolveKiloSettings(
   const opt = (cfg?.options ?? {}) as Record<string, unknown>;
   const pc = pluginConfig;
 
-  const baseUrl = KILO_DEFAULT_BASE_URL;
+  // Respect a loader-selected gateway (including compatible private proxies).
+  // A framework-default OpenAI URL is not an intentional Kilo endpoint.
+  const configuredBaseUrl = asString(opt.baseUrl) ?? explicitString(cfg?.baseUrl, FRAMEWORK_DEFAULTS.baseUrl) ?? asString(pc.baseUrl);
+  const baseUrl = configuredBaseUrl && configuredBaseUrl !== FRAMEWORK_DEFAULTS.baseUrl ? configuredBaseUrl : KILO_DEFAULT_BASE_URL;
 
   const model =
     asString(opt.model) ??

@@ -68,6 +68,8 @@ const INSERT_SQL = `INSERT INTO chat_log
 
 const QUERY_SQL = `SELECT id, channel_id, message_id, author_id, username, content, mentions_bot, bot_id, ts, created_at
   FROM chat_log WHERE channel_id = ? ORDER BY id DESC LIMIT ?`;
+const QUERY_BOT_SQL = `SELECT id, channel_id, message_id, author_id, username, content, mentions_bot, bot_id, ts, created_at
+  FROM chat_log WHERE channel_id = ? AND bot_id = ? ORDER BY id DESC LIMIT ?`;
 
 /** Create the chat_log table + index on an already-open database. Idempotent. */
 export function ensureChatLogSchema(db: DatabaseHandle): void {
@@ -128,10 +130,10 @@ export function chatLogInsert(row: ChatLogInsert): void {
 }
 
 /** Most recent messages of a channel, newest first. */
-export function chatLogQuery(channelId: string, limit = 50): ChatLogRow[] {
+export function chatLogQuery(channelId: string, limit = 50, botId?: string): ChatLogRow[] {
   const db = resolveDb();
   const n = Number.isFinite(limit) && limit > 0 ? Math.trunc(limit) : 50;
-  return db.prepare(QUERY_SQL).all(channelId, n) as ChatLogRow[];
+  return (botId ? db.prepare(QUERY_BOT_SQL).all(channelId, botId, n) : db.prepare(QUERY_SQL).all(channelId, n)) as ChatLogRow[];
 }
 
 /** Close only a handle this module opened itself. */

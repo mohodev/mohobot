@@ -58,6 +58,10 @@ describe('MessagePipeline ordering', () => {
     expect(traces.list()[0]?.events.map((event) => event.stage)).toEqual(expect.arrayContaining(['observed','context','model_started','delta','model_completed','delivered','memory_written']));
   });
 
+  it('shows typing while a direct model request is still pending', async () => {
+    const base=BotConfigSchema.parse({id:'main',rateLimit:{enabled:false},discord:{typingIndicator:true}});const config={...base,ai:AIConfigSchema.parse({...base.ai,apiKey:'test-key',maxTokens:0}),session:SessionConfigSchema.parse({...base.session,persist:false}),memory:MemoryConfigSchema.parse(base.memory),media:{...MediaConfigSchema.parse(base.media),vision:{...MediaConfigSchema.parse(base.media).vision,apiKey:''},ocr:{...MediaConfigSchema.parse(base.media).ocr,apiKey:''}}};let release!:()=>void;const waiting=new Promise<void>(resolve=>{release=resolve;});let typed=0;const sessions:SessionManagerLike={async get(){return{key:'k',botId:'main',channelId:'dm',userId:'u',messages:[],updatedAt:0};},async append(){},async buildContext(){return[{role:'user',content:'hi'}];},async clear(){},async sweep(){return 0;},size(){return 0;}};const pipeline=new MessagePipeline({config,sessions,provider:{name:'test',model:'test',async chat(){await waiting;return{content:'ok',model:'test',ms:1};},async health(){return{ok:true};}},events:new EventBus(),logger:createNullLogger(),typing:async()=>{typed++;},send:async()=>{}});const handled=pipeline.handle({id:'m',platform:'discord',botId:'main',channel:{id:'dm',dm:true},author:{id:'u',username:'u',bot:false},content:'hi',mentionsBot:true,attachments:[],createdAt:1});await vi.waitFor(()=>expect(typed).toBe(1));release();await handled;
+  });
+
   it('serializes concurrent messages in the same user session', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {

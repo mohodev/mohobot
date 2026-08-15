@@ -35,6 +35,7 @@ import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
@@ -419,6 +420,9 @@ export class MessagePipeline {
       : undefined;
     const aiStarted = Date.now();
     this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream });
+    // Typing starts with the upstream request, not after it completes. This
+    // keeps direct messages responsive during slow reasoning-model turns.
+    const stopThinkingTyping = this.#startThinkingTyping(message.channel.id);
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
@@ -429,10 +433,12 @@ export class MessagePipeline {
         onDelta: streaming ? (delta) => { this.#trace(trace, 'delta', { length: delta.length }); streaming.push(delta); } : undefined,
       });
       reply = response.content.trim();
+      stopThinkingTyping();
       runtimeMetrics.ai.record(Date.now() - aiStarted, true);
       this.#trace(trace, 'model_completed', { model: response.model, latencyMs: Date.now() - aiStarted, length: reply.length });
       if (reply.length === 0) reply = cfg.ai.fallbackReply;
     } catch (error) {
+      stopThinkingTyping();
       runtimeMetrics.ai.record(Date.now() - aiStarted, false);
       this.#stats.aiFailures += 1;
       const kind = error instanceof AIError ? error.kind : 'unknown';
@@ -581,6 +587,16 @@ export class MessagePipeline {
     return true;
   }
 
+  #startThinkingTyping(channelId: string): () => void {
+    if (!this.#deps.config.discord.typingIndicator || !this.#deps.typing) return () => {};
+    const send = () => void this.#deps.typing!(channelId).catch(() => {});
+    send();
+    // Discord typing expires after about ten seconds; renew while the model thinks.
+    const timer = setInterval(send, 8_000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
   async #replyPlan(message: MohoMessage, plan: ReplyPlan): Promise<boolean> {
     let delivered = 0;
     const segments = deliverySegments(plan, message.channel.dm);
@@ -612,6 +628,11 @@ export class MessagePipeline {
         suppressMentions: true,
         mentionUserId: mentionAuthor ? message.author.id : undefined,
       });
+      try {
+        chatLogInsert({ channelId: message.channel.id, messageId: `outbound:${message.id}:${Date.now()}`, authorId: this.#deps.config.id, username: this.#deps.config.name, content: safeContent, mentionsBot: false, botId: this.#deps.config.id });
+      } catch (error) {
+        this.#logger.warn({ err: error instanceof Error ? error.message : String(error), channel: message.channel.id }, 'outbound chat log write failed');
+      }
       return true;
     } catch (error) {
       this.#logger.error(
