@@ -25,6 +25,8 @@ import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
 import { decodeReplyPlan, deliverySegments, planText, type ReplyPlan } from './reply-plan.js';
 import { TopicBuffer } from './topic-buffer.js';
+import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
+import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { decideSocially } from './social-decision.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
@@ -81,6 +83,8 @@ export interface PipelineDeps {
   typing?: (channelId: string) => Promise<void>;
   /** Omitted unless media is explicitly enabled and has a usable provider. */
   media?: Pick<MediaRuntime, 'process'>;
+  traces?: ChatTraceStore;
+  reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
 }
 
 export interface PipelineStats {
@@ -178,14 +182,17 @@ export class MessagePipeline {
   readonly #logger: Logger;
   readonly #limiter: RateLimiter;
   readonly #topics = new TopicBuffer();
+  readonly #traces: ChatTraceStore;
   readonly #device: DeviceStore;
   readonly #world: WorldStore;
   readonly #queues = new Map<string, Promise<void>>();
+  readonly #recentReplies = new Map<string, number[]>();
   readonly #stats: PipelineStats = { handled: 0, replied: 0, skipped: 0, aiFailures: 0, rateLimited: 0 };
 
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
     this.#logger = deps.logger.child({ component: 'pipeline' });
+    this.#traces = deps.traces ?? new ChatTraceStore();
     const root = process.env.MOHO_ROOT || process.cwd();
     this.#device = new DeviceStore(root);
     this.#world = new WorldStore(root);
@@ -196,6 +203,14 @@ export class MessagePipeline {
     return { ...this.#stats };
   }
 
+  traces(): ChatTrace[] { return this.#traces.list(); }
+
+  #trace(trace: ChatTrace, stage: Parameters<ChatTraceStore['add']>[1], detail?: Parameters<ChatTraceStore['add']>[2]): void {
+    this.#traces.add(trace, stage, detail);
+    const event = trace.events.at(-1);
+    if (event) this.#deps.events.emit('chat:trace', { botId: trace.botId, traceId: trace.id, messageId: trace.messageId, channelId: trace.channelId, userId: trace.userId, event, outcome: trace.outcome });
+  }
+
   sweep(): void {
     this.#limiter.sweep();
   }
@@ -204,11 +219,13 @@ export class MessagePipeline {
 
   /** Entry point. Messages sharing one session run in arrival order. Never rejects. */
   async handle(message: MohoMessage): Promise<void> {
+    const trace = this.#traces.start({ botId: message.botId, messageId: message.id, channelId: message.channel.id, userId: message.author.id });
+    this.#trace(trace, 'observed', { mentionsBot: message.mentionsBot, dm: message.channel.dm, length: message.content.length });
     const key = this.#queueKey(message);
     const merged = await this.#topics.push(key, message);
     // Earlier callers share the same merged turn; only the newest invocation
     // owns processing it, so a burst produces one model call and one reply.
-    if (merged.id !== message.id) return;
+    if (merged.id !== message.id) { this.#trace(trace, 'merged', { into: merged.id }); return; }
     message = merged;
     const queueKey = this.#queueKey(message);
     const previous = this.#queues.get(queueKey) ?? Promise.resolve();
@@ -216,7 +233,7 @@ export class MessagePipeline {
       .catch(() => {})
       .then(async () => {
         try {
-          await this.#handleInner(message);
+          await this.#handleInner(message, trace);
         } catch (error) {
           this.#logger.error(
             { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
@@ -232,12 +249,25 @@ export class MessagePipeline {
     }
   }
 
+  #recentReplyCount(channelId: string): number {
+    const now = Date.now();
+    const live = (this.#recentReplies.get(channelId) ?? []).filter((at) => now - at < 90_000);
+    if (live.length) this.#recentReplies.set(channelId, live); else this.#recentReplies.delete(channelId);
+    return live.length;
+  }
+
+  #noteReply(channelId: string): void {
+    const now = Date.now();
+    const live = (this.#recentReplies.get(channelId) ?? []).filter((at) => now - at < 90_000);
+    live.push(now); this.#recentReplies.set(channelId, live);
+  }
+
   #queueKey(message: MohoMessage): string {
     const user = this.#deps.config.session.scope === 'user' ? `:${message.author.id}` : '';
     return `${message.botId}:${effectiveSessionChannelId(this.#deps.config.session, message)}${user}`;
   }
 
-  async #handleInner(message: MohoMessage): Promise<void> {
+  async #handleInner(message: MohoMessage, trace: ChatTrace): Promise<void> {
     this.#stats.handled += 1;
     const cfg = this.#deps.config;
     const log = this.#logger.child({ channel: message.channel.id, user: message.author.id });
@@ -267,7 +297,7 @@ export class MessagePipeline {
     // response, preventing privilege probing in public channels.
     const adminCommand = this.#parseCommand(content, '?');
     if (adminCommand) {
-      if (cfg.admin.enabled && cfg.admin.userIds.includes(message.author.id)) {
+      if (cfg.admin.enabled && message.author.isBotManager === true) {
         const handled = await this.#dispatchAdminCommand(adminCommand.name, adminCommand.args, message);
         if (handled) { this.#stats.replied += 1; return; }
       } else {
@@ -293,17 +323,20 @@ export class MessagePipeline {
     const [device, world] = await Promise.all([this.#device.get(), this.#world.get()]);
     const social = decideSocially(
       { ...message, content: prompt },
-      { recentReplies: 0, energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2, deviceDelay: this.#device.shouldDelay(device) },
+      { recentReplies: this.#recentReplyCount(message.channel.id), energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2, deviceDelay: this.#device.shouldDelay(device) },
     );
     if (social.action === 'ignore') {
       this.#stats.skipped += 1;
-      log.debug({ reason: social.reason }, 'social decision skipped model call');
+      this.#trace(trace, 'ignored', { reason: social.reason, energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2 });
+      log.debug({ reason: social.reason, traceId: trace.id }, 'social decision skipped model call');
       return;
     }
+    this.#trace(trace, 'context', { socialReason: social.reason, sessionScope: cfg.session.scope });
 
     if (cfg.rateLimit.enabled && !this.#limiter.allow(`${message.author.id}`)) {
       this.#stats.rateLimited += 1;
-      log.warn('rate limited');
+      this.#trace(trace, 'ignored', { reason: 'rate limited' });
+      log.warn({ traceId: trace.id }, 'rate limited');
       await this.#reply(message, 'Slow down a little - try again in a few seconds.');
       return;
     }
@@ -364,6 +397,7 @@ export class MessagePipeline {
       ? new StreamingDelivery((text, first) => this.#reply(message, first && !message.channel.dm ? `<@${message.author.id}> ${text}` : text, first, first && !message.channel.dm))
       : undefined;
     const aiStarted = Date.now();
+    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream });
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
@@ -371,18 +405,21 @@ export class MessagePipeline {
         maxTokens: cfg.ai.maxTokens === 0 ? undefined : cfg.ai.maxTokens,
         timeoutMs: cfg.ai.timeoutMs,
         stream: cfg.ai.stream,
-        onDelta: streaming ? (delta) => streaming.push(delta) : undefined,
+        onDelta: streaming ? (delta) => { this.#trace(trace, 'delta', { length: delta.length }); streaming.push(delta); } : undefined,
       });
       reply = response.content.trim();
       runtimeMetrics.ai.record(Date.now() - aiStarted, true);
+      this.#trace(trace, 'model_completed', { model: response.model, latencyMs: Date.now() - aiStarted, length: reply.length });
       if (reply.length === 0) reply = cfg.ai.fallbackReply;
     } catch (error) {
       runtimeMetrics.ai.record(Date.now() - aiStarted, false);
       this.#stats.aiFailures += 1;
       const kind = error instanceof AIError ? error.kind : 'unknown';
       const detail = error instanceof Error ? error.message : String(error);
-      log.error({ kind, err: detail }, 'AI request failed; replying with fallback');
-      await this.#reply(message, this.#friendlyError(kind, cfg.ai.fallbackReply));
+      this.#trace(trace, 'model_failed', { kind, latencyMs: Date.now() - aiStarted });
+      log.error({ kind, err: detail, traceId: trace.id }, 'AI request failed; replying with fallback');
+      const fallbackDelivered = await this.#reply(message, this.#friendlyError(kind, cfg.ai.fallbackReply));
+      this.#trace(trace, fallbackDelivered ? 'delivered' : 'delivery_failed', { fallback: true });
       return;
     }
 
@@ -401,8 +438,11 @@ export class MessagePipeline {
       : await this.#replyPlan(message, plan);
     if (!delivered) {
       this.#stats.skipped += 1;
+      this.#trace(trace, 'delivery_failed', { streamed: Boolean(streaming?.received), segments: streaming?.sent ?? 0 });
       return;
     }
+    this.#trace(trace, 'delivered', { streamed: Boolean(streaming?.received), segments: streaming?.sent ?? plan.segments.length });
+    this.#noteReply(message.channel.id);
     try {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
@@ -414,10 +454,17 @@ export class MessagePipeline {
       } else {
         await sessions.append(key, assistantTurn);
       }
+      this.#trace(trace, 'memory_written');
     } catch (error) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'failed to persist assistant turn');
+      this.#trace(trace, 'memory_failed');
+      log.warn({ err: error instanceof Error ? error.message : String(error), traceId: trace.id }, 'failed to persist assistant turn');
     }
     this.#stats.replied += 1;
+    if (this.#deps.reflection) {
+      void this.#deps.reflection.reflect({ botId: cfg.id, channelId: key.channelId, userId: message.author.id, userText: prompt })
+        .then(({ facts }) => this.#trace(trace, 'memory_written', { reflectionFacts: facts }))
+        .catch(() => this.#trace(trace, 'memory_failed', { reflection: true }));
+    }
   }
 
   #parseCommand(content: string, prefix: '?'): { name: string; args: string[] } | undefined {

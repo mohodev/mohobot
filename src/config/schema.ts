@@ -73,6 +73,8 @@ export const DiscordConfigSchema = z.object({
   registerEmptySlash: z.boolean().default(true),
   /** Discord hard limit is 2000; we chunk beyond this. */
   maxReplyLength: z.number().int().positive().max(2000).default(1900),
+  /** Optional private channel for redacted operational failure summaries. */
+  logChannelId: z.string().min(1).optional(),
 });
 export type DiscordConfig = z.infer<typeof DiscordConfigSchema>;
 
@@ -155,6 +157,10 @@ export const BotConfigSchema = z.object({
   admin: z.object({
     enabled: z.boolean().default(false),
     userIds: z.array(z.string()).default([]),
+    /** Discord role names that authorize Bot management in a guild. */
+    roleNames: z.array(z.string()).default(['Bot 管理']),
+    /** Guilds where role-based Discord administration is accepted. */
+    guildIds: z.array(z.string()).default([]),
   }).default({}),
   /** Optional public Discord presence projection of coarse character activity. */
   presence: z.object({

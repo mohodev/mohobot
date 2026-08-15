@@ -6,6 +6,7 @@
  */
 
 import type { BotId, MohoMessage, PluginId } from './types.js';
+import type { ChatTraceEvent } from '../pipeline/chat-trace.js';
 
 export interface MohoEventMap {
   /** A user-visible message arrived on some gateway. */
@@ -16,6 +17,7 @@ export interface MohoEventMap {
     name: string;
     channelId: string;
     userId: string;
+    isBotManager?: boolean;
     options: Record<string, unknown>;
     /** Adapter-provided reply function; already error-wrapped by the adapter. */
     reply: (content: string) => Promise<void>;
@@ -36,6 +38,8 @@ export interface MohoEventMap {
   'ai:request': { botId: BotId; model: string; messages: number };
   'ai:response': { botId: BotId; model: string; ms: number; tokens?: number };
   'ai:error': { botId: BotId; error: string; attempt: number };
+  /** Metadata-only user-message lifecycle trace; never includes chat body or prompts. */
+  'chat:trace': { botId: BotId; traceId: string; messageId: string; channelId: string; userId: string; event: ChatTraceEvent; outcome?: 'ignored'|'replied'|'failed' };
 
   'config:reload': { path: string };
   'config:reload:failed': { path: string; error: string };
