@@ -191,6 +191,32 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.ai.model).toBe('bot-env');
   });
 
+  it('uses only the enabled default provider selected by private data/config.json', async () => {
+    await writeGlobal('logLevel: info\n');
+    await writeBot('main.yaml', 'name: Main\n');
+    await mkdir(path.join(rootDir, 'data'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data', 'config.json'), JSON.stringify({
+      config_version: 2,
+      platform_settings: { rate_limit: { time: 60, count: 30, strategy: 'stall' } },
+      provider_sources: [
+        { id: 'siliconflow', provider: 'siliconflow', enable: true, api_base: 'https://api.siliconflow.cn/v1', key: ['data-config-secret'], timeout: 120 },
+        { id: 'disabled', provider: 'openai-compatible', enable: false, api_base: 'https://disabled.example/v1', key: ['disabled-secret'] },
+      ],
+      provider: [
+        { id: 'siliconflow/selected', enable: true, provider_source_id: 'siliconflow', model: 'Qwen/Qwen3-8B' },
+        { id: 'siliconflow/other', enable: true, provider_source_id: 'siliconflow', model: 'deepseek-ai/DeepSeek-V4-Flash' },
+      ],
+      provider_settings: { default_provider_id: 'siliconflow/selected', fallback_chat_models: ['siliconflow/other'], request_max_retries: 5 },
+      mohobot: { discord: { token: 'data-config-discord-token' }, admin: { token: 'data-config-admin-token', host: '127.0.0.1', port: 4321 } },
+    }), 'utf8');
+    process.env['AI_MODEL'] = 'env-must-not-win';
+    const cfg = await newLoader().load();
+    expect(cfg.bots[0]?.ai).toMatchObject({ provider: 'openai-compatible', baseUrl: 'https://api.siliconflow.cn/v1', apiKey: 'data-config-secret', model: 'Qwen/Qwen3-8B', timeoutMs: 120_000, retries: 5 });
+    expect(cfg.bots[0]?.ai.options).toMatchObject({ dataConfig: { providerId: 'siliconflow/selected', sourceId: 'siliconflow' } });
+    expect(cfg.global.admin).toMatchObject({ token: 'data-config-admin-token', host: '127.0.0.1', port: 4321 });
+    expect(cfg.bots[0]?.discord.token).toBe('data-config-discord-token');
+  });
+
   it('lets global.yaml override data/provider.yaml defaults', async () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(

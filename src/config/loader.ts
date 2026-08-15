@@ -66,6 +66,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim()) : [];
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function pruneUndefined(input: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (!isRecord(input)) return out;
@@ -159,6 +167,8 @@ export class ConfigLoader {
   readonly #events: EventBus | undefined;
   #last: ResolvedConfig | undefined;
   #env: Readonly<Record<string, string | undefined>> = Object.freeze({ ...process.env });
+  #dataConfig: Record<string, unknown> | undefined;
+  #dataConfigAi: Record<string, unknown> | undefined;
 
   constructor(opts: ConfigLoaderOptions) {
     this.#rootDir = path.resolve(opts.rootDir);
@@ -243,6 +253,8 @@ export class ConfigLoader {
 
   async #build(): Promise<BuildResult> {
     this.#env = await this.#loadEnvSnapshot();
+    this.#dataConfig = undefined;
+    this.#dataConfigAi = undefined;
 
     const loaded = await this.#loadGlobal();
     const global = loaded.global;
@@ -365,8 +377,12 @@ export class ConfigLoader {
     const local = await this.#readOptionalMapping(this.globalLocalFile, 'global local override');
     if (local) { normalizeAiAt(local); mergedData = deepMerge(mergedData, local) as Record<string, unknown>; }
 
-    // AstrBot-style provider overrides from data/provider.yaml.
-    const providerOverrides = await this.#loadProviderOverrides();
+    // data/config.json is a private AstrBot-compatible control-plane file. When
+    // present its explicitly selected provider is authoritative; never silently
+    // select another model from a pool or fallback list.
+    const dataConfigOverrides = await this.#loadDataConfigOverrides();
+    this.#dataConfigAi = Object.keys(dataConfigOverrides).length > 0 ? dataConfigOverrides : undefined;
+    const providerOverrides = this.#dataConfigAi ?? await this.#loadProviderOverrides();
     if (Object.keys(providerOverrides).length > 0) {
       mergedData.ai = deepMerge(providerOverrides, pruneUndefined(mergedData.ai));
     }
@@ -443,11 +459,15 @@ export class ConfigLoader {
       global.ai,
       `bot ${bot.id} ai`,
     );
-    // Global env first, per-bot env last: the most specific source wins.
-    const withEnv = this.#applyAiEnv(this.#applyAiEnv(mergedAi, ''), prefix);
-    const ai = this.#parseOr(AIConfigSchema, withEnv, mergedAi, `bot ${bot.id} ai (env)`);
+    // A valid data/config.json has a deliberately selected provider/model and
+    // is authoritative. Do not let legacy AI_* environment variables silently
+    // change it. Without data config, preserve the established env precedence.
+    const selectedAi = this.#dataConfigAi
+      ? this.#parseOr(AIConfigSchema, { ...mergedAi, ...this.#dataConfigAi }, mergedAi, `bot ${bot.id} ai (data config)`)
+      : this.#parseOr(AIConfigSchema, this.#applyAiEnv(this.#applyAiEnv(mergedAi, ''), prefix), mergedAi, `bot ${bot.id} ai (env)`);
+    const ai = selectedAi;
 
-    const session = this.#parseOr(
+    let session = this.#parseOr(
       SessionConfigSchema,
       { ...global.session, ...pruneUndefined(bot.session) },
       global.session,
@@ -475,7 +495,10 @@ export class ConfigLoader {
     const media = { ...inheritedMedia, vision: resolveMediaProvider(inheritedMedia.vision, 'vision'), ocr: resolveMediaProvider(inheritedMedia.ocr, 'ocr') };
 
     const discord = { ...bot.discord };
-    const token = envValue(this.#env, `${prefix}DISCORD_TOKEN`) ?? envValue(this.#env, 'DISCORD_TOKEN');
+    const privateMoho = this.#dataConfig && isRecord(this.#dataConfig['mohobot']) ? this.#dataConfig['mohobot'] : {};
+    const privateDiscord = isRecord(privateMoho['discord']) ? privateMoho['discord'] : {};
+    const dataToken = typeof privateDiscord['token'] === 'string' && privateDiscord['token'].trim() ? privateDiscord['token'].trim() : undefined;
+    const token = dataToken ?? envValue(this.#env, `${prefix}DISCORD_TOKEN`) ?? envValue(this.#env, 'DISCORD_TOKEN');
     if (token !== undefined) discord.token = token;
 
     // `adapter` is an open registry name, so env can select any registered
@@ -507,7 +530,15 @@ export class ConfigLoader {
       }
     }
 
-    return { ...bot, adapter, discord, ai, session, memory, media, systemPrompt };
+    const platform = this.#dataConfig && isRecord(this.#dataConfig['platform_settings']) ? this.#dataConfig['platform_settings'] : {};
+    const platformRate = isRecord(platform['rate_limit']) ? platform['rate_limit'] : {};
+    const platformCount = numberValue(platformRate['count']);
+    const platformTime = numberValue(platformRate['time']);
+    const rateLimit = platformCount && platformCount > 0 && platformTime && platformTime > 0
+      ? { ...bot.rateLimit, enabled: true, max: Math.round(platformCount), windowMs: Math.round(platformTime * 1000) }
+      : bot.rateLimit;
+    if (platform['unique_session'] === true) session = { ...session, scope: 'channel' };
+    return { ...bot, adapter, discord, ai, session, memory, media, rateLimit, systemPrompt };
   }
 
   #applyGlobalEnv(global: GlobalConfig): GlobalConfig {
@@ -530,9 +561,14 @@ export class ConfigLoader {
 
     const storagePath = envValue(this.#env, 'MOHO_STORAGE_PATH');
     if (storagePath !== undefined) next.storage.path = storagePath;
-    const adminToken=envValue(this.#env,'MOHO_ADMIN_TOKEN');if(adminToken!==undefined)next.admin.token=adminToken;
-    const adminHost=envValue(this.#env,'MOHO_ADMIN_HOST');if(adminHost!==undefined)next.admin.host=adminHost;
-    const adminPort=envValue(this.#env,'MOHO_ADMIN_PORT');if(adminPort!==undefined){const port=Number(adminPort);if(Number.isInteger(port)&&port>=1&&port<=65535)next.admin.port=port;else this.#log.warn({key:'MOHO_ADMIN_PORT'},'ignoring invalid admin port');}
+    const privateMoho = this.#dataConfig && isRecord(this.#dataConfig['mohobot']) ? this.#dataConfig['mohobot'] : {};
+    const privateAdmin = isRecord(privateMoho['admin']) ? privateMoho['admin'] : {};
+    const adminToken = typeof privateAdmin['token'] === 'string' && privateAdmin['token'].trim() ? privateAdmin['token'].trim() : envValue(this.#env,'MOHO_ADMIN_TOKEN');
+    if(adminToken!==undefined)next.admin.token=adminToken;
+    const adminHost = typeof privateAdmin['host'] === 'string' && privateAdmin['host'].trim() ? privateAdmin['host'].trim() : envValue(this.#env,'MOHO_ADMIN_HOST');
+    if(adminHost!==undefined)next.admin.host=adminHost;
+    const adminPortRaw = numberValue(privateAdmin['port']) ?? (envValue(this.#env,'MOHO_ADMIN_PORT') === undefined ? undefined : Number(envValue(this.#env,'MOHO_ADMIN_PORT')));
+    if(adminPortRaw!==undefined){const port=adminPortRaw;if(Number.isInteger(port)&&port>=1&&port<=65535)next.admin.port=port;else this.#log.warn({key:'admin.port'},'ignoring invalid admin port');}
 
     next.ai = this.#applyAiEnv(next.ai, '');
     return next;
@@ -639,6 +675,60 @@ export class ConfigLoader {
     if (fields.length > 0) {
       this.#log.warn({ file, fields: fields.sort() }, 'unknown config fields retained for forward compatibility and ignored by this version');
     }
+  }
+
+  /**
+   * Private AstrBot-compatible provider control plane. Only the explicitly
+   * selected default_provider_id is projected into MohoBot's AI config.
+   */
+  async #loadDataConfigOverrides(): Promise<Record<string, unknown>> {
+    const file = path.join(this.#rootDir, 'data', 'config.json');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(file, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.#log.warn({ file, error: errText(error) }, 'invalid data config; ignoring it');
+      return {};
+    }
+    if (!isRecord(parsed)) {
+      this.#log.warn({ file }, 'data config must contain an object; ignoring it');
+      return {};
+    }
+    this.#dataConfig = parsed;
+    const settings = isRecord(parsed['provider_settings']) ? parsed['provider_settings'] : {};
+    const defaultId = typeof settings['default_provider_id'] === 'string' ? settings['default_provider_id'].trim() : '';
+    const providers = Array.isArray(parsed['provider']) ? parsed['provider'] : [];
+    const selected = providers.find((item) => isRecord(item) && item['id'] === defaultId && item['enable'] !== false);
+    if (!defaultId || !isRecord(selected)) {
+      this.#log.warn({ file, defaultProviderId: defaultId || undefined }, 'data config default provider is missing or disabled; ignoring it');
+      return {};
+    }
+    const sourceId = typeof selected['provider_source_id'] === 'string' ? selected['provider_source_id'] : '';
+    const sources = Array.isArray(parsed['provider_sources']) ? parsed['provider_sources'] : [];
+    const source = sources.find((item) => isRecord(item) && item['id'] === sourceId && item['enable'] !== false);
+    if (!sourceId || !isRecord(source)) {
+      this.#log.warn({ file, defaultProviderId: defaultId, sourceId: sourceId || undefined }, 'data config provider source is missing or disabled; ignoring it');
+      return {};
+    }
+    const key = strings(source['key'])[0] ?? '';
+    const baseUrl = typeof source['api_base'] === 'string' ? source['api_base'].trim() : '';
+    const model = typeof selected['model'] === 'string' ? selected['model'].trim() : '';
+    if (!key || !baseUrl || !model) {
+      this.#log.warn({ file, defaultProviderId: defaultId, hasKey: Boolean(key), hasBaseUrl: Boolean(baseUrl), hasModel: Boolean(model) }, 'data config default provider is incomplete; ignoring it');
+      return {};
+    }
+    const timeoutSeconds = numberValue(source['timeout']);
+    const rateLimit = isRecord(parsed['platform_settings']) && isRecord(parsed['platform_settings']['rate_limit']) ? parsed['platform_settings']['rate_limit'] : {};
+    const retries = numberValue(settings['request_max_retries']);
+    const sourceProvider = typeof source['provider'] === 'string' ? source['provider'].trim() : '';
+    const override: Record<string, unknown> = {
+      provider: sourceProvider === 'kilo' ? 'kilo' : 'openai-compatible', baseUrl, apiKey: key, model,
+      timeoutMs: timeoutSeconds && timeoutSeconds > 0 ? Math.round(timeoutSeconds * 1000) : undefined,
+      retries: retries && retries >= 0 ? Math.round(retries) : undefined,
+      options: { dataConfig: { providerId: defaultId, sourceId, rateLimit: { time: numberValue(rateLimit['time']), count: numberValue(rateLimit['count']), strategy: rateLimit['strategy'] } } },
+    };
+    this.#log.info({ file, providerId: defaultId, sourceId, model }, 'loaded selected data config provider');
+    return pruneUndefined(override);
   }
 
   /**

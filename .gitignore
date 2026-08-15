@@ -29,6 +29,8 @@ config/bots/*.local.yaml
 config/bots/*.local.yml
 data/provider.local.yaml
 data/provider.local.yml
+# Private AstrBot-compatible platform/provider config. Keep only the redacted example tracked.
+data/config.json
 *.log
 logs/
 *_TODO.md
