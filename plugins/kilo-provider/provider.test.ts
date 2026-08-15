@@ -226,22 +226,11 @@ describe('reasoning models', () => {
     const { logger, warns } = recordingLogger();
     const provider = new KiloProvider(settings({ maxTokens: 20 }), { logger, fetchImpl });
 
-    const response = await provider.chat(messages);
+    await expect(provider.chat(messages)).rejects.toMatchObject({
+      kind: 'server',
+      message: expect.stringContaining('reasoning chain consumed the token budget'),
+    });
 
-    expect(response.content).not.toBe('');
-    expect(response.content).toContain('[kilo]');
-    expect(response.content).toContain('474 reasoning tokens');
-    expect(response.content).toContain('finish_reason=length');
-    expect(response.content).toContain('Raise ai.maxTokens above 20');
-    expect(response.reasoningOnly).toBe(true);
-    expect(response.reasoning).toContain('Let me think');
-    expect(response.reasoningTokens).toBe(474);
-    expect(response.finishReason).toBe('length');
-    expect(response.usage).toEqual({ promptTokens: 17, completionTokens: 481, totalTokens: 498 });
-
-    const warned = warns.find((w) => (w.msg ?? '').includes('token budget was consumed'));
-    expect(warned).toBeDefined();
-    expect(warned?.msg).toContain('raise maxTokens');
   });
 
   it('keeps reasoning out of content when the model does answer', async () => {
@@ -447,7 +436,12 @@ describe('resolveKiloSettings', () => {
     expect(resolved.baseUrl).toBe(KILO_DEFAULT_BASE_URL);
     expect(resolved.model).toBe(KILO_DEFAULT_MODEL);
     expect(resolved.maxTokens).toBe(KILO_DEFAULT_MAX_TOKENS);
-    expect(resolved.maxTokens).toBeGreaterThan(1024);
+    expect(resolved.maxTokens).toBe(0);
+  });
+
+  it('honors an explicit compatible Kilo gateway URL', () => {
+    const resolved = resolveKiloSettings(frameworkDefaultConfig({ baseUrl: 'https://apx.ntbsd.eu.org/v1' }), {}, {});
+    expect(resolved.baseUrl).toBe('https://apx.ntbsd.eu.org/v1');
   });
 
   it('lets plugin.json config override the kilo defaults', () => {

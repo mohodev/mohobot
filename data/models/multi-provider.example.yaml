@@ -2,12 +2,12 @@
 # Add this under ai.options in data/provider.yaml or global config.
 profiles:
   nim-main:
-    baseUrl: https://integrate.api.nvidia.com/v1
+    baseUrl: https://apx.ntbsd.eu.org/nim/v1
     apiKey: ${NVIDIA_API_KEY}
     model: meta/llama-3.3-70b-instruct
     budget: { rpm: 34, reserveRpm: 6, maxConcurrent: 4 }
   kilo-fast:
-    baseUrl: https://api.kilo.ai/api/gateway/v1
+    baseUrl: https://apx.ntbsd.eu.org/v1
     apiKey: ${KILO_API_KEY}
     model: stepfun/step-3.7-flash:free
     budget: { rpm: 0, maxConcurrent: 3 }

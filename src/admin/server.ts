@@ -10,6 +10,7 @@ import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
 import{KnowledgeBaseStore}from'../knowledge/store.js';
 import type { Storage } from '../storage/types.js';
+import { chatLogQuery } from '../storage/chatlog.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
 import { AffinityStore } from './affinity.js';
@@ -318,6 +319,7 @@ export class AdminServer {
       return this.#ok({ audit });
     }
     if(method==='GET'&&pathname==='/api/ops/sessions'){const sessions=await requireOps(this.#opts.ops).listSessions({limit:intParam(url,'limit'),offset:intParam(url,'offset'),botId:stringParam(url,'botId'),channelId:stringParam(url,'channelId'),userId:stringParam(url,'userId')});return this.#ok({sessions});}
+    if(method==='GET'&&pathname==='/api/ops/chat-log'){const channelId=stringParam(url,'channelId');if(!channelId)throw new HttpError(400,'channelId required');const limit=intParam(url,'limit')??50;if(!Number.isSafeInteger(limit)||limit<1||limit>100)throw new HttpError(400,'invalid limit');const botId=stringParam(url,'botId');return this.#ok({messages:chatLogQuery(channelId,limit,botId).reverse()});}
     const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
     if(method==='GET'&&pathname==='/api/ops/outbox'){const outbox=await requireOps(this.#opts.ops).listOutbox({limit:intParam(url,'limit'),offset:intParam(url,'offset'),status:stringParam(url,'status') as any});return this.#ok({outbox});}
     const outboxRetry=pathname.match(/^\/api\/ops\/outbox\/([^/]+)\/retry$/);if(method==='POST'&&outboxRetry){const event=await requireOps(this.#opts.ops).retryOutbox(decodeURIComponent(outboxRetry[1]!));return this.#ok({event});}

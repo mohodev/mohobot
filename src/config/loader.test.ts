@@ -217,6 +217,13 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.discord.token).toBe('data-config-discord-token');
   });
 
+  it('removes the local max-token ceiling for a selected Kilo free model', async () => {
+    await writeGlobal('logLevel: info\n'); await writeBot('main.yaml', 'name: Main\n'); await mkdir(path.join(rootDir, 'data'), { recursive: true });
+    await writeFile(path.join(rootDir, 'data', 'config.json'), JSON.stringify({ provider_sources: [{ id: 'kilo', provider: 'kilo', enable: true, api_base: 'https://api.kilo.ai/api/gateway/v1', key: ['kilo-key'] }], provider: [{ id: 'kilo/hy3', enable: true, provider_source_id: 'kilo', model: 'tencent/hy3:free' }], provider_settings: { default_provider_id: 'kilo/hy3' } }), 'utf8');
+    const cfg = await newLoader().load();
+    expect(cfg.bots[0]?.ai).toMatchObject({ provider: 'kilo', model: 'tencent/hy3:free', maxTokens: 0 });
+  });
+
   it('lets global.yaml override data/provider.yaml defaults', async () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(

@@ -723,6 +723,9 @@ export class ConfigLoader {
     const sourceProvider = typeof source['provider'] === 'string' ? source['provider'].trim() : '';
     const override: Record<string, unknown> = {
       provider: sourceProvider === 'kilo' ? 'kilo' : 'openai-compatible', baseUrl, apiKey: key, model,
+      // Kilo free reasoning models may consume a fixed default output budget
+      // entirely on reasoning. `0` means omit max_tokens and use the provider limit.
+      maxTokens: sourceProvider === 'kilo' && /:free$/i.test(model) ? 0 : undefined,
       timeoutMs: timeoutSeconds && timeoutSeconds > 0 ? Math.round(timeoutSeconds * 1000) : undefined,
       retries: retries && retries >= 0 ? Math.round(retries) : undefined,
       stream: settings['streaming_response'] === true,
