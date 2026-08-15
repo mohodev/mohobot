@@ -228,11 +228,14 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
 
     try {
+      const maxTokens=options.maxTokens??this.#cfg.maxTokens;
+      // 0 means "let this OpenAI-compatible gateway choose". Omitting is
+      // important: several providers interpret max_tokens: 0 as zero output.
       const body = JSON.stringify({
         model,
         messages: messages.map((m) => (m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content })),
         temperature: options.temperature ?? this.#cfg.temperature,
-        max_tokens: options.maxTokens ?? this.#cfg.maxTokens,
+        ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         stream,
       });
 
