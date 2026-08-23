@@ -7,6 +7,13 @@ export interface SocialDecision { action: SocialAction; urgency: 'low' | 'normal
 export function decideSocially(message: MohoMessage, input: { recentReplies: number; energy: number; stress: number; deviceDelay?: boolean; proactiveRoll?: number } = { recentReplies: 0, energy: .65, stress: .2 }): SocialDecision {
   const text = message.content.trim();
   const urgent = /[?？]|怎么办|救命|急/.test(text);
+  // A whitelisted fellow RP character cutting into the conversation is worth
+  // engaging (quote-reply back), but never with "direct" privilege and never
+  // endlessly: recentReplies >= 3 acts as the anti-loop cooldown.
+  if (message.author.bot) {
+    if (input.recentReplies >= 3) return { action: 'ignore', urgency: 'low', reason: 'peer bot cooldown' };
+    return { action: 'reply', urgency: urgent ? 'normal' : 'low', reason: 'peer rp character interjected' };
+  }
   // A direct @, reply-to-bot, or DM is an explicit invitation: simulated device
   // delay may affect timing, never silently discard it.
   if (message.channel.dm || message.mentionsBot) return { action: 'reply', urgency: urgent ? 'high' : 'normal', reason: 'direct' };

@@ -65,6 +65,8 @@ export const DiscordConfigSchema = z.object({
   /** Users always ignored (in addition to all bots). */
   blockedUsers: z.array(z.string()).default([]),
   ignoreBots: z.boolean().default(true),
+  /** Bot authors exempted from ignoreBots - fellow RP characters allowed to banter. */
+  peerBots: z.array(z.string()).default([]),
   /** Show the typing indicator while the AI is thinking. */
   typingIndicator: z.boolean().default(true),
   /** Remove stale text-command registrations and keep an explicit interaction base. */
