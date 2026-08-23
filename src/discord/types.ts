@@ -20,7 +20,7 @@ export interface GatewayStatus {
 
 export interface Gateway extends Managed {
   readonly botId: BotId;
-  readonly platform: 'discord' | 'console';
+  readonly platform: 'discord' | 'console' | 'webhook';
   send(out: OutboundMessage): Promise<void>;
   /** Show a typing indicator; no-op when unsupported. Must never throw. */
   typing(channelId: string): Promise<void>;

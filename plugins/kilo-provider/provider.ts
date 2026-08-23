@@ -15,9 +15,6 @@
  *
  *  1. Reasoning models. `message.content` may be null while `message.reasoning`
  *     carries the chain of thought. Measured: a three word answer cost 481
- *     completion tokens, 474 of them reasoning tokens. With max_tokens=20 the
- *     content came back null and finish_reason=length; only at max_tokens=800
- *     did the actual answer appear. Hence KILO_DEFAULT_MAX_TOKENS = 2048,
  *     well above the framework default of 1024.
  *
  *  2. Errors masquerade as HTTP 200. A paid model on a negative balance answers
@@ -55,13 +52,11 @@ export const KILO_PROVIDER_NAME = 'kilo';
 export const KILO_DEFAULT_BASE_URL = 'https://api.kilo.ai/api/gateway/v1';
 export const KILO_DEFAULT_MODEL = 'tencent/hy3:free';
 /** Reasoning eats the budget; 1024 is not enough on this gateway. */
-export const KILO_DEFAULT_MAX_TOKENS = 0;
 
 /** What AIConfigSchema falls back to when a bot yaml stays silent. */
 const FRAMEWORK_DEFAULTS = {
   baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4o-mini',
-  maxTokens: 1024,
   temperature: 0.8,
   timeoutMs: 60_000,
   retries: 2,
@@ -92,7 +87,6 @@ export interface KiloSettings {
   model: string;
   apiKey: string;
   temperature: number;
-  maxTokens: number;
   timeoutMs: number;
   retries: number;
   retryBaseDelayMs: number;
@@ -296,25 +290,6 @@ export function classifyGatewayError(
   return { kind: 'unknown', retryable: false };
 }
 
-/** User-facing text when the model burned the whole budget on thinking. */
-export function reasoningOnlyNotice(input: {
-  model: string;
-  maxTokens: number;
-  finishReason?: string;
-  reasoningChars: number;
-  reasoningTokens?: number;
-}): string {
-  const spent =
-    input.reasoningTokens !== undefined
-      ? `${input.reasoningTokens} reasoning tokens`
-      : `${input.reasoningChars} chars of reasoning`;
-  return (
-    `[kilo] ${input.model} returned no answer - the whole reply was chain-of-thought ` +
-    `(${spent}, finish_reason=${input.finishReason ?? 'unknown'}). ` +
-    `Raise ai.maxTokens above ${input.maxTokens} and retry.`
-  );
-}
-
 /* ------------------------------------------------------------- settings */
 
 /**
@@ -349,12 +324,6 @@ export function resolveKiloSettings(
     asString(pc.model) ??
     KILO_DEFAULT_MODEL;
 
-  const maxTokens =
-    asNumber(opt.maxTokens) ??
-    explicitNumber(cfg?.maxTokens, FRAMEWORK_DEFAULTS.maxTokens) ??
-    asNumber(pc.maxTokens) ??
-    KILO_DEFAULT_MAX_TOKENS;
-
   const temperature =
     asNumber(opt.temperature) ??
     explicitNumber(cfg?.temperature, FRAMEWORK_DEFAULTS.temperature) ??
@@ -386,7 +355,6 @@ export function resolveKiloSettings(
     model,
     apiKey: asString(cfg?.apiKey) ?? asString(env.KILO_API_KEY) ?? '',
     temperature,
-    maxTokens,
     timeoutMs,
     retries: Math.max(0, Math.trunc(retries)),
     retryBaseDelayMs: Math.max(1, Math.trunc(retryBaseDelayMs)),
@@ -504,7 +472,6 @@ export class KiloProvider implements AIProvider {
   async #attempt(messages: ChatMessage[], options: ChatOptions, model: string): Promise<KiloAIResponse> {
     const started = Date.now();
     const timeoutMs = options.timeoutMs ?? this.#settings.timeoutMs;
-    const maxTokens = options.maxTokens ?? this.#settings.maxTokens;
     const stream = Boolean((options.stream ?? this.#settings.stream) && options.onDelta);
 
     const controller = new AbortController();
@@ -528,7 +495,6 @@ export class KiloProvider implements AIProvider {
           m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content },
         ),
         temperature: options.temperature ?? this.#settings.temperature,
-        ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),
       });
@@ -549,8 +515,8 @@ export class KiloProvider implements AIProvider {
       if (!res.ok) throw await this.#httpError(res);
 
       return stream
-        ? await this.#readStream(res, model, maxTokens, started, options, external, () => timedOut, timeoutMs)
-        : await this.#readJson(res, model, maxTokens, started, external, () => timedOut, timeoutMs);
+        ? await this.#readStream(res, model, started, options, external, () => timedOut, timeoutMs)
+        : await this.#readJson(res, model, started, external, () => timedOut, timeoutMs);
     } finally {
       clearTimeout(timer);
       external?.removeEventListener('abort', onExternalAbort);
@@ -620,7 +586,6 @@ export class KiloProvider implements AIProvider {
   async #readJson(
     res: Response,
     model: string,
-    maxTokens: number,
     started: number,
     external: AbortSignal | undefined,
     timedOut: () => boolean,
@@ -664,7 +629,6 @@ export class KiloProvider implements AIProvider {
         (typeof message.reasoning_content === 'string' ? message.reasoning_content : '') ??
         '',
       model: payload.model ?? model,
-      maxTokens,
       usage: toUsage(payload.usage),
       reasoningTokens: reasoningTokensOf(payload.usage),
       finishReason: choice.finish_reason,
@@ -675,7 +639,6 @@ export class KiloProvider implements AIProvider {
   async #readStream(
     res: Response,
     model: string,
-    maxTokens: number,
     started: number,
     options: ChatOptions,
     external: AbortSignal | undefined,
@@ -788,7 +751,6 @@ export class KiloProvider implements AIProvider {
       content,
       reasoning,
       model: resolvedModel,
-      maxTokens,
       usage,
       reasoningTokens,
       finishReason,
@@ -805,7 +767,6 @@ export class KiloProvider implements AIProvider {
     content: string;
     reasoning: string;
     model: string;
-    maxTokens: number;
     usage?: AIUsage;
     reasoningTokens?: number;
     finishReason?: string;
@@ -819,7 +780,6 @@ export class KiloProvider implements AIProvider {
       this.#logger.warn(
         {
           model: input.model,
-          maxTokens: input.maxTokens,
           reasoningTokens: input.reasoningTokens,
           finishReason: input.finishReason,
         },

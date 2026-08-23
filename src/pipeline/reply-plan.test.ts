@@ -3,12 +3,12 @@ import { decodeReplyPlan, deliverySegments, planText } from './reply-plan.js';
 
 describe('ReplyPlan decoder', () => {
   it('keeps ordinary model text backward compatible', () => {
-    expect(decodeReplyPlan('hello')).toEqual({ action: 'reply', style: 'chat', quote: false, segments: [{ text: 'hello' }] });
+    expect(decodeReplyPlan('hello')).toEqual({ action: 'reply', style: 'chat', quote: true, segments: [{ text: 'hello' }] });
   });
   it('decodes bounded segments and suppresses an explicit ignore', () => {
     const plan = decodeReplyPlan('```reply-plan\n{"action":"reply","style":"comfort","segments":[{"text":"我在。","pauseAfterMs":99999},{"text":"慢慢说。"}]}\n```');
     expect(plan.style).toBe('comfort');
-    expect(plan.quote).toBe(false);
+    expect(plan.quote).toBe(true); // default-on now
     expect(plan.segments[0]?.pauseAfterMs).toBe(4000);
     expect(planText(plan)).toBe('我在。\n慢慢说。');
     expect(decodeReplyPlan('```json\n{"action":"ignore","segments":[]}\n```').action).toBe('ignore');

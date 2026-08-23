@@ -55,9 +55,8 @@ describe('createProvider credential gate', () => {
     expect(p.name).toBe(MOCK_PROVIDER);
   });
 
-  it('falls back cleanly when the configured provider is unknown', () => {
-    const p = createProvider(cfg({ provider: 'does-not-exist', apiKey: '' }), { logger });
-    expect(p.name).toBe(MOCK_PROVIDER);
+  it('fails closed when the configured provider is unknown', () => {
+    expect(() => createProvider(cfg({ provider: 'does-not-exist', apiKey: '' }), { logger })).toThrow('configured AI provider "does-not-exist" is unavailable');
   });
 
   it('forces mock when model === mock regardless of key', () => {

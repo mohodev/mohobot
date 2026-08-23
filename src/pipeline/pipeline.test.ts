@@ -13,7 +13,8 @@ import { EventBus } from '../core/event.js';
 import { createNullLogger } from '../core/logger.js';
 import type { MohoMessage } from '../core/types.js';
 import type { SessionManagerLike } from '../session/types.js';
-import { buildContextAnchor, MessagePipeline, type PipelineDeps } from './pipeline.js';
+import { buildContextAnchor, MessagePipeline, type PipelineDeps } from './pipeline.js'
+import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore } from './chat-trace.js';
 
 describe('MessagePipeline ordering', () => {
@@ -33,14 +34,15 @@ describe('MessagePipeline ordering', () => {
       async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }, ...appended]; },
       async clear() {}, async sweep() { return 0; }, size() { return 1; },
     };
-    let seenMaxTokens: number | undefined = 1;
     const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
-    const first = `${'a'.repeat(180)}。`;
-    const full = `${first}尾句。`;
+    const first = '第一句。';
+    const second = '尾句。';
+    const full = `\`\`\`reply-plan\n{"action":"reply","style":"chat","quote":true,"segments":[{"text":"${first}","pauseAfterMs":0},{"text":"${second}"}]}\n\`\`\``;
     const traces = new ChatTraceStore();
     const pipeline = new MessagePipeline({
       config,
-      provider: { name: 'test', model: 'test', async chat(_messages, options) { seenMaxTokens = options?.maxTokens; options?.onDelta?.(first); options?.onDelta?.('尾句。'); return { content: full, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: { name: 'test', model: 'test', async chat(_messages, options) { options?.onDelta?.(full.slice(0, 80)); options?.onDelta?.(full.slice(80)); return { content: full, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
       sessions, events: new EventBus(), logger: createNullLogger(), traces, send: async (out) => { outgoing.push(out); },
     });
     await pipeline.handle({
@@ -51,18 +53,17 @@ describe('MessagePipeline ordering', () => {
     expect(appended[0]).toMatchObject({
       role: 'user', content: 'hello', sourceMessageId: 'source-42', sourcePlatform: 'discord', createdAt: 1234,
     });
-    expect(seenMaxTokens).toBeUndefined();
     expect(outgoing).toHaveLength(2);
-    expect(outgoing[0]).toMatchObject({ content: `<@u> ${first}`, replyToId: 'source-42', mentionUserId: 'u' });
-    expect(outgoing[1]).toMatchObject({ content: '尾句。' });
-    expect(traces.list()[0]?.events.map((event) => event.stage)).toEqual(expect.arrayContaining(['observed','context','model_started','delta','model_completed','delivered','memory_written']));
+    expect(outgoing[0]).toMatchObject({ content: first, replyToId: 'source-42' });
+    expect(outgoing[1]).toMatchObject({ content: second });
+    expect(traces.list()[0]?.events.map((event) => event.stage)).toEqual(expect.arrayContaining(['observed','context','model_started','delta','model_completed','plan_parsed','delivered','memory_written']));
   });
 
   it('shows typing while a direct model request is still pending', async () => {
-    const base=BotConfigSchema.parse({id:'main',rateLimit:{enabled:false},discord:{typingIndicator:true}});const config={...base,ai:AIConfigSchema.parse({...base.ai,apiKey:'test-key',maxTokens:0}),session:SessionConfigSchema.parse({...base.session,persist:false}),memory:MemoryConfigSchema.parse(base.memory),media:{...MediaConfigSchema.parse(base.media),vision:{...MediaConfigSchema.parse(base.media).vision,apiKey:''},ocr:{...MediaConfigSchema.parse(base.media).ocr,apiKey:''}}};let release!:()=>void;const waiting=new Promise<void>(resolve=>{release=resolve;});let typed=0;const sessions:SessionManagerLike={async get(){return{key:'k',botId:'main',channelId:'dm',userId:'u',messages:[],updatedAt:0};},async append(){},async buildContext(){return[{role:'user',content:'hi'}];},async clear(){},async sweep(){return 0;},size(){return 0;}};const pipeline=new MessagePipeline({config,sessions,provider:{name:'test',model:'test',async chat(){await waiting;return{content:'ok',model:'test',ms:1};},async health(){return{ok:true};}},events:new EventBus(),logger:createNullLogger(),typing:async()=>{typed++;},send:async()=>{}});const handled=pipeline.handle({id:'m',platform:'discord',botId:'main',channel:{id:'dm',dm:true},author:{id:'u',username:'u',bot:false},content:'hi',mentionsBot:true,attachments:[],createdAt:1});await vi.waitFor(()=>expect(typed).toBe(1));release();await handled;
+    const base=BotConfigSchema.parse({id:'main',rateLimit:{enabled:false},discord:{typingIndicator:true}});const config={...base,ai:AIConfigSchema.parse({...base.ai,apiKey:'test-key',maxTokens:0}),session:SessionConfigSchema.parse({...base.session,persist:false}),memory:MemoryConfigSchema.parse(base.memory),media:{...MediaConfigSchema.parse(base.media),vision:{...MediaConfigSchema.parse(base.media).vision,apiKey:''},ocr:{...MediaConfigSchema.parse(base.media).ocr,apiKey:''}}};let release!:()=>void;const waiting=new Promise<void>(resolve=>{release=resolve;});let typed=0;const sessions:SessionManagerLike={async get(){return{key:'k',botId:'main',channelId:'dm',userId:'u',messages:[],updatedAt:0};},async append(){},async buildContext(){return[{role:'user',content:'hi'}];},async clear(){},async sweep(){return 0;},size(){return 0;}};const pipeline=new MessagePipeline({config,sessions,topicBuffer:new TopicBuffer({quietMs:5}),provider:{name:'test',model:'test',async chat(){await waiting;return{content:'ok',model:'test',ms:1};},async health(){return{ok:true};}},events:new EventBus(),logger:createNullLogger(),typing:async()=>{typed++;},send:async()=>{}});const handled=pipeline.handle({id:'m',platform:'discord',botId:'main',channel:{id:'dm',dm:true},author:{id:'u',username:'u',bot:false},content:'hi',mentionsBot:true,attachments:[],createdAt:1});await vi.waitFor(()=>expect(typed).toBe(1));release();await handled;
   });
 
-  it('serializes concurrent messages in the same user session', async () => {
+  it('interrupt & merge: a newer direct message supersedes the in-flight answer in the same session', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
     const config = {
       ...base,
@@ -104,6 +105,7 @@ describe('MessagePipeline ordering', () => {
     const traces = new ChatTraceStore();
     const pipeline = new MessagePipeline({
       config,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
       provider,
       sessions,
       events: new EventBus(),
@@ -125,14 +127,144 @@ describe('MessagePipeline ordering', () => {
     const first = pipeline.handle(message('1', 'first'));
     await firstStarted;
     const second = pipeline.handle(message('2', 'second'));
-    await Promise.resolve();
+    // Let the batch window elapse so the newer turn flushes and marks the
+    // in-flight generation as superseded. Per-key serialization means the
+    // fresh call starts only after the first handle unwinds - so release it.
+    await new Promise((resolve) => setTimeout(resolve, 40));
     expect(calls).toEqual(['first']);
     releaseFirst?.();
     await Promise.all([first, second]);
 
     expect(calls).toEqual(['first', 'second']);
-    expect(sent).toEqual(['reply:first', 'reply:second']);
-    expect(history.map((m) => m.content)).toEqual(['first', 'reply:first', 'second', 'reply:second']);
+    // Hermes-style: the superseded answer never ships and never enters memory;
+    // the session keeps both user turns followed by the single fresh reply.
+    expect(sent).toEqual(['reply:second']);
+    expect(history.map((m) => m.content)).toEqual(['first', 'second', 'reply:second']);
+  });
+});
+
+describe('reply-plan ignore guard', () => {
+  const ignorePlan = '```reply-plan\n{"action":"ignore","segments":[]}\n```';
+  function ignoreSetup() {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: false }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
+    };
+    const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
+    const traces = new ChatTraceStore();
+    const pipeline = new MessagePipeline({
+      config,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: { name: 'test', model: 'test', async chat() { return { content: ignorePlan, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      sessions: { async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext(_k, s) { return [{ role: 'system', content: s }]; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } } as SessionManagerLike,
+      events: new EventBus(), logger: createNullLogger(), traces, send: async (out) => { outgoing.push(out); },
+    });
+    return { pipeline, outgoing, traces };
+  }
+  it('overrides a model ignore plan when the user directly summoned the bot', async () => {
+    const h = ignoreSetup();
+    await h.pipeline.handle({ id: 'm1', platform: 'discord', botId: 'main', channel: { id: 'c', dm: false }, author: { id: 'u', username: 'user', bot: false }, content: '<@bot> 上线', mentionsBot: true, attachments: [], createdAt: 1 });
+    expect(h.outgoing.length).toBeGreaterThan(0);
+    expect(h.outgoing[0]!.content).toContain('在呢');
+    expect(h.traces.list()[0]?.outcome).toBe('replied');
+  });
+  it('keeps silent skip for ordinary group chatter with no summons', async () => {
+    const h = ignoreSetup();
+    await h.pipeline.handle({ id: 'm2', platform: 'discord', botId: 'main', channel: { id: 'c', dm: false }, author: { id: 'u', username: 'user', bot: false }, content: '随便聊聊', mentionsBot: false, attachments: [], createdAt: 2 });
+    expect(h.outgoing).toHaveLength(0);
+    expect(h.traces.list()[0]?.events.some((e) => e.stage === 'ignored')).toBe(true);
+  });
+});
+
+describe('interrupt & merge (Hermes-style)', () => {
+  it('aborts an in-flight answer when a newer direct message arrives, then answers the merged turn', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: false }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
+    };
+    const appended: Array<import('../core/types.js').ChatMessage> = [];
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: appended, updatedAt: 0 }; },
+      async append(_key, message) { appended.push(message); },
+      async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }, ...appended]; },
+      async clear() {}, async sweep() { return 0; }, size() { return 1; },
+    };
+    let releaseFirst!: (v: { content: string; model: string; ms: number }) => void;
+    const firstGate = new Promise<{ content: string; model: string; ms: number }>((resolve) => { releaseFirst = resolve; });
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+    const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
+    const traces = new ChatTraceStore();
+    const pipeline = new MessagePipeline({
+      config,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: {
+        name: 'test', model: 'test',
+        async chat(_messages, options) {
+          calls += 1;
+          if (calls === 1) { signals.push(options!.signal!); return firstGate; }
+          return { content: '```reply-plan\n{"action":"reply","style":"chat","segments":[{"text":"合并后的回答"}]}\n```', model: 'test', ms: 0 };
+        },
+        async health() { return { ok: true }; },
+      },
+      sessions, events: new EventBus(), logger: createNullLogger(), traces, send: async (out) => { outgoing.push(out); },
+    });
+    const dm = (id: string, text: string): MohoMessage => ({ id, platform: 'discord' as const, botId: 'main', channel: { id: 'c', dm: true }, author: { id: 'u', username: 'user', bot: false }, content: text, mentionsBot: false, attachments: [], createdAt: Number(id) });
+    const p1 = pipeline.handle(dm('1', '第一问'));
+    await vi.waitFor(() => { expect(calls).toBe(1); });
+    expect(signals[0]).toBeDefined();
+    const p2 = pipeline.handle(dm('2', '等等，改成这样问'));
+    // The newer direct message must abort the in-flight generation.
+    await vi.waitFor(() => { expect(signals[0]!.aborted).toBe(true); });
+    releaseFirst({ content: '```reply-plan\n{"action":"reply","style":"chat","segments":[{"text":"过时的回答"}]}\n```', model: 'test', ms: 0 });
+    await Promise.all([p1, p2]);
+    await vi.waitFor(() => { expect(calls).toBe(2); expect(outgoing).toHaveLength(1); });
+    // The superseded answer is dropped; only the fresh merged answer ships.
+    expect(outgoing[0]).toMatchObject({ content: '合并后的回答' });
+    const firstTrace = traces.list().find((t) => t.messageId === '1');
+    expect(firstTrace?.events.some((e) => e.stage === 'interrupted_previous')).toBe(false);
+    expect(firstTrace?.events.some((e) => e.stage === 'aborted')).toBe(true);
+    expect(firstTrace?.outcome).not.toBe('replied');
+  });
+
+  it('never interrupts for ordinary group chatter without a summons', async () => {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: false }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
+    };
+    const signals: AbortSignal[] = [];
+    let calls = 0;
+    const gate = new Promise<void>(() => {});
+    const traces = new ChatTraceStore();
+    const pipeline = new MessagePipeline({
+      config,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: { name: 'test', model: 'test', async chat(_m, o) { calls += 1; signals.push(o!.signal!); return gate as never; }, async health() { return { ok: true }; } },
+      sessions: { async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext(_k, s) { return [{ role: 'system', content: s }]; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } } as SessionManagerLike,
+      events: new EventBus(), logger: createNullLogger(), traces, send: async () => {},
+    });
+    // '?' marks the message urgent in the social decision layer, so it always
+    // reaches the model — yet carries no @/DM/reply summon, proving that the
+    // interrupt path only fires for explicit direct summons.
+    const group = (id: string): MohoMessage => ({ id, platform: 'discord' as const, botId: 'main', channel: { id: 'c', dm: false }, author: { id: 'u', username: 'user', bot: false }, content: `普通群聊问题${id}?`, mentionsBot: false, attachments: [], createdAt: Number(id) });
+    void pipeline.handle(group('1'));
+    // Ordinary chatter goes through the 900ms topic merge buffer first.
+    await vi.waitFor(() => { expect(calls).toBe(1); }, { timeout: 3000 });
+    void pipeline.handle(group('2'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(signals[0]!.aborted).toBe(false);
   });
 });
 

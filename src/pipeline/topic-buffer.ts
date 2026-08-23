@@ -1,7 +1,8 @@
 import type { MohoMessage } from '../core/types.js';
 
 export interface TopicBufferOptions { quietMs: number; maxMessages: number; maxChars: number; }
-export const DEFAULT_TOPIC_BUFFER: TopicBufferOptions = { quietMs: 900, maxMessages: 6, maxChars: 2000 };
+/** 3s quiet window: a burst of messages is one batch; later arrivals start the next batch. */
+export const DEFAULT_TOPIC_BUFFER: TopicBufferOptions = { quietMs: 3000, maxMessages: 6, maxChars: 2000 };
 
 /** Coalesces consecutive low-urgency messages without calling a model. */
 export class TopicBuffer {
@@ -50,5 +51,8 @@ export class TopicBuffer {
     for (const resolve of item.resolves) resolve(merged);
     return Promise.resolve(merged);
   }
-  #immediate(message: MohoMessage): boolean { return message.channel.dm || message.mentionsBot || message.attachments.length > 0 || message.content.trim().startsWith('?'); }
+  // Everything - including @summons and DMs - waits out the same quiet window
+  // so a burst lands in one batch ("think after the batch completes"). Only ?
+  // admin commands skip the wait.
+  #immediate(message: MohoMessage): boolean { return message.content.trim().startsWith('?'); }
 }

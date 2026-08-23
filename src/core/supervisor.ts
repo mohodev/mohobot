@@ -240,11 +240,31 @@ export class Supervisor {
     }
 
     if (entry.restartTimes.length >= this.#config.maxRestarts) {
+      if (entry.critical) {
+        this.#logger.error(
+          { component: entry.component.name, restarts: entry.restartTimes.length },
+          'restart limit reached; component left down',
+        );
+        this.#onFatal?.(`critical component "${entry.component.name}" is unrecoverable`);
+        return;
+      }
+      // Non-critical components must never be left permanently down: after one
+      // full window the recorded failures expire anyway, so cool down for
+      // restartWindowMs, reset the budget and retry from scratch.
+      const cooldownMs = this.#config.restartWindowMs;
       this.#logger.error(
-        { component: entry.component.name, restarts: entry.restartTimes.length },
-        'restart limit reached; component left down',
+        { component: entry.component.name, restarts: entry.restartTimes.length, inMs: cooldownMs },
+        'restart limit reached; cooldown retry scheduled',
       );
-      if (entry.critical) this.#onFatal?.(`critical component "${entry.component.name}" is unrecoverable`);
+      if (entry.restartTimer) clearTimeout(entry.restartTimer);
+      const timer = setTimeout(() => {
+        entry.restartTimer = undefined;
+        if (this.#shuttingDown) return;
+        entry.restartTimes = [];
+        void this.restartComponent(entry.component.name);
+      }, cooldownMs);
+      timer.unref?.();
+      entry.restartTimer = timer;
       return;
     }
 

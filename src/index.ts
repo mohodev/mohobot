@@ -21,6 +21,7 @@ import { EventBus } from './core/event.js';
 import { HotReloader, type ReloadEvent } from './core/hot-reload.js';
 import { createLogger, type Logger } from './core/logger.js';
 import { LogBuffer } from './core/log-buffer.js';
+import { discordChatLog } from './core/discord-chat-log.js';
 import { registries } from './core/registries.js';
 import { Supervisor } from './core/supervisor.js';
 import { TaskManager } from './core/task-manager.js';
@@ -207,6 +208,7 @@ export class Runtime {
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
         taskControl:new TaskControlFacade({tasks:this.#tasks}),
         logs:this.#logs,
+        discordChatLog,
         providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
         extensions:new ExtensionsControlFacade(registries),
         debugChat,
@@ -219,6 +221,9 @@ export class Runtime {
     this.#installSignalHandlers();
 
     const running = this.#supervisor.status().filter((s) => s.state === 'running').length;
+    if (running !== this.#bots.size) {
+      throw new Error(`runtime readiness failed: ${running}/${this.#bots.size} enabled bot(s) running`);
+    }
     this.#logger.info({ running, total: this.#bots.size }, 'MohoBot is up');
   }
 
@@ -264,7 +269,9 @@ export class Runtime {
    * The directory is optional, and one broken extension never blocks boot.
    */
   async #loadExtensions(): Promise<void> {
-    const dir = path.join(ROOT_DIR, 'extensions');
+    const dir = process.env.MOHO_COMPILED === '1'
+      ? path.join(ROOT_DIR, 'dist', 'extensions')
+      : path.join(ROOT_DIR, 'extensions');
     let entries: string[];
     try {
       entries = (await fs.readdir(dir)).filter((f) => /\.(ts|js|mjs)$/.test(f) && !f.endsWith('.d.ts')).sort();

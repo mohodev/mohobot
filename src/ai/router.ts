@@ -11,15 +11,12 @@ export interface ModelBudget {
   reserveRpm: number;
   /** Upper bound on parallel upstream calls. */
   maxConcurrent: number;
-  /** Per-task output budget. Call-site options can only lower it. */
-  maxTokens: Partial<Record<ModelTask, number>>;
 }
 
 export const DEFAULT_MODEL_BUDGET: ModelBudget = {
   rpm: 34,
   reserveRpm: 6,
   maxConcurrent: 4,
-  maxTokens: { reply: 700, vision: 450, planner: 250, reflection: 350, profile: 300, world: 700, admin: 500 },
 };
 
 export class ModelBudgetError extends Error {
@@ -42,7 +39,7 @@ export class BudgetedProvider implements AIProvider {
 
   constructor(inner: AIProvider, budget: Partial<ModelBudget> = {}) {
     this.#inner = inner;
-    this.#budget = { ...DEFAULT_MODEL_BUDGET, ...budget, maxTokens: { ...DEFAULT_MODEL_BUDGET.maxTokens, ...budget.maxTokens } };
+    this.#budget = { ...DEFAULT_MODEL_BUDGET, ...budget };
   }
 
   get name(): string { return `budgeted:${this.#inner.name}`; }
@@ -53,10 +50,8 @@ export class BudgetedProvider implements AIProvider {
     const task = options.task ?? 'reply';
     this.#admit(task);
     try {
-      const ceiling = this.#budget.maxTokens[task];
-      const requested = options.maxTokens;
-      const unlimited = ceiling === 0 || requested === 0;
-      return await this.#inner.chat(messages, { ...options, maxTokens: unlimited ? undefined : ceiling === undefined ? requested : requested === undefined ? ceiling : Math.min(requested, ceiling) });
+      // No local output ceiling: the model/gateway decides how much to emit.
+      return await this.#inner.chat(messages, options);
     } finally {
       this.#active -= 1;
     }

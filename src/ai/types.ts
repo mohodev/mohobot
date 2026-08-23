@@ -10,7 +10,6 @@ import type { ChatMessage } from '../core/types.js';
 export interface ChatOptions {
   model?: string;
   temperature?: number;
-  maxTokens?: number;
   timeoutMs?: number;
   /** External cancellation (shutdown, user cancel). */
   signal?: AbortSignal;

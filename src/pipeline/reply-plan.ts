@@ -23,7 +23,7 @@ const MAX_TYPING_MS = 8_000;
 export function decodeReplyPlan(input: string): ReplyPlan {
   const trimmed = input.trim();
   const match = trimmed.match(/^```(?:reply-plan|json)?\s*\n([\s\S]*?)\n```$/i);
-  if (!match) return { action: 'reply', style: 'chat', quote: false, segments: [{ text: trimmed }] };
+  if (!match) return { action: 'reply', style: 'chat', quote: true, segments: [{ text: trimmed }] };
   try {
     const raw = JSON.parse(match[1]!) as { action?: unknown; style?: unknown; quote?: unknown; segments?: unknown };
     if (raw.action === 'ignore') return { action: 'ignore', style: 'chat', quote: false, segments: [] };
@@ -37,9 +37,9 @@ export function decodeReplyPlan(input: string): ReplyPlan {
     });
     if (segments.length === 0) throw new Error('empty segments');
     const style: ReplyStyle = ['short', 'chat', 'structured', 'comfort', 'technical'].includes(String(raw.style)) ? raw.style as ReplyStyle : 'chat';
-    return { action: 'reply', style, quote: raw.quote === true, segments };
+    return { action: 'reply', style, quote: raw.quote !== false, segments };
   } catch {
-    return { action: 'reply', style: 'chat', quote: false, segments: [{ text: trimmed }] };
+    return { action: 'reply', style: 'chat', quote: true, segments: [{ text: trimmed }] };
   }
 }
 

@@ -19,7 +19,6 @@ import type { PluginContext } from '../../src/plugins/types.js';
 import plugin from './index.js';
 import {
   KILO_DEFAULT_BASE_URL,
-  KILO_DEFAULT_MAX_TOKENS,
   KILO_DEFAULT_MODEL,
   KiloProvider,
   classifyGatewayError,
@@ -38,7 +37,6 @@ function settings(overrides: Partial<KiloSettings> = {}): KiloSettings {
     model: KILO_DEFAULT_MODEL,
     apiKey: 'test-key-not-real',
     temperature: 0.8,
-    maxTokens: 2048,
     timeoutMs: 5000,
     retries: 0,
     retryBaseDelayMs: 1,
@@ -224,7 +222,7 @@ describe('reasoning models', () => {
     };
     const { fetchImpl } = queuedFetch([jsonResponse(body, 200)]);
     const { logger, warns } = recordingLogger();
-    const provider = new KiloProvider(settings({ maxTokens: 20 }), { logger, fetchImpl });
+    const provider = new KiloProvider(settings(), { logger, fetchImpl });
 
     await expect(provider.chat(messages)).rejects.toMatchObject({
       kind: 'server',
@@ -418,7 +416,6 @@ function frameworkDefaultConfig(overrides: Partial<AIConfig> = {}): AIConfig {
     apiKey: '',
     model: 'gpt-4o-mini',
     temperature: 0.8,
-    maxTokens: 1024,
     timeoutMs: 60000,
     retries: 2,
     retryBaseDelayMs: 500,
@@ -435,8 +432,6 @@ describe('resolveKiloSettings', () => {
 
     expect(resolved.baseUrl).toBe(KILO_DEFAULT_BASE_URL);
     expect(resolved.model).toBe(KILO_DEFAULT_MODEL);
-    expect(resolved.maxTokens).toBe(KILO_DEFAULT_MAX_TOKENS);
-    expect(resolved.maxTokens).toBe(0);
   });
 
   it('honors an explicit compatible Kilo gateway URL', () => {
@@ -447,24 +442,22 @@ describe('resolveKiloSettings', () => {
   it('lets plugin.json config override the kilo defaults', () => {
     const resolved = resolveKiloSettings(
       frameworkDefaultConfig(),
-      { defaultModel: 'nvidia/nemotron-3-super-120b-a12b:free', maxTokens: 4096, timeoutMs: 90000 },
+      { defaultModel: 'nvidia/nemotron-3-super-120b-a12b:free', timeoutMs: 90000 },
       {},
     );
 
     expect(resolved.model).toBe('nvidia/nemotron-3-super-120b-a12b:free');
-    expect(resolved.maxTokens).toBe(4096);
     expect(resolved.timeoutMs).toBe(90000);
   });
 
   it('lets an explicit bot yaml value beat plugin.json', () => {
     const resolved = resolveKiloSettings(
-      frameworkDefaultConfig({ model: 'stepfun/step-3.7-flash:free', maxTokens: 8000 }),
-      { defaultModel: 'tencent/hy3:free', maxTokens: 4096 },
+      frameworkDefaultConfig({ model: 'stepfun/step-3.7-flash:free' }),
+      { defaultModel: 'tencent/hy3:free' },
       {},
     );
 
     expect(resolved.model).toBe('stepfun/step-3.7-flash:free');
-    expect(resolved.maxTokens).toBe(8000);
   });
 
   it('gives ai.options the last word', () => {
@@ -500,7 +493,7 @@ describe('plugin registration (no src/ changes required)', () => {
     const ctx = {
       pluginId: 'kilo-provider',
       logger: createNullLogger(),
-      config: { baseUrl: KILO_DEFAULT_BASE_URL, defaultModel: KILO_DEFAULT_MODEL, maxTokens: 2048 },
+      config: { baseUrl: KILO_DEFAULT_BASE_URL, defaultModel: KILO_DEFAULT_MODEL },
       botConfig: { ai: { apiKey: '' } },
       registry: registries,
     } as unknown as PluginContext;

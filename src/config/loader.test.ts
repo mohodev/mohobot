@@ -100,7 +100,6 @@ describe('ConfigLoader', () => {
     expect(bot?.adapter).toBe('discord');
     expect(bot?.ai.model).toBe('gpt-4o-mini');
     expect(bot?.ai.baseUrl).toBe('https://api.openai.com/v1');
-    expect(bot?.ai.maxTokens).toBe(1024);
     expect(bot?.session.maxMessages).toBe(20);
     expect(bot?.session.scope).toBe('user');
     expect(bot?.discord.maxReplyLength).toBe(1900);
@@ -217,11 +216,12 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.discord.token).toBe('data-config-discord-token');
   });
 
-  it('removes the local max-token ceiling for a selected Kilo free model', async () => {
+  it('selects the Kilo free reasoning model without any local token ceiling', async () => {
     await writeGlobal('logLevel: info\n'); await writeBot('main.yaml', 'name: Main\n'); await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeFile(path.join(rootDir, 'data', 'config.json'), JSON.stringify({ provider_sources: [{ id: 'kilo', provider: 'kilo', enable: true, api_base: 'https://api.kilo.ai/api/gateway/v1', key: ['kilo-key'] }], provider: [{ id: 'kilo/hy3', enable: true, provider_source_id: 'kilo', model: 'tencent/hy3:free' }], provider_settings: { default_provider_id: 'kilo/hy3' } }), 'utf8');
     const cfg = await newLoader().load();
-    expect(cfg.bots[0]?.ai).toMatchObject({ provider: 'kilo', model: 'tencent/hy3:free', maxTokens: 0 });
+    expect(cfg.bots[0]?.ai).toMatchObject({ provider: 'kilo', model: 'tencent/hy3:free' });
+    expect(cfg.bots[0]?.ai).not.toHaveProperty('maxTokens');
   });
 
   it('lets global.yaml override data/provider.yaml defaults', async () => {
@@ -236,7 +236,6 @@ describe('ConfigLoader', () => {
 
     const cfg = await newLoader().load();
     expect(cfg.global.ai.provider).toBe('kilo');
-    expect(cfg.global.ai.maxTokens).toBe(2048);
     expect(cfg.global.ai.model).toBe('global-model');
     expect(cfg.global.ai.temperature).toBe(0.7);
     expect(cfg.global.ai.options).toMatchObject({ budget: { maxTokens: { reply: 2048 } } });

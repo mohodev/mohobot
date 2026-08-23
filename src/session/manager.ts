@@ -299,7 +299,19 @@ export class SessionManager implements SessionManagerLike {
       );
     }
 
-    return [{ role: 'system', content: systemPrompt }, ...recalled, ...activeMessages];
+    // Time awareness: stamp every stored user turn with its local timestamp so
+    // the model can reason about "刚才/昨天/深夜" without guessing. Rendered at
+    // context-build time only — raw storage stays untouched.
+    const stamped = activeMessages.map((message) => {
+      if (message.role !== 'user' || !message.createdAt) return message;
+      const d = new Date(message.createdAt);
+      if (Number.isNaN(d.getTime())) return message;
+      const pad = (n: number): string => String(n).padStart(2, '0');
+      const stamp = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return { ...message, content: `[${stamp}] ${message.content}` };
+    });
+
+    return [{ role: 'system', content: systemPrompt }, ...recalled, ...stamped];
   }
 
   async clear(input: SessionKeyInput): Promise<void> {

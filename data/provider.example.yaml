@@ -6,10 +6,8 @@
 provider: kilo
 # Keep the tracked default aligned with the deployed Kilo model. Do not silently select another gateway model.
 model: tencent/hy3:free
-# tencent/hy3:free spends completion tokens on reasoning; fixed ceilings (1024,
-# 2048, even 4096) kept starving the reply ("reasoning chain consumed the token
-# budget"). 0 omits max_tokens entirely - no local output cap, the gateway/model
-# limit is whatever Kilo enforces.
+# tencent/hy3:free spends completion tokens on reasoning; 1024 can produce no text.
+maxTokens: 2048
 baseUrl: https://apx.ntbsd.eu.org/v1
 apiKey: ${KILO_API_KEY}
 temperature: 0.8
@@ -20,3 +18,12 @@ options:
     rpm: 34
     reserveRpm: 6
     maxConcurrent: 4
+    maxTokens:
+      # 0 removes the local reply ceiling; Kilo/model hard limits still apply.
+      reply: 0
+      vision: 450
+      planner: 250
+      reflection: 350
+      profile: 300
+      world: 700
+      admin: 500

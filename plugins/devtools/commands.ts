@@ -156,7 +156,6 @@ export async function cmdAi(deps: DevtoolsDeps, args: string[]): Promise<EmbedCa
   try {
     const response = await provider.chat([{ role: 'user', content: prompt }], {
       temperature: ai.temperature,
-      maxTokens: ai.maxTokens,
       timeoutMs: ai.timeoutMs,
     });
     const elapsed = now() - started;
@@ -225,7 +224,7 @@ export function cmdDiag(deps: DevtoolsDeps): EmbedCard {
         '[diag] bot',
         `  id=${bot.id} name=${bot.name} adapter=${bot.adapter} enabled=${bot.enabled}`,
         `  ai.provider=${ai.provider} ai.model=${ai.model} baseUrl=${ai.baseUrl}`,
-        `  temperature=${ai.temperature} maxTokens=${ai.maxTokens} timeoutMs=${ai.timeoutMs} retries=${ai.retries}`,
+        `  temperature=${ai.temperature} timeoutMs=${ai.timeoutMs} retries=${ai.retries}`,
         `  apiKey=${ai.apiKey.trim().length > 0 ? 'set' : 'not set'} mockMode=${isMockMode(ai) ? 'yes' : 'no'}`,
         `  memory.adapter=${bot.memory.adapter} session.scope=${bot.session.scope} disabledPlugins=[${bot.disabledPlugins.join(', ')}]`,
         '[diag] request headers (redacted)',
@@ -262,7 +261,6 @@ export async function benchmark(deps: DevtoolsDeps, runs: number, prompt: string
     try {
       await provider.chat([{ role: 'user', content: prompt }], {
         temperature: ai.temperature,
-        maxTokens: ai.maxTokens,
         timeoutMs: ai.timeoutMs,
       });
       durations.push(now() - started);

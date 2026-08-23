@@ -285,7 +285,6 @@ async function runChat(opts: CliOptions, logger: Logger, stream: boolean): Promi
     response = await provider.chat([{ role: 'user', content: prompt }], {
       model: ai.model,
       temperature: ai.temperature,
-      maxTokens: ai.maxTokens,
       timeoutMs: ai.timeoutMs,
       ...(stream
         ? {
