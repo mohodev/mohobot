@@ -256,7 +256,7 @@ export class MessagePipeline {
     // folds the follow-up into one fresh answer.
     // Note: quoting some *other* user is NOT a summon - mentionsBot already
     // encodes "@me or reply-to-me" from the adapter layer.
-    if (message.mentionsBot || message.channel.dm) {
+    if (!message.author.bot && (message.mentionsBot || message.channel.dm)) {
       const running = this.#active.get(queueKey);
       if (running && !running.signal.aborted) {
         running.abort();
@@ -350,7 +350,11 @@ export class MessagePipeline {
       maxFileBytes: cfg.media.maxFileBytes,
       maxTotalBytes: cfg.media.maxTotalBytes,
     });
-    const prompt = [content.trim(), attachments.accepted.length || attachments.rejected.length ? attachments.context : ''].filter(Boolean).join('\n\n');
+    const baseContent = content.trim();
+    // A whitelisted peer RP bot (e.g. 天依) interjected: label the speaker so
+    // the model treats the line as another character's banter, not a human's.
+    const speakerTag = message.author.bot && message.author.displayName ? `（另一个RP角色 ${message.author.displayName} 插嘴）` : message.author.bot ? '（另一个RP角色插嘴）' : '';
+    const prompt = [speakerTag + baseContent, attachments.accepted.length || attachments.rejected.length ? attachments.context : ''].filter(Boolean).join('\n\n');
     if (prompt.length === 0) {
       this.#stats.skipped += 1;
       return;
@@ -511,7 +515,7 @@ export class MessagePipeline {
     this.#trace(trace, 'plan_parsed', { action: plan.action, style: plan.style, quote: plan.quote, segments: plan.segments.length });
     // A direct @ / reply / DM is an explicit invitation: the model's own
     // "ignore" plan must never silently veto it. Degrade to a plain reply.
-    const directSummon = message.mentionsBot || message.channel.dm;
+    const directSummon = !message.author.bot && (message.mentionsBot || message.channel.dm);
     if (plan.action === 'ignore') {
       this.#stats.skipped += 1;
       this.#trace(trace, 'ignored', { reason: 'model_plan', directSummon });

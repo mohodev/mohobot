@@ -448,7 +448,7 @@ export class DiscordGateway implements Gateway {
 
     // Cheapest filters first.
     if (message.author.id === self.id) return;
-    if (cfg.ignoreBots && message.author.bot) return;
+    if (cfg.ignoreBots && message.author.bot && !cfg.peerBots.includes(message.author.id)) return;
     if (cfg.blockedUsers.includes(message.author.id)) return;
 
     const guildId = message.guildId ?? undefined;
