@@ -41,7 +41,7 @@ export class ModelDayPlanner implements DayPlanner {
       const response = await this.#provider.chat([
         { role: 'system', content: '你是一个世界模拟器。只输出 JSON：{"items":[{"at":"HH:mm","activity":"...","location":"...","reason":"...","energyCost":0.1}]}。计划应有日常、休息、有限社交，不要让角色全天在线。' },
         { role: 'user', content: JSON.stringify({ date: input.date, character: input.character, world: input.world }) },
-      ], { temperature: 0.7, maxTokens: 1200, timeoutMs: 15_000 });
+      ], { temperature: 0.7, timeoutMs: 15_000 });
       const parsed = JSON.parse(response.content) as { items?: DayPlanItem[] };
       if (!Array.isArray(parsed.items) || parsed.items.length < 2) throw new Error('model returned an invalid day plan');
       return { date: input.date, items: parsed.items.slice(0, 24), source: 'model' };

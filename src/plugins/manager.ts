@@ -153,6 +153,16 @@ export class PluginManager {
       this.#fail(id, dir, new Error(`entry file escapes plugin directory: ${manifest.main}`), 'entry');
       return false;
     }
+    // Manifests describe the source entry for development. In the Node-only
+    // compiled runtime, resolve only its sibling .js output in the same plugin.
+    if (entryFile.endsWith('.ts')) {
+      const compiledEntry = `${entryFile.slice(0, -3)}.js`;
+      try {
+        await fs.access(entryFile);
+      } catch {
+        entryFile = compiledEntry;
+      }
+    }
     try {
       const [realDir, realEntry] = await Promise.all([fs.realpath(dir), fs.realpath(entryFile)]);
       const realRelative = path.relative(realDir, realEntry);

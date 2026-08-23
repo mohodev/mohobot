@@ -49,7 +49,7 @@ class WebhookGateway implements Gateway {
   #onMessage?: (m: MohoMessage) => void | Promise<void>;
   readonly sent: OutboundMessage[] = [];
 
-  constructor(private readonly botId: string, private readonly logger: Logger) {
+  constructor(readonly botId: string, private readonly logger: Logger) {
     this.name = `gateway:webhook:${botId}`;
   }
 
@@ -71,8 +71,12 @@ class WebhookGateway implements Gateway {
     process.stdout.write(`[webhook] ${out.content}\n`);
   }
 
+  async typing(_channelId: string): Promise<void> {
+    // The demo webhook transport has no remote typing primitive.
+  }
+
   status(): GatewayStatus {
-    return { connected: this.#connected, ping: 0, platform: this.platform, botId: this.botId };
+    return { connected: this.#connected, ping: 0, reconnects: 0 };
   }
 
   /** Test hook: pretend an inbound HTTP call arrived. */
@@ -125,15 +129,20 @@ class JsonlStorage implements Storage {
     return this.#rows.get(key)?.value as T | undefined;
   }
 
-  async delete(key: string): Promise<boolean> {
-    return this.#rows.delete(key);
+  async delete(key: string): Promise<void> {
+    this.#rows.delete(key);
   }
 
-  async query(filter: QueryFilter = {}): Promise<StoredRecord[]> {
+  async query<T>(filter: QueryFilter): Promise<StoredRecord<T>[]> {
     let rows = [...this.#rows.values()];
-    if (filter.prefix) rows = rows.filter((r) => r.key.startsWith(filter.prefix!));
+    const prefix = filter.prefix;
+    if (prefix) rows = rows.filter((r) => r.key.startsWith(prefix));
     if (filter.limit !== undefined) rows = rows.slice(filter.offset ?? 0, (filter.offset ?? 0) + filter.limit);
-    return rows;
+    return rows as StoredRecord<T>[];
+  }
+
+  async purgeExpired(): Promise<number> {
+    return 0;
   }
 
   async close(): Promise<void> {

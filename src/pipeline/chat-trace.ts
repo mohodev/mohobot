@@ -1,4 +1,4 @@
-export type ChatTraceStage = 'observed'|'merged'|'ignored'|'context'|'model_started'|'model_completed'|'model_failed'|'delta'|'delivered'|'delivery_failed'|'memory_written'|'memory_failed';
+export type ChatTraceStage = 'observed'|'merged'|'ignored'|'interrupted_previous'|'aborted'|'context'|'model_started'|'model_completed'|'model_failed'|'delta'|'plan_parsed'|'delivered'|'delivery_failed'|'memory_written'|'memory_failed';
 export interface ChatTraceEvent { at:number; stage:ChatTraceStage; detail?:Record<string,string|number|boolean>; }
 export interface ChatTrace { id:string; botId:string; messageId:string; channelId:string; userId:string; createdAt:number; events:ChatTraceEvent[]; outcome?:'ignored'|'replied'|'failed'; }
 

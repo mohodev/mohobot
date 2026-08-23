@@ -26,7 +26,7 @@ const plugin: Plugin = {
       description: '查看世界状态',
       execute: async () => {
         const state = await world!.get();
-        return `世界：${state.location}｜天气：${state.weather}｜活动：${state.activity}\n能量 ${state.mood.energy.toFixed(2)} 社交 ${state.mood.sociability.toFixed(2)} 压力 ${state.mood.stress.toFixed(2)}`;
+        return `世界：${state.location}｜天气：${state.weather}｜活动：${state.activity}\n能量 ${(state.mood.energy ?? 0).toFixed(2)} 社交 ${(state.mood.sociability ?? 0).toFixed(2)} 压力 ${(state.mood.stress ?? 0).toFixed(2)}`;
       },
     });
     ctx.registerCommand({
@@ -59,7 +59,7 @@ const plugin: Plugin = {
         const type = command.args[0] ?? 'social';
         const text = command.args.slice(1).join(' ') || '世界发生了一件小事';
         const state = await world!.event(type, text);
-        return `已模拟 ${type}：${text}\n压力 ${state.mood.stress.toFixed(2)}，能量 ${state.mood.energy.toFixed(2)}`;
+        return `已模拟 ${type}：${text}\n压力 ${(state.mood.stress ?? 0).toFixed(2)}，能量 ${(state.mood.energy ?? 0).toFixed(2)}`;
       },
     });
   },

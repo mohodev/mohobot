@@ -144,8 +144,9 @@ const plugin: Plugin = {
           if (args.length === 0) return 'usage: !say <text> | !say <channelId> <text>';
           let channelId: string;
           let text: string;
-          if (/^\d{10,}$/.test(args[0])) {
-            channelId = args[0];
+          const first = args[0];
+          if (first && /^\d{10,}$/.test(first)) {
+            channelId = first;
             text = args.slice(1).join(' ').trim();
           } else {
             channelId = cmd.message.channel.id;

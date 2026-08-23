@@ -17,19 +17,11 @@ describe('BudgetedProvider', () => {
     await expect(guarded.chat([], { task: 'reply' })).resolves.toMatchObject({ content: 'ok' });
   });
 
-  it('does not pass an output ceiling when the task budget is zero', async () => {
-    let seen: number | undefined = 1;
-    const inner: AIProvider = { ...provider, async chat(_m, options) { seen = options?.maxTokens; return { content: 'ok', model: 'fake', ms: 0 }; } };
-    const guarded = new BudgetedProvider(inner, { maxTokens: { reply: 0 } });
-    await guarded.chat([], { task: 'reply', maxTokens: 2048 });
-    expect(seen).toBeUndefined();
-  });
-
-  it('caps a task token request at its configured ceiling', async () => {
-    let seen = 0;
-    const inner: AIProvider = { ...provider, async chat(_m, options) { seen = options?.maxTokens ?? 0; return { content: 'ok', model: 'fake', ms: 0 }; } };
-    const guarded = new BudgetedProvider(inner, { maxTokens: { reply: 42 } });
-    await guarded.chat([], { task: 'reply', maxTokens: 100 });
-    expect(seen).toBe(42);
+  it('passes chat options through untouched (no token ceilings anymore)', async () => {
+    let seenTemperature: number | undefined;
+    const inner: AIProvider = { ...provider, async chat(_m, options) { seenTemperature = options?.temperature; return { content: 'ok', model: 'fake', ms: 0 }; } };
+    const guarded = new BudgetedProvider(inner, {});
+    await guarded.chat([], { task: 'reply', temperature: 0.5 });
+    expect(seenTemperature).toBe(0.5);
   });
 });

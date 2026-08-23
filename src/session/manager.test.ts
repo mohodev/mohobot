@@ -157,6 +157,25 @@ describe('SessionManager buildContext', () => {
     const ctx = await mgr.buildContext(input, 'SYS');
     expect(ctx.map((m) => m.content)).toEqual(['SYS', 'hello']);
   });
+
+  it('stamps user turns with a local time prefix for time awareness', async () => {
+    const memory: MemoryAdapter = { name: 'test-memory', async recall() { return []; }, async remember() {} };
+    const mgr = new SessionManager({ botId: 'bot1', config: config(), logger, memory });
+    // 2026-08-23 13:45 local time
+    const d = new Date();
+    d.setFullYear(2026, 7, 23);
+    d.setHours(13, 45, 0, 0);
+    await mgr.append(input, { ...user('在吗'), createdAt: d.getTime() });
+    await mgr.append(input, user('no timestamp here'));
+    await mgr.append(input, { role: 'assistant', content: '在的', createdAt: d.getTime() + 1000 });
+
+    const ctx = await mgr.buildContext(input, 'SYS');
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const stamp = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    expect(ctx[1]?.content).toBe(`[${stamp}] 在吗`);
+    expect(ctx[2]?.content).toBe('no timestamp here'); // no createdAt → untouched
+    expect(ctx[3]?.content).toBe('在的'); // assistant turns never stamped
+  });
 });
 
 describe('SessionManager persistence', () => {

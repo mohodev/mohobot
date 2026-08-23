@@ -65,8 +65,8 @@ registerBuiltinProviders();
  *  3. explicit `ai.provider` name      -> registry lookup
  *  4. default                          -> openai-compatible
  *
- * An unknown provider name degrades to the built-in with a warning rather than
- * taking the bot down.
+ * An explicitly configured provider must exist. Falling back to a different
+ * model/provider makes a bot appear healthy while serving the wrong backend.
  */
 export function createProvider(cfg: AIConfig, deps: CreateProviderDeps): AIProvider {
   const profiles = cfg.options['profiles'];
@@ -82,13 +82,10 @@ export function createProvider(cfg: AIConfig, deps: CreateProviderDeps): AIProvi
   }
 
   const requested = (cfg.provider ?? BUILTIN_PROVIDER).trim() || BUILTIN_PROVIDER;
-  const resolved = registries.providers.has(requested) ? requested : BUILTIN_PROVIDER;
-  if (resolved !== requested) {
-    deps.logger.warn(
-      { requested, fallback: BUILTIN_PROVIDER, available: registries.providers.names() },
-      'unknown AI provider; falling back',
-    );
+  if (!registries.providers.has(requested)) {
+    throw new Error(`configured AI provider "${requested}" is unavailable; registered providers: ${registries.providers.names().join(', ')}`);
   }
+  const resolved = requested;
 
   const useMock = cfg.model === MOCK_PROVIDER || registries.providers.needsKey(resolved, cfg);
   if (useMock) {

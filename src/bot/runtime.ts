@@ -143,9 +143,14 @@ export class BotRuntime implements Managed {
     };
 
     if (this.#deps.global.plugins.enabled) {
-      const pluginDir = path.isAbsolute(this.#deps.global.plugins.dir)
+      const configuredPluginDir = path.isAbsolute(this.#deps.global.plugins.dir)
         ? this.#deps.global.plugins.dir
         : path.join(this.#deps.rootDir, this.#deps.global.plugins.dir);
+      // `node app.js` runs the compiled runtime. Its plugins must be compiled
+      // too; development keeps loading the source tree through tsx.
+      const pluginDir = process.env.MOHO_COMPILED === '1'
+        ? path.join(this.#deps.rootDir, 'dist', 'plugins')
+        : configuredPluginDir;
       this.#plugins = new PluginManager({
         dir: pluginDir,
         logger: this.#logger,

@@ -2,41 +2,89 @@
   "config_version": 2,
   "platform_settings": {
     "unique_session": false,
-    "rate_limit": { "time": 60, "count": 30, "strategy": "stall" },
-    "segmented_reply": { "enable": true, "interval": "0.1,0.5", "words_count_threshold": 150 },
+    "rate_limit": {
+      "time": 60,
+      "count": 30,
+      "strategy": "stall"
+    },
+    "reply_prefix": "",
+    "forward_threshold": 1500,
+    "enable_id_white_list": true,
+    "id_whitelist": [],
     "reply_with_mention": false,
     "reply_with_quote": true,
+    "segmented_reply": {
+      "enable": true,
+      "only_llm_result": true,
+      "interval_method": "random",
+      "interval": "0.1,0.5",
+      "words_count_threshold": 150,
+      "split_mode": "regex",
+      "regex": ".*?[。？！~…]+|.+$",
+      "split_words": [
+        "。",
+        "？",
+        "！",
+        "~",
+        "…"
+      ],
+      "content_cleanup_rule": ""
+    },
     "ignore_bot_self_message": true,
     "ignore_at_all": true
   },
   "provider_sources": [
     {
-      "id": "primary",
-      "provider": "openai-compatible",
+      "provider": "kilo",
       "type": "openai_chat_completion",
-      "enable": true,
-      "api_base": "https://api.example.com/v1",
-      "key": ["replace-with-private-key"],
-      "timeout": 120
+      "provider_type": "chat_completion",
+      "key": [
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjE5YWMyZmRhLTM5NjItNGU4My1iZjdlLTdmODcwMWI4ZmRlMCIsImFwaVRva2VueVwR2VycGVyIjoiMTRjM2RmZDktNDZiMC00YjliLWIwMTYtMzY1NWJlNDgzMDBlIiwidmVyc2lvbiI6MywiaWF0IjoxNzg2NzAzODgwLCJleHAiOjE5NDQzODM4ODB9.ZmoJh1aQgXR_cpg8A88S00_JMo_DENwF5j01E8s-EHw"
+      ],
+      "api_base": "https://apx.ntbsd.eu.org/v1",
+      "timeout": 120,
+      "proxy": "",
+      "custom_headers": {},
+      "id": "kilo",
+      "enable": true
     }
   ],
   "provider": [
     {
-      "id": "primary/example-model",
+      "id": "kilo/tencent-hy3-free",
       "enable": true,
-      "provider_source_id": "primary",
-      "model": "example-model",
-      "modalities": ["text"]
+      "provider_source_id": "kilo",
+      "model": "tencent/hy3:free",
+      "modalities": [
+        "text"
+      ],
+      "custom_extra_body": {},
+      "max_context_tokens": 0,
+      "reasoning": true
     }
   ],
   "provider_settings": {
     "enable": true,
-    "default_provider_id": "primary/example-model",
+    "default_provider_id": "kilo/tencent-hy3-free",
     "fallback_chat_models": [],
-    "request_max_retries": 2
+    "request_max_retries": 2,
+    "default_image_caption_provider_id": "",
+    "streaming_response": true,
+    "display_reasoning_text": false
   },
   "mohobot": {
-    "discord": { "token": "replace-with-private-bot-token" },
-    "admin": { "token": "replace-with-private-admin-token", "host": "127.0.0.1", "port": 3210 }
-  }
+    "discord": {
+      "token": "${DISCORD_TOKEN}"
+    },
+    "admin": {
+      "token": "${MOHO_ADMIN_TOKEN}",
+      "host": "127.0.0.1",
+      "port": 3210
+    }
+  },
+  "timezone": "Asia/Shanghai",
+  "log_level": "info",
+  "plugin_set": [
+    "*"
+  ]
 }

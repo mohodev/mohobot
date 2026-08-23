@@ -35,6 +35,7 @@ import { WorldStore } from '../admin/world.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import { discordChatLog } from '../core/discord-chat-log.js';
 import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 
@@ -83,6 +84,8 @@ export interface PipelineDeps {
   events: EventBus;
   logger: Logger;
   send: (out: OutboundMessage) => Promise<void>;
+  /** Batch-coalescing window override (tests inject a tiny quietMs). */
+  topicBuffer?: TopicBuffer;
   typing?: (channelId: string) => Promise<void>;
   /** Omitted unless media is explicitly enabled and has a usable provider. */
   media?: Pick<MediaRuntime, 'process'>;
@@ -188,16 +191,19 @@ export class MessagePipeline {
   readonly #deps: PipelineDeps;
   readonly #logger: Logger;
   readonly #limiter: RateLimiter;
-  readonly #topics = new TopicBuffer();
+  readonly #topics: TopicBuffer;
   readonly #traces: ChatTraceStore;
   readonly #device: DeviceStore;
   readonly #world: WorldStore;
   readonly #queues = new Map<string, Promise<void>>();
+  /** Live generation per session key; a newer direct summon aborts it (interrupt & merge). */
+  readonly #active = new Map<string, AbortController>();
   readonly #recentReplies = new Map<string, number[]>();
   readonly #stats: PipelineStats = { handled: 0, replied: 0, skipped: 0, aiFailures: 0, rateLimited: 0 };
 
   constructor(deps: PipelineDeps) {
     this.#deps = deps;
+    this.#topics = deps.topicBuffer ?? new TopicBuffer();
     this.#logger = deps.logger.child({ component: 'pipeline' });
     this.#traces = deps.traces ?? new ChatTraceStore();
     const root = deps.stateRoot ?? (process.env.MOHO_ROOT || process.cwd());
@@ -218,6 +224,13 @@ export class MessagePipeline {
     if (event) this.#deps.events.emit('chat:trace', { botId: trace.botId, traceId: trace.id, messageId: trace.messageId, channelId: trace.channelId, userId: trace.userId, event, outcome: trace.outcome });
   }
 
+  /** Admin-only Discord chat log; recorder itself ignores non-discord platforms and never throws. */
+  #chatLog(direction: 'in' | 'out', message: MohoMessage, content: string, outcome: 'received' | 'delivered' | 'delivery_failed', traceId?: string): void {
+    try {
+      discordChatLog.record({ platform: message.platform, direction, botId: message.botId, channelId: message.channel.id, userId: direction === 'in' ? message.author.id : this.#deps.config.id, content, outcome, traceId });
+    } catch { /* logging must never break the pipeline */ }
+  }
+
   sweep(): void {
     this.#limiter.sweep();
   }
@@ -227,6 +240,7 @@ export class MessagePipeline {
   /** Entry point. Messages sharing one session run in arrival order. Never rejects. */
   async handle(message: MohoMessage): Promise<void> {
     const trace = this.#traces.start({ botId: message.botId, messageId: message.id, channelId: message.channel.id, userId: message.author.id });
+    this.#chatLog('in', message, message.content, 'received', trace.id);
     this.#trace(trace, 'observed', { mentionsBot: message.mentionsBot, dm: message.channel.dm, length: message.content.length });
     const key = this.#queueKey(message);
     const merged = await this.#topics.push(key, message);
@@ -235,6 +249,21 @@ export class MessagePipeline {
     if (merged.id !== message.id) { this.#trace(trace, 'merged', { into: merged.id }); return; }
     message = merged;
     const queueKey = this.#queueKey(message);
+    // Interrupt & merge (Hermes-style): a direct DM/@/reply while the bot is
+    // A direct @ / reply-to-bot / DM is an explicit invitation; a newer one
+    // still answering cancels that generation; the queued new message then
+    // runs against a session holding both user turns, so the model naturally
+    // folds the follow-up into one fresh answer.
+    // Note: quoting some *other* user is NOT a summon - mentionsBot already
+    // encodes "@me or reply-to-me" from the adapter layer.
+    if (message.mentionsBot || message.channel.dm) {
+      const running = this.#active.get(queueKey);
+      if (running && !running.signal.aborted) {
+        running.abort();
+        this.#trace(trace, 'interrupted_previous', { channel: message.channel.id });
+        this.#logger.info({ traceId: trace.id, channel: message.channel.id }, 'direct summon interrupted in-flight generation');
+      }
+    }
     const previous = this.#queues.get(queueKey) ?? Promise.resolve();
     const current = previous
       .catch(() => {})
@@ -332,6 +361,7 @@ export class MessagePipeline {
       this.#stats.handled+=1;this.#stats.replied+=1;
       await this.#deps.send({channelId:message.channel.id,content:publicRelation,replyToId:message.id});
       this.#trace(trace,'delivered',{localPublicRelation:true});
+      this.#chatLog('out',message,publicRelation,'delivered',trace.id);
       return;
     }
     const gate=privacyGate(message);
@@ -339,6 +369,7 @@ export class MessagePipeline {
       this.#stats.handled+=1;this.#stats.replied+=1;
       await this.#deps.send({channelId:message.channel.id,content:gate.reply,replyToId:message.id});
       this.#trace(trace,'delivered',{localGate:gate.reason});
+      this.#chatLog('out',message,gate.reply,'delivered',trace.id);
       return;
     }
 
@@ -359,7 +390,7 @@ export class MessagePipeline {
       this.#stats.rateLimited += 1;
       this.#trace(trace, 'ignored', { reason: 'rate limited' });
       log.warn({ traceId: trace.id }, 'rate limited');
-      await this.#reply(message, 'Slow down a little - try again in a few seconds.');
+      await this.#reply(message, 'Slow down a little - try again in a few seconds.', true, false, trace.id);
       return;
     }
 
@@ -415,38 +446,61 @@ export class MessagePipeline {
     }
 
     let reply: string;
-    const streaming = cfg.ai.stream
-      ? new StreamingDelivery((text, first) => this.#reply(message, first && !message.channel.dm ? `<@${message.author.id}> ${text}` : text, first, first && !message.channel.dm))
-      : undefined;
+    // reply-plan is a control protocol, not chat text. Buffer every upstream
+    // delta so an incomplete JSON fence can never be sent to Discord.
+    const protocolDeltas: string[] = [];
     const aiStarted = Date.now();
-    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream });
+    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream, protocol: 'reply-plan' });
     // Typing starts with the upstream request, not after it completes. This
     // keeps direct messages responsive during slow reasoning-model turns.
     const stopThinkingTyping = this.#startThinkingTyping(message.channel.id);
+    // Register the live generation so a newer direct summon can abort it.
+    const controller = new AbortController();
+    this.#active.set(this.#queueKey(message), controller);
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
-        // 0 means no local output ceiling; omit max_tokens and let the provider enforce its own limit.
-        maxTokens: cfg.ai.maxTokens === 0 ? undefined : cfg.ai.maxTokens,
         timeoutMs: cfg.ai.timeoutMs,
         stream: cfg.ai.stream,
-        onDelta: streaming ? (delta) => { this.#trace(trace, 'delta', { length: delta.length }); streaming.push(delta); } : undefined,
+        signal: controller.signal,
+        onDelta: cfg.ai.stream ? (delta) => { protocolDeltas.push(delta); this.#trace(trace, 'delta', { length: delta.length }); } : undefined,
       });
-      reply = response.content.trim();
+      reply = response.content.trim() || protocolDeltas.join('').trim();
       stopThinkingTyping();
       runtimeMetrics.ai.record(Date.now() - aiStarted, true);
       this.#trace(trace, 'model_completed', { model: response.model, latencyMs: Date.now() - aiStarted, length: reply.length });
       if (reply.length === 0) reply = cfg.ai.fallbackReply;
     } catch (error) {
       stopThinkingTyping();
+      const abortedBySummon = controller.signal.aborted || (error instanceof AIError && error.kind === 'aborted');
+      if (this.#active.get(this.#queueKey(message)) === controller) this.#active.delete(this.#queueKey(message));
+      if (abortedBySummon) {
+        // Superseded by a newer user message: drop silently, deliver nothing,
+        // write no memory. The queued follow-up owns the conversation now.
+        this.#stats.skipped += 1;
+        this.#trace(trace, 'aborted', { reason: 'superseded', latencyMs: Date.now() - aiStarted });
+        log.info({ traceId: trace.id }, 'generation superseded; answer dropped');
+        return;
+      }
       runtimeMetrics.ai.record(Date.now() - aiStarted, false);
       this.#stats.aiFailures += 1;
       const kind = error instanceof AIError ? error.kind : 'unknown';
       const detail = error instanceof Error ? error.message : String(error);
       this.#trace(trace, 'model_failed', { kind, latencyMs: Date.now() - aiStarted });
       log.error({ kind, err: detail, traceId: trace.id }, 'AI request failed; replying with fallback');
-      const fallbackDelivered = await this.#reply(message, this.#friendlyError(kind, cfg.ai.fallbackReply));
+      const fallbackDelivered = await this.#reply(message, this.#friendlyError(kind, cfg.ai.fallbackReply), true, false, trace.id);
       this.#trace(trace, fallbackDelivered ? 'delivered' : 'delivery_failed', { fallback: true });
+      return;
+    } finally {
+      stopThinkingTyping();
+      if (this.#active.get(this.#queueKey(message)) === controller) this.#active.delete(this.#queueKey(message));
+    }
+    // The summon may land between model completion and delivery; never let a
+    // superseded answer race the fresh turn.
+    if (controller.signal.aborted) {
+      this.#stats.skipped += 1;
+      this.#trace(trace, 'aborted', { reason: 'superseded_pre_delivery' });
+      log.info({ traceId: trace.id }, 'answer discarded pre-delivery (superseded)');
       return;
     }
 
@@ -454,21 +508,29 @@ export class MessagePipeline {
       reply = await this.#deps.plugins.runAfterAI(message, reply, cfg.disabledPlugins);
     }
     const plan = decodeReplyPlan(reply);
+    this.#trace(trace, 'plan_parsed', { action: plan.action, style: plan.style, quote: plan.quote, segments: plan.segments.length });
+    // A direct @ / reply / DM is an explicit invitation: the model's own
+    // "ignore" plan must never silently veto it. Degrade to a plain reply.
+    const directSummon = message.mentionsBot || message.channel.dm;
     if (plan.action === 'ignore') {
       this.#stats.skipped += 1;
-      return;
+      this.#trace(trace, 'ignored', { reason: 'model_plan', directSummon });
+      log.info({ traceId: trace.id, directSummon }, 'model replied with ignore plan');
+      if (!directSummon) return;
+      const nudge = '（在呢，刚才没反应过来——想说啥？）';
+      plan.action = 'reply';
+      plan.segments = [{ text: nudge }];
+      log.warn({ traceId: trace.id }, 'direct summon overrode model ignore plan');
     }
     reply = planText(plan);
 
-    const delivered = streaming?.received
-      ? await streaming.finish()
-      : await this.#replyPlan(message, plan);
+    const delivered = await this.#replyPlan(message, plan, trace.id);
     if (!delivered) {
       this.#stats.skipped += 1;
-      this.#trace(trace, 'delivery_failed', { streamed: Boolean(streaming?.received), segments: streaming?.sent ?? 0 });
+      this.#trace(trace, 'delivery_failed', { protocol: 'reply-plan', segments: plan.segments.length });
       return;
     }
-    this.#trace(trace, 'delivered', { streamed: Boolean(streaming?.received), segments: streaming?.sent ?? plan.segments.length });
+    this.#trace(trace, 'delivered', { protocol: 'reply-plan', segments: plan.segments.length });
     this.#noteReply(message.channel.id);
     try {
       const sessions = this.#deps.sessions;
@@ -597,7 +659,7 @@ export class MessagePipeline {
     return () => clearInterval(timer);
   }
 
-  async #replyPlan(message: MohoMessage, plan: ReplyPlan): Promise<boolean> {
+  async #replyPlan(message: MohoMessage, plan: ReplyPlan, traceId?: string): Promise<boolean> {
     let delivered = 0;
     const segments = deliverySegments(plan, message.channel.dm);
     for (let i = 0; i < segments.length; i += 1) {
@@ -606,7 +668,7 @@ export class MessagePipeline {
         void this.#deps.typing(message.channel.id).catch(() => {});
         await new Promise<void>((resolve) => setTimeout(resolve, segment.typingMs));
       }
-      if (await this.#reply(message, segment.text, plan.quote && i === 0)) delivered += 1;
+      if (await this.#reply(message, segment.text, plan.quote && i === 0, false, traceId)) delivered += 1;
       else break;
       if (segment.pauseAfterMs > 0 && i < segments.length - 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, segment.pauseAfterMs));
@@ -615,7 +677,7 @@ export class MessagePipeline {
     return delivered === segments.length;
   }
 
-  async #reply(message: MohoMessage, content: string | EmbedCard, quote = true, mentionAuthor = false): Promise<boolean> {
+  async #reply(message: MohoMessage, content: string | EmbedCard, quote = true, mentionAuthor = false, traceId?: string): Promise<boolean> {
     const embed = typeof content === 'object' ? content : undefined;
     const text = typeof content === 'object' ? '' : content;
     const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
@@ -633,8 +695,10 @@ export class MessagePipeline {
       } catch (error) {
         this.#logger.warn({ err: error instanceof Error ? error.message : String(error), channel: message.channel.id }, 'outbound chat log write failed');
       }
+      this.#chatLog('out', message, safeContent, 'delivered', traceId);
       return true;
     } catch (error) {
+      this.#chatLog('out', message, safeContent, 'delivery_failed', traceId);
       this.#logger.error(
         { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
         'send failed',

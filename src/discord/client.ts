@@ -525,10 +525,14 @@ export class DiscordGateway implements Gateway {
   }
 
   async #isBotManager(guildId: string | undefined, userId: string): Promise<boolean> {
-    if (!guildId || (this.#config.admin.guildIds.length > 0 && !this.#config.admin.guildIds.includes(guildId))) return false;
+    // Explicit user allowlist is person-scoped, not guild-scoped: a listed ID
+    // stays an admin in every guild and in DMs. guildIds only scopes where
+    // role-based administration is honored.
     if (this.#config.admin.userIds.includes(userId)) return true;
+    if (!guildId) return false;
     const names = new Set(this.#config.admin.roleNames.map((name) => name.trim().toLowerCase()).filter(Boolean));
     if (names.size === 0) return false;
+    if (this.#config.admin.guildIds.length > 0 && !this.#config.admin.guildIds.includes(guildId)) return false;
     try {
       const guild = await this.#client?.guilds.fetch(guildId);
       const member = await guild?.members.fetch(userId);

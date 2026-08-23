@@ -99,6 +99,12 @@ export class HotReloader implements Managed {
     // Only source-ish files matter.
     const ext = path.extname(changed);
     if (!['.ts', '.js', '.mjs', '.json', '.yaml', '.yml', '.md', '.txt'].includes(ext)) return;
+    // Compiled runtimes load plugins from dist/, so .ts/.tsx sources cannot be
+    // reloaded there; a stray source write must never trigger a plugin reload.
+    if (process.env.MOHO_COMPILED === '1' && (ext === '.ts' || ext === '.tsx')) {
+      this.#logger.debug({ path: changed }, 'ignoring TypeScript source change in compiled mode');
+      return;
+    }
 
     const event: ReloadEvent = { kind, path: changed, action };
     if (kind === 'plugin') {

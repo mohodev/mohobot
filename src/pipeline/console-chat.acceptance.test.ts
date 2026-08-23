@@ -5,6 +5,7 @@ import { createNullLogger } from '../core/logger.js';
 import type { MohoMessage, OutboundMessage } from '../core/types.js';
 import { SessionManager } from '../session/manager.js';
 import { MessagePipeline } from './pipeline.js';
+import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore } from './chat-trace.js';
 
 const turns=[
@@ -27,8 +28,8 @@ describe('console chat acceptance transcript',()=>{
   const config={...base,ai:AIConfigSchema.parse({...base.ai,apiKey:'test-key-123456'}),session:SessionConfigSchema.parse({...base.session,persist:false,scope:'user'}),memory:MemoryConfigSchema.parse(base.memory),media:{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}};
   const sessions=new SessionManager({botId:config.id,config:config.session,logger:createNullLogger()});
   const delivered:OutboundMessage[]=[]; const traces=new ChatTraceStore(); let reply=0;
-  const provider={name:'console-acceptance',model:'deterministic-dialogue',async chat(messages:any[]){const last=messages.filter(m=>m.role==='user').at(-1)?.content;expect(last).toBe(turns[reply]?.[0]);const content=turns[reply++]![1];return{content,model:'deterministic-dialogue',ms:1};},async health(){return{ok:true};}};
-  const pipeline=new MessagePipeline({config,provider,sessions,events:new EventBus(),logger:createNullLogger(),traces,send:async out=>{delivered.push(out);}});
+  const provider={name:'console-acceptance',model:'deterministic-dialogue',async chat(messages:any[]){const last=messages.filter(m=>m.role==='user').at(-1)?.content;expect(last?.replace(/^\[\d{2}-\d{2} \d{2}:\d{2}\] /,'')).toBe(turns[reply]?.[0]);const content=turns[reply++]![1];return{content,model:'deterministic-dialogue',ms:1};},async health(){return{ok:true};}};
+  const pipeline=new MessagePipeline({config,topicBuffer:new TopicBuffer({quietMs:5}),provider,sessions,events:new EventBus(),logger:createNullLogger(),traces,send:async out=>{delivered.push(out);}});
   for(let i=0;i<turns.length;i++){const [user]=turns[i]!;const message:MohoMessage={id:`console-${i+1}`,platform:'console',botId:config.id,channel:{id:'console',dm:true},author:{id:'local-user',username:'小岚',bot:false},content:user,mentionsBot:true,attachments:[],createdAt:1_700_000_000_000+i};await pipeline.handle(message);}
   expect(reply).toBe(10);expect(delivered.map(x=>x.content)).toEqual(turns.map(x=>x[1]));
   const session=await sessions.get({botId:config.id,channelId:'console',userId:'local-user'});expect(session.messages).toHaveLength(20);expect(session.messages.map(m=>m.content)).toEqual(turns.flatMap(x=>[x[0],x[1]]));

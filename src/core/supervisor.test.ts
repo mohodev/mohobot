@@ -125,6 +125,48 @@ describe('Supervisor', () => {
     await sup.shutdown();
   });
 
+  it('auto-retries a non-critical component after a cooldown once the restart limit is hit', async () => {
+    vi.useFakeTimers();
+    try {
+      const sup = makeSupervisor({ autoRestart: true, maxRestarts: 2 });
+      const onFatal = vi.fn();
+      sup.onFatal(onFatal);
+      const c = new FakeComponent('resilient');
+      c.failNextStarts = 99;
+      sup.register(c); // non-critical
+
+      await sup.startComponent('resilient');
+      // Burn through the ordinary backoff budget: both backoff waits are
+      // floored to 100ms, so attempts fire at t≈100 and t≈200.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(sup.status()[0]?.state).toBe('crashed');
+      const startsAtLimit = c.starts;
+      const restartsAtLimit = sup.status()[0]?.restarts ?? 0;
+      expect(startsAtLimit).toBe(3); // initial start + 2 backoff attempts
+
+      // Half the cooldown window: nothing new may happen yet.
+      await vi.advanceTimersByTimeAsync(9_500);
+      expect(c.starts).toBe(startsAtLimit);
+      expect(onFatal).not.toHaveBeenCalled();
+
+      // Cross the restartWindowMs boundary: the cooldown fires, restartTimes
+      // are reset and the component is retried automatically.
+      await vi.advanceTimersByTimeAsync(600);
+      expect(c.starts).toBeGreaterThan(startsAtLimit);
+      expect(sup.status()[0]?.restarts).toBeGreaterThanOrEqual(restartsAtLimit);
+      expect(onFatal).not.toHaveBeenCalled();
+
+      // Budget was reset: the post-cooldown failure schedules ordinary backoff
+      // retries again instead of waiting for another full cooldown window.
+      await vi.advanceTimersByTimeAsync(500);
+      expect(c.starts).toBeGreaterThan(startsAtLimit + 1);
+
+      await sup.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('runs the onRestart hook before restarting', async () => {
     const sup = makeSupervisor();
     const c = new FakeComponent('hooked');
