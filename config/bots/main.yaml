@@ -37,7 +37,7 @@ discord:
   blockedUsers: []
   ignoreBots: true
   # Fellow RP bots allowed to banter with Moho (Discord user IDs).
-  peerBots: []
+  peerBots: ["1350074476829605898"]
   typingIndicator: true
   maxReplyLength: 1900
   # #记录：only redacted failures and lifecycle warnings, never chat bodies.
