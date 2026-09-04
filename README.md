@@ -142,6 +142,7 @@ Extension registries: Provider / Gateway / Storage / Memory
 插件位于 `plugins/<id>/`，入口由 `plugin.json` 指定。内置插件：
 
 - `ban` — 全局封禁名单：被封禁用户的消息被静默忽略（`!ban` / `!ban-all` / `!pass` / `!unban` / `!banlist`，管理命令需管理员）。
+- `emotion` — 情感/拟人化系统：per-user 好感度/亲密度 + 8 维情绪，pre-LLM 语气注入、post-LLM 二次情感分析（LLM 失败自动降级关键词）、关系阶段演进（初识/深化/承诺/共生 + 冷淡/反感/敌对）与长期互动记忆；管理命令 `!情绪` / `!情绪排行` / `!设置好感` / `!设置亲密` / `!重置情绪`（仅管理员，且只返回粗粒度摘要，不暴露原始分值）。
 - `web-search` — 联网搜索（`!search` / `!web`）：默认 SearXNG（无需 Key），可切换 Brave / Tavily。
 - `music` — 歌曲搜索（`!song` / `!music`）：iTunes Search API（无需 Key，海外替代网易云）。
 - `perception` — 环境感知：在 AI 调用前注入时段、工作日/周末、国际节日与群聊/私聊上下文。

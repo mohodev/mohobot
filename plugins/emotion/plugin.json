@@ -1,0 +1,16 @@
+{
+  "name": "emotion",
+  "version": "1.0.0",
+  "description": "Per-user emotional state (favor/intimacy/8-dim emotions, tone injection, relationship stages, long-term interaction memory) with a second-LLM emotion expert and keyword fallback. Admin commands: !情绪 / !情绪排行 / !设置好感 / !设置亲密 / !重置情绪.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 55,
+  "config": {
+    "enabled": true,
+    "smartUpdate": true,
+    "forceUpdateInterval": 6,
+    "significanceThreshold": 3,
+    "timeoutMs": 15000
+  }
+}
