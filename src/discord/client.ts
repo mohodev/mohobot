@@ -22,12 +22,13 @@ import {
   type MessageCreateOptions,
   type SendableChannels,
   type NonThreadGuildBasedChannel,
+  type GuildMember,
 } from 'discord.js';
 
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
-import type { BotId, EmbedCard, MohoMessageDelete, MohoMessageLocation, MohoMessageUpdate, MohoThreadLifecycle, OutboundMessage } from '../core/types.js';
+import type { BotId, EmbedCard, MohoMemberJoin, MohoMessageDelete, MohoMessageLocation, MohoMessageUpdate, MohoThreadLifecycle, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
 import type { Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
@@ -400,6 +401,10 @@ export class DiscordGateway implements Gateway {
       this.#onInteraction(interaction);
     });
 
+    this.#on(client, 'guildMemberAdd', (member) => {
+      this.#onMemberJoin(member);
+    });
+
     this.#on(client, 'error', (error) => {
       this.#lastError = describeError(error);
       this.#logger.error({ err: error }, 'discord client error');
@@ -522,6 +527,19 @@ export class DiscordGateway implements Gateway {
 
   #onThread(action: MohoThreadLifecycle['action'], thread: ThreadChannel): void {
     this.#events.emit('thread:lifecycle', toThreadLifecycleEvent(this.botId, action, thread));
+  }
+
+  #onMemberJoin(member: GuildMember): void {
+    const event: MohoMemberJoin = {
+      botId: this.botId,
+      platform: 'discord',
+      guildId: member.guild.id,
+      userId: member.id,
+      username: member.user.username,
+      memberCount: member.guild.memberCount,
+      occurredAt: Date.now(),
+    };
+    this.#events.emit('guild:member:join', event);
   }
 
   async #isBotManager(guildId: string | undefined, userId: string): Promise<boolean> {

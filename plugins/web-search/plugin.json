@@ -1,0 +1,17 @@
+{
+  "name": "web-search",
+  "version": "1.0.0",
+  "description": "Live web search: !search / !web via SearXNG (default, no key), Brave or Tavily. Optional auto-search for question-like messages.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 90,
+  "config": {
+    "provider": "searxng",
+    "baseUrl": "https://searx.be",
+    "apiKeyEnv": "",
+    "maxResults": 5,
+    "timeoutMs": 15000,
+    "autoSearch": false
+  }
+}

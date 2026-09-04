@@ -1,0 +1,13 @@
+{
+  "name": "music",
+  "version": "1.0.0",
+  "description": "Song search via the iTunes Search API (foreign replacement for NetEase): !song / !music <keywords>.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 90,
+  "config": {
+    "limit": 3,
+    "country": "US"
+  }
+}

@@ -14,6 +14,7 @@ import type {
   Session, SessionKeyInput, SessionManagerLike, SourceMessageMutation, SourceMessageUpdate,
 } from './types.js';
 import { decodePersistedSession } from './codec.js';
+import { compressSession, type Summarize } from './summarizer.js';
 
 export interface SessionManagerOptions {
   botId: string;
@@ -21,6 +22,13 @@ export interface SessionManagerOptions {
   storage?: Storage;
   logger: Logger;
   memory?: MemoryAdapter;
+  /**
+   * Optional context summarizer. When present (and `config.session.summary`
+   * is enabled) old turns are compressed into a `summary` block instead of
+   * being dropped by the hard trim. Omitting it (or a failing call) leaves
+   * the plain maxMessages/maxChars trim as the only behaviour.
+   */
+  summarize?: Summarize;
 }
 
 /** `session:<botId>:<channelId>[:<userId>]` depending on scope. */
@@ -46,6 +54,7 @@ export class SessionManager implements SessionManagerLike {
   readonly #storage: Storage | undefined;
   readonly #logger: Logger;
   readonly #memory: MemoryAdapter;
+  readonly #summarize: Summarize | undefined;
 
   readonly #cache = new Map<string, Session>();
   /** Cold hydration is shared so concurrent callers cannot race separate sessions into cache. */
@@ -62,6 +71,7 @@ export class SessionManager implements SessionManagerLike {
     this.#storage = opts.storage;
     this.#logger = opts.logger;
     this.#memory = opts.memory ?? nullMemoryAdapter;
+    this.#summarize = opts.summarize;
   }
 
   keyFor(input: SessionKeyInput): string {
@@ -138,9 +148,39 @@ export class SessionManager implements SessionManagerLike {
   async append(input: SessionKeyInput, message: ChatMessage): Promise<void> {
     const session = await this.get(input);
     session.messages.push(message);
+    await this.#compress(session);
     this.#trim(session);
     session.updatedAt = Date.now();
     this.#save(session);
+  }
+
+  /**
+   * Compress old turns into a `summary` block before the hard trim runs. Any
+   * failure is logged and the hard trim still applies, so a broken model call
+   * can never grow a session past its limits or lose a reply.
+   */
+  async #compress(session: Session): Promise<void> {
+    const cfg = this.#config.summary;
+    if (!cfg.enabled || !this.#summarize) return;
+    try {
+      const result = await compressSession(
+        session,
+        cfg.triggerMessages,
+        cfg.removeMessages,
+        cfg.keepMessages,
+        this.#summarize,
+      );
+      if (result.compressed) {
+        this.#logger.debug(
+          { key: session.key, folded: result.folded, remaining: session.messages.length },
+          'session context summarized',
+        );
+      } else if (result.fallback) {
+        this.#logger.warn({ key: session.key, reason: result.fallback }, 'context summary failed; hard trim applied');
+      }
+    } catch (error) {
+      this.#logger.warn({ key: session.key, error: describe(error) }, 'context summary failed; hard trim applied');
+    }
   }
 
   /**

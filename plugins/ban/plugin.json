@@ -1,0 +1,9 @@
+{
+  "name": "ban",
+  "version": "1.0.0",
+  "description": "Global ban list: the bot silently ignores banned users. Admin commands: !ban / !ban-all / !pass / !pass-all / !unban / !banlist.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 40
+}

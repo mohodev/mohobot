@@ -5,7 +5,7 @@ export type SessionDecodeResult =
   | { ok: true; value: PersistedSession; legacy: boolean; droppedMessages: number }
   | { ok: false; reason: 'invalid_shape'|'future_version' };
 
-const ROLES = new Set(['system', 'user', 'assistant']);
+const ROLES = new Set(['system', 'user', 'assistant', 'summary']);
 const PLATFORMS = new Set<Platform>(['discord', 'console']);
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }

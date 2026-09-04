@@ -2,7 +2,7 @@
 
 > 可长期运行、可扩展、故障隔离的 Discord AI Runtime。
 
-MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供应商路由、SQLite 会话持久化、Outbox、Embedding/Rerank 语义记忆、世界/设备/关系状态、插件热加载、多 Bot、运行监督、管理 WebUI 和首次启动向导。
+MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供应商路由、SQLite 会话持久化、Outbox、Embedding/Rerank 语义记忆、世界/设备/关系状态、插件热加载、多 Bot、运行监督、管理 WebUI 和首次启动向导；以及从上游 carefreesongs712/mohobot 移植并海外化的核心能力——AI 上下文总结压缩、联网搜索、封禁名单、环境感知、新成员欢迎、歌曲搜索（iTunes）。
 
 > **状态说明：** MySQL/Redis/Kafka 是可选扩展，远程同步契约已定义但不应在未配置时阻塞本地运行。模型目录是动态参考快照，不把 NVIDIA Free Endpoint 数量写死。详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/IMMERSION.md`](docs/IMMERSION.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
 
@@ -133,9 +133,22 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
 
+### AI 上下文总结压缩
+
+会话超长时，最早的历史轮次会通过 Bot 自身的 Provider 压缩成一个 `summary` 块（角色 `summary`）插入对话最前，而不是被硬裁剪直接丢弃；总结块会参与后续的再总结。总结失败或未配置 Provider 时自动降级为 `maxMessages` / `maxChars` 硬裁剪，绝不阻塞回复。开关在 `config/global.yaml` / `config/bots/*.yaml` 的 `session.summary`：`triggerMessages`（触发轮数）、`removeMessages`（每次折叠的最早轮数）、`keepMessages`（压缩后保留的最新轮数）。
+
 ## 插件
 
-插件位于 `plugins/<id>/`，入口由 `plugin.json` 指定。示例：
+插件位于 `plugins/<id>/`，入口由 `plugin.json` 指定。内置插件：
+
+- `ban` — 全局封禁名单：被封禁用户的消息被静默忽略（`!ban` / `!ban-all` / `!pass` / `!unban` / `!banlist`，管理命令需管理员）。
+- `web-search` — 联网搜索（`!search` / `!web`）：默认 SearXNG（无需 Key），可切换 Brave / Tavily。
+- `music` — 歌曲搜索（`!song` / `!music`）：iTunes Search API（无需 Key，海外替代网易云）。
+- `perception` — 环境感知：在 AI 调用前注入时段、工作日/周末、国际节日与群聊/私聊上下文。
+- `welcome` — 新成员欢迎：订阅 `guild:member:join`，在指定频道发送可定制欢迎语。
+- `ping` / `human-simulator` / `model-catalog` / `kilo-provider` / `devtools` — 原有参考与运维插件。
+
+示例：
 
 ```ts
 import type { Plugin } from '../../src/plugins/types.js';

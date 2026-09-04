@@ -1,0 +1,14 @@
+{
+  "name": "welcome",
+  "version": "1.0.0",
+  "description": "Greet new guild members in a fixed channel. Placeholders: {user} {username} {count}.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 100,
+  "config": {
+    "enabled": true,
+    "channelId": "",
+    "message": "欢迎 {user} 加入！"
+  }
+}

@@ -47,6 +47,11 @@ session:
   # One shared timeline per group/channel, so the persona can follow the room.
   scope: channel
   maxMessages: 20
+  summary:
+    enabled: true
+    triggerMessages: 20
+    removeMessages: 10
+    keepMessages: 12
 
 # Persist successful exchanges for safe semantic recall; embeddings remain optional.
 memory:

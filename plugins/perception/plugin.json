@@ -1,0 +1,13 @@
+{
+  "name": "perception",
+  "version": "1.0.0",
+  "description": "Environment awareness before each AI call: time period, workday/weekend, international holidays, channel context.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 60,
+  "config": {
+    "enabled": true,
+    "timeZone": "Asia/Shanghai"
+  }
+}

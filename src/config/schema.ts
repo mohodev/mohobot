@@ -50,6 +50,24 @@ export const SessionConfigSchema = z.object({
   forumContext: z.enum(['isolated', 'inherit-parent']).default('isolated'),
   /** Persist sessions to storage so restarts keep context. */
   persist: z.boolean().default(true),
+  /**
+   * AI summary compression. When the active turn count reaches
+   * `triggerMessages`, the oldest `removeMessages` turns are folded into a
+   * single `summary` block (via the bot's provider) instead of being dropped
+   * outright. If summarization is disabled, fails, or no provider is wired in,
+   * the session falls back to the hard `maxMessages` / `maxChars` trim.
+   */
+  summary: z.object({
+    enabled: z.boolean().default(true),
+    /** Compress once the active turn count reaches this. */
+    triggerMessages: z.number().int().positive().default(20),
+    /** How many of the oldest turns to fold into the summary block. */
+    removeMessages: z.number().int().positive().default(10),
+    /** Keep at least this many newest turns after compression. */
+    keepMessages: z.number().int().positive().default(12),
+    /** Optional provider task lane used when scheduling the summary call. */
+    task: z.enum(['reply', 'vision', 'planner', 'reflection', 'profile', 'world', 'admin']).default('reflection'),
+  }).default({}),
 });
 export type SessionConfig = z.infer<typeof SessionConfigSchema>;
 

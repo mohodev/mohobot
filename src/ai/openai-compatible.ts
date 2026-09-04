@@ -36,6 +36,19 @@ const MAX_RETRY_AFTER_MS = 30_000;
 const HEALTH_TIMEOUT_MS = 5_000;
 const ERROR_BODY_LIMIT = 300;
 
+/**
+ * The OpenAI chat API accepts `system` / `user` / `assistant` / `tool`
+ * / `developer` only. Our internal `summary` role (a compressed transcript
+ * produced by the context summarizer) has no direct wire equivalent, so it is
+ * sent as a `user` turn with a clearly labelled prefix. This keeps the domain
+ * model clean without ever sending an invalid `role` to a vendor.
+ */
+function toApiMessage(m: ChatMessage): { role: 'system' | 'user' | 'assistant'; content: string; name?: string } {
+  const wireRole = m.role === 'summary' ? 'user' : m.role;
+  const content = m.role === 'summary' ? `[对话摘要]\n${m.content}` : m.content;
+  return m.name ? { role: wireRole, content, name: m.name } : { role: wireRole, content };
+}
+
 interface AttemptErrorInit {
   kind: AIErrorKind;
   status?: number;
@@ -235,7 +248,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         // options entry can never hijack model/messages/auth-critical fields.
         ...this.#cfg.options,
         model,
-        messages: messages.map((m) => (m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content })),
+        messages: messages.map((m) => toApiMessage(m)),
         temperature: options.temperature ?? this.#cfg.temperature,
         stream,
       });

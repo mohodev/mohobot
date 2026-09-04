@@ -491,9 +491,14 @@ export class KiloProvider implements AIProvider {
     try {
       const body = JSON.stringify({
         model,
-        messages: messages.map((m) =>
-          m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content },
-        ),
+        messages: messages.map((m) => {
+          // The core summarizer stores compressed history under the internal
+          // `summary` role; the OpenAI-compatible wire has no such role, so it
+          // is sent as a labelled `user` turn.
+          const role = m.role === 'summary' ? 'user' : m.role;
+          const content = m.role === 'summary' ? `[对话摘要]\n${m.content}` : m.content;
+          return m.name ? { role, content, name: m.name } : { role, content };
+        }),
         temperature: options.temperature ?? this.#settings.temperature,
         stream,
         ...(stream ? { stream_options: { include_usage: true } } : {}),

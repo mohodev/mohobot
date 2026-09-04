@@ -40,3 +40,12 @@ session:
   ttlSeconds: 3600
   scope: user
   persist: true
+  # AI summary compression: when the turn count reaches triggerMessages, the
+  # oldest removeMessages turns are folded into one summary block via the bot's
+  # provider instead of being dropped. Disabled/failed summarization falls back
+  # to the plain maxMessages/maxChars trim.
+  summary:
+    enabled: true
+    triggerMessages: 20
+    removeMessages: 10
+    keepMessages: 12

@@ -1,0 +1,11 @@
+{
+  "//": "Typecheck for this plugin only. The root tsconfig deliberately excludes plugins/. Run: npx tsc -p plugins/ban/tsconfig.json",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["../../node_modules", "../../dist"]
+}

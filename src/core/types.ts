@@ -109,11 +109,24 @@ export interface MohoThreadLifecycle {
   occurredAt: number;
 }
 
+/** A member joined a guild the bot can see. Used by welcome-style plugins. */
+export interface MohoMemberJoin {
+  botId: BotId;
+  platform: Platform;
+  guildId: string;
+  userId: string;
+  username: string;
+  /** Total members after the join, when the gateway can report it. */
+  memberCount?: number;
+  occurredAt: number;
+}
+
 declare module './event.js' {
   interface MohoEventMap {
     'message:update': MohoMessageUpdate;
     'message:delete': MohoMessageDelete;
     'thread:lifecycle': MohoThreadLifecycle;
+    'guild:member:join': MohoMemberJoin;
   }
 }
 
@@ -162,7 +175,13 @@ export interface OutboundMessage {
 
 /** Chat turn as stored in a session and sent to the AI provider. */
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  /**
+   * `summary` is a compressed transcript of older turns. It is produced by the
+   * context summarizer (src/session/summarizer.ts), stored at the front of a
+   * session, and never counted as a user/assistant turn. Providers map it onto
+   * a plain `user` message so every OpenAI-compatible endpoint accepts it.
+   */
+  role: 'system' | 'user' | 'assistant' | 'summary';
   content: string;
   /** Optional display name, forwarded to providers that support it. */
   name?: string;

@@ -72,7 +72,7 @@ describe('MessagePipeline ordering', () => {
       memory: MemoryConfigSchema.parse(base.memory),
       media: { ...MediaConfigSchema.parse(base.media), vision: { ...MediaConfigSchema.parse(base.media).vision, apiKey: '' }, ocr: { ...MediaConfigSchema.parse(base.media).ocr, apiKey: '' } },
     };
-    const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const history: Array<{ role: 'user' | 'assistant' | 'summary'; content: string }> = [];
     const sessions: SessionManagerLike = {
       async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: history, updatedAt: Date.now() }; },
       async append(_key, message) { if (message.role !== 'system') history.push({ role: message.role, content: message.content }); },

@@ -20,6 +20,7 @@ import { HealthCoordinator, type HealthSnapshot } from '../ai/health-coordinator
 import { createGateway } from '../discord/index.js';
 import type { Gateway, GatewayStatus } from '../discord/types.js';
 import { SessionManager } from '../session/manager.js';
+import { SUMMARY_SYSTEM_PROMPT, formatTranscript } from '../session/summarizer.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
@@ -133,6 +134,26 @@ export class BotRuntime implements Managed {
       storage: this.#deps.storage,
       logger: this.#logger,
       memory,
+      // Resolves the provider lazily: sessions are constructed before the AI
+      // provider exists (plugins must load first), and the summarizer is only
+      // invoked once a session actually needs compression.
+      summarize: async (messages) => {
+        const provider = this.#provider;
+        if (!provider) throw new Error('AI provider not ready');
+        const response = await provider.chat(
+          [
+            { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+            { role: 'user', content: formatTranscript(messages) },
+          ],
+          {
+            task: cfg.session.summary.task,
+            temperature: 0.3,
+            timeoutMs: 15_000,
+            stream: false,
+          },
+        );
+        return response.content;
+      },
     });
 
     this.#gateway = createGateway(cfg, { events: this.#deps.events, logger: this.#logger, rootDir: this.#deps.rootDir });
