@@ -12,6 +12,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `npm run preflight` — offline config/dir-write/SQLite-migration check.
 - `npm run setup -- --non-interactive` — creates `.env.local`, admin token, dirs, SQLite. Idempotent; never overwrites an existing env.
 - `npm run build` — `tsc -p tsconfig.build.json` into `dist/`, then copies each `plugins/*/plugin.json`.
+- `npm run scan-secrets` — redacted credential scan of tracked files (`-- --history` adds every commit's added lines). `npm test` fails if a tracked file looks like it holds a credential; use `secretscan:ignore` on the line for a verified false positive. Known leaks in history are listed in `docs/AUDIT.md`.
 
 ## Toolchain gotchas
 

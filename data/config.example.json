@@ -39,7 +39,7 @@
       "type": "openai_chat_completion",
       "provider_type": "chat_completion",
       "key": [
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbnYiOiJwcm9kdWN0aW9uIiwia2lsb1VzZXJJZCI6IjE5YWMyZmRhLTM5NjItNGU4My1iZjdlLTdmODcwMWI4ZmRlMCIsImFwaVRva2VueVwR2VycGVyIjoiMTRjM2RmZDktNDZiMC00YjliLWIwMTYtMzY1NWJlNDgzMDBlIiwidmVyc2lvbiI6MywiaWF0IjoxNzg2NzAzODgwLCJleHAiOjE5NDQzODM4ODB9.ZmoJh1aQgXR_cpg8A88S00_JMo_DENwF5j01E8s-EHw"
+        "<set KILO_API_KEY in the environment>"
       ],
       "api_base": "https://apx.ntbsd.eu.org/v1",
       "timeout": 120,

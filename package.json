@@ -17,7 +17,8 @@
     "update": "tsx scripts/update.ts",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "scan-secrets": "tsx scripts/scan-secrets.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

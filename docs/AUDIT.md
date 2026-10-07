@@ -38,7 +38,7 @@
 ### High
 
 - 对管理类插件命令实现统一权限模型（管理员用户/角色 allowlist、频道限制、命令级限流）。仅默认关闭 devtools 不是最终权限方案。
-- 清理 Git 历史、CI Artifact、镜像和备份中的泄露 Token，并加入 secret scanning。
+- 清理 Git 历史、CI Artifact、镜像和备份中的泄露 Token（**需要仓库所有者操作**，见下方「2026-10 复查」）。
 
 ### Medium
 
@@ -53,3 +53,23 @@
 - 密钥只进入环境变量或专用 secret manager，不进入 YAML、注释、日志、截图或测试 fixture。
 - 管理能力默认关闭；启用时最小权限、显式 allowlist、完整审计。
 - 插件视为进程内受信代码，不是安全沙箱；安装插件等同执行代码。
+
+## 2026-10 复查：Secret scanning
+
+已加入 `npm run scan-secrets`（扫描被跟踪文件）与 `npm run scan-secrets -- --history`（扫描每个提交新增的行）。输出一律脱敏（仅前 4 个字符 + 长度），发现即退出码 1；同一行加 `secretscan:ignore` 可抑制已确认的误报。`npm test` 内含一条守卫测试，保证**被跟踪文件**不再含凭据形状的值（因此 `npm run update` 流程也会拦截）。
+
+首次扫描的结果（以代码为准，数值已脱敏）：
+
+| 位置 | 提交 | 状态 |
+|---|---|---|
+| `data/config.example.json:42`（kilo provider 的 `key`，JWT 形状） | `6f3cba0` | **已从工作树移除**，改为占位符；历史中仍存在 |
+| `config/global.yaml:17`（注释里的 `MOHO…=` JWT 形状令牌） | `ed70466` | 工作树早已移除；历史中仍存在 |
+
+**仍需所有者完成（代理无法也不应代做）：**
+
+1. 在 Kilo 后台**吊销并轮换**上述凭据——只要它们存在于任何已推送的历史里，就必须视为已泄露。
+2. 轮换完成后，如需清除历史，使用 `git filter-repo` 删除这两处内容并强制推送（破坏性操作，需全员重新克隆；本次未执行）。
+3. 把 `npm run scan-secrets -- --history` 加入 CI / pre-push，直到历史清理完成前它会持续报告上述两条。
+
+另外：上级目录 `/workspaces/264638881` 的 `.gitignore` 显式放行 `*.txt`，会让放在那里的凭据文件（如 `key.txt`）变成可被 `git add -A` 提交的未跟踪文件；已在该 `.gitignore` 末尾追加 `key.txt`。
+

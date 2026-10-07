@@ -165,6 +165,8 @@ export default plugin;
 
 仓库曾提交过疑似真实 Kilo Token。当前工作树已移除，但 Git 历史中的值不会因普通删除而消失：必须在 Kilo 后台撤销并轮换，然后按团队策略清理 Git 历史与缓存副本。
 
+可用 `npm run scan-secrets`（加 `-- --history` 扫描历史）本地检查凭据泄漏，输出已脱敏；`npm test` 也会拦截被跟踪文件中的凭据形状值。2026-10 复查的具体发现与待办见 [`docs/AUDIT.md`](docs/AUDIT.md)。
+
 ## 路线图
 
 1. 管理 API + 鉴权 + 只读状态面板
