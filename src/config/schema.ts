@@ -207,6 +207,17 @@ export const BotConfigSchema = z.object({
     })
     .default({}),
   /**
+   * Silently ignore auto-replies and a sender repeating the same text
+   * `maxRepeats` times within `windowMs` (spam, stuck clients, bot echo loops).
+   */
+  repeatGuard: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxRepeats: z.number().int().min(2).max(50).default(3),
+      windowMs: z.number().int().min(1000).default(300_000),
+    })
+    .default({}),
+  /**
    * Config blocks for third-party gateways/providers, keyed by their
    * registered name. The runtime passes these through untouched.
    */

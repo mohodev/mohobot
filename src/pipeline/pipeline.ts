@@ -40,6 +40,7 @@ import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 import { ContextArchiver, type ContextEntry } from '../context-archiver/index.js';
 import { BanError, BanStore, formatDuration, looksLikeDuration, parseDuration } from './ban-store.js';
+import { RepeatGuard } from './repeat-guard.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -211,6 +212,7 @@ export class MessagePipeline {
   readonly #device: DeviceStore;
   readonly #world: WorldStore;
   readonly #archiver?: ContextArchiver;
+  readonly #repeats: RepeatGuard;
   readonly #queues = new Map<string, Promise<void>>();
   /** Live generation per session key; a newer direct summon aborts it (interrupt & merge). */
   readonly #active = new Map<string, AbortController>();
@@ -226,6 +228,7 @@ export class MessagePipeline {
     this.#device = new DeviceStore(root, deps.config.id);
     this.#world = new WorldStore(root, deps.config.id);
     this.#archiver = deps.contextArchiver;
+    this.#repeats = new RepeatGuard({ maxRepeats: deps.config.repeatGuard.maxRepeats, windowMs: deps.config.repeatGuard.windowMs });
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
   }
 
@@ -262,6 +265,7 @@ export class MessagePipeline {
     // Banned users never reach the topic buffer, so their text cannot leak into
     // a merged turn that also carries someone else's message.
     if (await this.#isBanned(message, trace)) return;
+    if (this.#isNoise(message, trace)) return;
     const key = this.#queueKey(message);
     const merged = await this.#topics.push(key, message);
     // Earlier callers share the same merged turn; only the newest invocation
@@ -315,6 +319,18 @@ export class MessagePipeline {
     this.#stats.skipped += 1;
     this.#trace(trace, 'ignored', { reason: 'banned', scope: ban.channelId ? 'channel' : 'global' });
     this.#logger.debug({ traceId: trace.id, user: message.author.id, scope: ban.channelId ? 'channel' : 'global' }, 'banned user ignored');
+    return true;
+  }
+
+  /** Auto-replies and stuck repeats are dropped silently; administrators are exempt. */
+  #isNoise(message: MohoMessage, trace: ChatTrace): boolean {
+    const cfg = this.#deps.config.repeatGuard;
+    if (!cfg.enabled || message.author.isBotManager === true) return false;
+    const reason = this.#repeats.inspect(`${message.botId}:${message.channel.id}:${message.author.id}`, message.content);
+    if (!reason) return false;
+    this.#stats.skipped += 1;
+    this.#trace(trace, 'ignored', { reason });
+    this.#logger.debug({ traceId: trace.id, user: message.author.id, reason }, 'noise message ignored');
     return true;
   }
 
