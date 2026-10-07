@@ -8,6 +8,8 @@ data/backups/
 .mohobot-update.lock/
 .secrets/
 data/chat.migrated/
+# ContextArchiver audit JSONL (raw conversation turns)
+data/contexts/
 # generated simulation, memory, cache and remote-sync state
 data/world/*.json
 data/memory/*.json
