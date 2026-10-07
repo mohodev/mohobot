@@ -23,9 +23,13 @@ data/storage/*.json
 # keep persona prompts versioned
 !data/prompts/
 !data/prompts/**
-# secrets and machine-local configuration overlays
+# secrets and machine-local configuration overlays (data/ is the mount volume)
 .env
 .env.local
+data/config/global.local.yaml
+data/config/bots/*.local.yaml
+data/config/bots/*.local.yml
+# pre-relocation leftovers, if any
 config/global.local.yaml
 config/bots/*.local.yaml
 config/bots/*.local.yml

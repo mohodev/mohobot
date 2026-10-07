@@ -10,7 +10,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `npm test` — all Vitest suites.
 - Single test: `npx vitest run src/<dir>/<name>.test.ts`.
 - `npm run preflight` — offline config/dir-write/SQLite-migration check.
-- `npm run setup -- --non-interactive` — creates `.env.local`, admin token, dirs, SQLite. Idempotent; never overwrites an existing env.
+- `npm run setup -- --non-interactive` — creates `data/.env.local`, admin token, dirs, SQLite, and moves any pre-relocation `.env*`/`config/` files into `data/`. Idempotent; never overwrites an existing env.
 - `npm run build` — `tsc -p tsconfig.build.json` into `dist/`, then copies each `plugins/*/plugin.json`.
 - `npm run scan-secrets` — redacted credential scan of tracked files (`-- --history` adds every commit's added lines). `npm test` fails if a tracked file looks like it holds a credential; use `secretscan:ignore` on the line for a verified false positive. Known leaks in history are listed in `docs/AUDIT.md`.
 - `npm run acp` — start the ACP (Agent Client Protocol) v1 server on stdio, so ACP-compatible editors can use MohoBot as an AI agent backend. Implements `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/delete`, `session/list`, `session/load`, `session/resume`, `session/close` with streaming `session/update` notifications.
@@ -23,7 +23,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - Tests are co-located as `src/**/*.test.ts` (Vitest, 15s timeout). Note `src/setup.test.ts` and `src/update.test.ts` test `scripts/`; `update.test.ts` spins up real temp git repos and never calls the network.
 - Tests are hermetic via `vitest.setup.ts`: every test file gets a throwaway `MOHO_ROOT` (cleaned in `afterAll`). Runtime state defaults to `MOHO_ROOT ?? process.cwd()` — notably `chatLogInsert()` opens `<root>/data/mohobot.db` when no `SqliteStorage` is attached — so without this, `npm test` wrote fake chat rows into the real database (and `npm run update` runs `npm test` inside the deployment) and parallel workers shared one WAL file, which intermittently killed a worker (`Worker exited unexpectedly`). New tests that drive the pipeline should rely on this setup and pass an explicit `stateRoot`/`rootDir` when they need a specific one.
 - No lint or formatter is configured. Do not invent one; match surrounding style.
-- Hot reload is in-process (`config/global.yaml` → `hotReload`). Don't add a filesystem watcher that would fight it, and don't use `pm2 --watch` (see `ecosystem.config.cjs`).
+- Hot reload is in-process (`data/config/global.yaml` → `hotReload`). Don't add a filesystem watcher that would fight it, and don't use `pm2 --watch` (see `ecosystem.config.cjs`).
 
 ## Architecture constraints
 
@@ -36,9 +36,10 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 
 ## Config & secrets
 
-- Precedence: schema defaults < `data/provider.yaml` < `data/provider.local.yaml` < `config/global.yaml` < `config/global.local.yaml` < `config/bots/*.yaml` < `config/bots/*.local.yaml` < env vars. Objects deep-merge; arrays/scalars replace.
-- **Secrets only from env (`.env`/`.env.local` or process env).** Never put keys in YAML, comments, logs, or test fixtures. `data/provider.yaml` uses `${KILO_API_KEY}` placeholders.
-- `*.local.yaml` and `.env.local` are gitignored; runtime DB/logs/caches under `data/` are gitignored except versioned examples/prompts.
+- **Everything mutable lives under `data/`** — config (`data/config/`), env (`data/.env`, `data/.env.local`), prompts, DB, logs caches — so mounting `data/` alone survives a container rebuild. The loader still reads a pre-relocation `config/` / root `.env*` only when the `data/` copy is absent, and `npm run setup` migrates them.
+- Precedence: schema defaults < `data/provider.yaml` < `data/provider.local.yaml` < `data/config/global.yaml` < `data/config/global.local.yaml` < `data/config/bots/*.yaml` < `data/config/bots/*.local.yaml` < env vars. Objects deep-merge; arrays/scalars replace.
+- **Secrets only from env (`data/.env`/`data/.env.local` or process env).** Never put keys in YAML, comments, logs, or test fixtures. `data/provider.yaml` uses `${KILO_API_KEY}` placeholders.
+- `*.local.yaml` and `.env*` are gitignored; runtime DB/logs/caches under `data/` are gitignored except versioned examples/prompts/config.
 - `data/provider.yaml` default is `kilo` / `tencent/hy3:free`; a comment there says not to silently switch the deployed model.
 - `MOHO_COMPILED=1` (set by `app.js`) makes the runtime load plugins/extensions from `dist/` instead of source.
 

@@ -26,7 +26,7 @@ export interface SetupResult {
 }
 
 const DIRECTORIES = [
-  'config/bots',
+  'data/config/bots',
   'data/admin',
   'data/characters',
   'data/external-prompts',
@@ -73,7 +73,7 @@ async function confirm(question: string, inputStream: NodeJS.ReadableStream, out
 
 export async function runSetup(options: SetupOptions = {}): Promise<SetupResult> {
   const rootDir = path.resolve(options.rootDir ?? process.cwd());
-  const envFile = path.join(rootDir, '.env.local');
+  const envFile = path.join(rootDir, 'data', '.env.local');
   const sqlitePath = path.join(rootDir, 'data', 'mohobot.db');
   const directoriesCreated: string[] = [];
 
@@ -82,6 +82,37 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     const existed = await exists(full);
     await fs.mkdir(full, { recursive: true });
     if (!existed) directoriesCreated.push(relative);
+  }
+
+  // Migrate pre-restructuring config/env into data/ so a single volume mount
+  // carries everything mutable. Move, never copy: two copies of a secret or an
+  // overlay is how drift starts. Existing files in data/ always win.
+  const migrations: Array<[string, string]> = [
+    [path.join(rootDir, '.env'), path.join(rootDir, 'data', '.env')],
+    [path.join(rootDir, '.env.local'), path.join(rootDir, 'data', '.env.local')],
+    [path.join(rootDir, 'config', 'global.yaml'), path.join(rootDir, 'data', 'config', 'global.yaml')],
+    [path.join(rootDir, 'config', 'global.local.yaml'), path.join(rootDir, 'data', 'config', 'global.local.yaml')],
+  ];
+  const legacyBots = path.join(rootDir, 'config', 'bots');
+  for (const name of await fs.readdir(legacyBots).catch(() => [] as string[])) {
+    if (name.endsWith('.yaml') || name.endsWith('.yml')) {
+      migrations.push([path.join(legacyBots, name), path.join(rootDir, 'data', 'config', 'bots', name)]);
+    }
+  }
+  for (const [from, to] of migrations) {
+    if (await exists(from)) {
+      if (await exists(to)) continue;
+      await fs.mkdir(path.dirname(to), { recursive: true });
+      await fs.rename(from, to).catch(async () => {
+        await fs.copyFile(from, to);
+        await fs.rm(from, { force: true });
+      });
+    }
+  }
+  // Remove the legacy tree only when nothing is left in it.
+  const legacyRoot = path.join(rootDir, 'config');
+  for (const dir of [legacyBots, legacyRoot]) {
+    await fs.rmdir(dir).catch(() => {/* not empty or already gone */});
   }
 
   let envCreated = false;
@@ -108,9 +139,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // Machine-owned YAML lives only in ignored overlays, so upstream template
   // updates never conflict with production edits.
-  const globalLocal=path.join(rootDir,'config','global.local.yaml');
+  const globalLocal=path.join(rootDir,'data','config','global.local.yaml');
   if(!await exists(globalLocal))await fs.writeFile(globalLocal,'# Machine-local overrides. This file is ignored by Git.\nversion: 1\n',{encoding:'utf8',flag:'wx',mode:0o600});
-  const botLocal=path.join(rootDir,'config','bots','main.local.yaml');
+  const botLocal=path.join(rootDir,'data','config','bots','main.local.yaml');
   if(!await exists(botLocal))await fs.writeFile(botLocal,'# Machine-local overrides for bot main.\n',{encoding:'utf8',flag:'wx',mode:0o600});
 
   const storage = new SqliteStorage({ path: sqlitePath, logger: createNullLogger() });

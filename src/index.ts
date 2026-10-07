@@ -215,7 +215,7 @@ export class Runtime {
       });
       await this.#admin.start();
     } else {
-      this.#logger.info(adminToken ? 'admin WebUI disabled; persistent storage is required' : 'admin WebUI disabled; set MOHO_ADMIN_TOKEN in .env.local to enable it');
+      this.#logger.info(adminToken ? 'admin WebUI disabled; persistent storage is required' : 'admin WebUI disabled; set MOHO_ADMIN_TOKEN in data/.env.local to enable it');
     }
 
     this.#installSignalHandlers();

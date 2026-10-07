@@ -3,7 +3,7 @@
  *
  * Rules:
  *  - Secrets never live in YAML. They come from env and are merged in by the loader.
- *  - Every field has a safe default so a bare config/global.yaml still boots.
+ *  - Every field has a safe default so a bare data/config/global.yaml still boots.
  */
 
 import { z } from 'zod';
@@ -256,7 +256,7 @@ export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>;
 export const HotReloadConfigSchema = z.object({
   enabled: z.boolean().default(true),
   /** Directories watched for changes, relative to the project root. */
-  paths: z.array(z.string()).default(['config', 'plugins']),
+  paths: z.array(z.string()).default(['data/config', 'plugins']),
   debounceMs: z.number().int().positive().default(300),
 });
 export type HotReloadConfig = z.infer<typeof HotReloadConfigSchema>;

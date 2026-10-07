@@ -19,7 +19,7 @@ supervisor:
 hotReload:
   enabled: true
   paths:
-    - config
+    - data/config
     - data/provider.yaml
     - data/provider.local.yaml
     - data/config.json

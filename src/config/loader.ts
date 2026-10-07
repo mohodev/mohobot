@@ -9,6 +9,7 @@
  *    resolved secret is registered with the logger so it can never be printed.
  */
 
+import { existsSync, readdirSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -37,7 +38,7 @@ const BOT_FILE_RE = /\.ya?ml$/i;
 const LOCAL_BOT_FILE_RE = /\.local\.ya?ml$/i;
 
 export interface ConfigLoaderOptions {
-  /** Project root. `config/` and `.env` are resolved against it. */
+  /** Project root. `data/config/` and `data/.env` are resolved against it. */
   rootDir: string;
   logger: Logger;
   events?: EventBus;
@@ -165,6 +166,11 @@ export class ConfigLoader {
   readonly #rootDir: string;
   readonly #log: Logger;
   readonly #events: EventBus | undefined;
+  /** Canonical configuration directory: `<root>/data/config`. */
+  readonly #dataConfigDir: string;
+  /** Pre-migration directory `<root>/config`, only read when data/config is absent. */
+  readonly #legacyConfigDir: string;
+  #configDir: string;
   #last: ResolvedConfig | undefined;
   #env: Readonly<Record<string, string | undefined>> = Object.freeze({ ...process.env });
   #dataConfig: Record<string, unknown> | undefined;
@@ -174,6 +180,9 @@ export class ConfigLoader {
     this.#rootDir = path.resolve(opts.rootDir);
     this.#log = opts.logger.child({ mod: 'config' });
     this.#events = opts.events;
+    this.#dataConfigDir = path.join(this.#rootDir, 'data', 'config');
+    this.#legacyConfigDir = path.join(this.#rootDir, 'config');
+    this.#configDir = this.#pickConfigDir();
   }
 
   get rootDir(): string {
@@ -181,7 +190,49 @@ export class ConfigLoader {
   }
 
   get configDir(): string {
-    return path.join(this.#rootDir, 'config');
+    return this.#configDir;
+  }
+
+  /**
+   * Everything mutable lives under `data/` so a single volume mount survives a
+   * container rebuild. A pre-migration `<root>/config` tree is still honoured
+   * when `data/config` does not exist (fresh clones always ship `data/config`).
+   */
+  #pickConfigDir(): string {
+    if (existsSync(this.#dataConfigDir)) {
+      this.#warnLegacyOverlays();
+      return this.#dataConfigDir;
+    }
+    if (existsSync(this.#legacyConfigDir)) {
+      this.#log.warn(
+        { dir: this.#legacyConfigDir, target: this.#dataConfigDir },
+        'legacy config directory in use - move it to data/config',
+      );
+      return this.#legacyConfigDir;
+    }
+    return this.#dataConfigDir;
+  }
+
+  /** Machine-local overlays left behind in the legacy directory are silently ignored today. */
+  #warnLegacyOverlays(): void {
+    const stale: string[] = [];
+    if (existsSync(path.join(this.#legacyConfigDir, 'global.local.yaml'))) stale.push('config/global.local.yaml');
+    const legacyBots = path.join(this.#legacyConfigDir, 'bots');
+    if (existsSync(legacyBots)) {
+      try {
+        for (const name of readdirSync(legacyBots)) {
+          if (name.endsWith('.local.yaml') || name.endsWith('.local.yml')) stale.push(`config/bots/${name}`);
+        }
+      } catch {
+        // Unreadable legacy directory: nothing to warn about.
+      }
+    }
+    if (stale.length > 0) {
+      this.#log.warn(
+        { files: stale, target: 'data/config' },
+        'machine-local config overlays found outside data/ - they are ignored; move them into data/config',
+      );
+    }
   }
 
   get globalFile(): string {
@@ -313,14 +364,18 @@ export class ConfigLoader {
 
   async #loadEnvSnapshot(): Promise<Readonly<Record<string, string | undefined>>> {
     const files: Record<string, string> = {};
-    // Shared .env is the base; machine-local .env.local overrides it.
+    // Shared .env is the base; machine-local .env.local overrides it. For each
+    // layer the canonical copy lives in data/ (volume-mounted) and a pre-
+    // migration copy at the root is still read, with data/ winning per file.
     for (const filename of ['.env', '.env.local']) {
-      const envPath = path.join(this.#rootDir, filename);
-      try {
-        Object.assign(files, parseEnvFile(await readFile(envPath, 'utf8')));
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, `unable to read ${filename}`);
+      for (const dir of [this.#rootDir, path.join(this.#rootDir, 'data')]) {
+        const envPath = path.join(dir, filename);
+        try {
+          Object.assign(files, parseEnvFile(await readFile(envPath, 'utf8')));
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') this.#log.warn({ file: envPath, error: errText(error) }, `unable to read ${filename}`);
+        }
       }
     }
     const snapshot = Object.freeze({ ...files, ...process.env });

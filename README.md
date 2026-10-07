@@ -11,11 +11,11 @@ MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供�
 ```bash
 npm install
 npm run setup -- --non-interactive
-# 编辑 .env.local：DISCORD_TOKEN 和所选 Provider 的 API Key
+# 编辑 data/.env.local：DISCORD_TOKEN 和所选 Provider 的 API Key
 npm start
 ```
 
-首次启动向导会创建 `.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖。管理 WebUI 默认在 `127.0.0.1:3210`，使用 `MOHO_ADMIN_TOKEN` 登录。
+首次启动向导会创建 `data/.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖，根目录遗留的 `.env*` 与 `config/` 会被自动迁移到 `data/`。管理 WebUI 默认在 `127.0.0.1:3210`，使用 `MOHO_ADMIN_TOKEN` 登录。
 
 没有凭据也能离线跑通完整自然语言管线：
 
@@ -60,7 +60,7 @@ npm run update
 
 1. 原子创建 `.mohobot-update.lock/`，防止两个更新进程并行；
 2. 检查分支、upstream、tracked dirty/unmerged 和提交图；
-3. 根据 `MOHO_STORAGE_PATH` / `.env.local` / `config/global.yaml` 定位 SQLite；
+3. 根据 `MOHO_STORAGE_PATH` / `data/.env.local` / `data/config/global.yaml` 定位 SQLite；
 4. 使用 `better-sqlite3` backup API 备份到 `data/backups/`，再以只读方式运行 `PRAGMA quick_check`；
 5. `git fetch --prune` 后再次检查提交图，只执行 `git merge --ff-only @{u}`；
 6. 依次执行 `npm ci`、非交互 setup/migration preflight、typecheck、test、build；
@@ -114,9 +114,11 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 ## 配置
 
-优先级：Schema 默认值 < `data/provider.yaml` < `data/provider.local.yaml` < `config/global.yaml` < `config/global.local.yaml` < `config/bots/*.yaml` < `config/bots/*.local.yaml` < 环境变量。
+所有可变文件都集中在 `data/`（配置 `data/config/`、环境变量 `data/.env*`、提示词、数据库、日志缓存），因此容器部署只需挂载 `data/` 一个卷即可在重建后保留全部状态；根目录的 `.env*` 与 `config/` 只在 `data/` 对应文件缺失时才被读取，`npm run setup` 会主动迁移它们。
 
-`*.local.yaml` 用于机器私有覆盖并已加入 `.gitignore`。对象会递归合并，数组和标量整体替换；例如 `config/bots/main.local.yaml` 只覆盖 `main.yaml`，不会被加载成第二个 Bot。旧配置文件无需改名，`version` 字段可选。可从 `config/global.local.example.yaml` 复制所需结构。
+优先级：Schema 默认值 < `data/provider.yaml` < `data/provider.local.yaml` < `data/config/global.yaml` < `data/config/global.local.yaml` < `data/config/bots/*.yaml` < `data/config/bots/*.local.yaml` < 环境变量。
+
+`*.local.yaml` 用于机器私有覆盖并已加入 `.gitignore`。对象会递归合并，数组和标量整体替换；例如 `data/config/bots/main.local.yaml` 只覆盖 `main.yaml`，不会被加载成第二个 Bot。旧配置文件无需改名，`version` 字段可选。可从 `data/config/global.local.example.yaml` 复制所需结构。
 
 | 环境变量 | 用途 |
 |---|---|
@@ -129,7 +131,7 @@ Extension registries: Provider / Gateway / Storage / Memory
 | `MOHO_STORAGE_PATH` | SQLite 路径 |
 | `LOG_LEVEL` | 日志级别 |
 
-`config/global.yaml` 保存可跟踪的运行参数；`data/provider.yaml` 保存可跟踪的 Provider 默认项；对应的 `.local.yaml` 只放机器差异，仍不得写入密钥（密钥只从环境变量读取）。新版本增加的未知字段在旧版运行时只会告警并忽略，不会阻断启动。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
+`data/config/global.yaml` 保存可跟踪的运行参数；`data/provider.yaml` 保存可跟踪的 Provider 默认项；对应的 `.local.yaml` 只放机器差异，仍不得写入密钥（密钥只从环境变量读取）。新版本增加的未知字段在旧版运行时只会告警并忽略，不会阻断启动。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
 
 **上下文摘要：** `session.contextSummary`（全局或单 Bot，深合并）默认开启——会话变长时，最旧的若干轮会被 LLM 折叠为一份滚动摘要，并在下一次回复时作为系统消息注入，而不是被直接丢弃；摘要失败时保留原文，`mock` 提供方不会启用。完整字段、触发规则与回滚方式见 [`docs/CONTEXT_SUMMARY_MIGRATION.md`](docs/CONTEXT_SUMMARY_MIGRATION.md)。设 `enabled: false` 即恢复旧行为。
 

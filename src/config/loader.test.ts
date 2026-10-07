@@ -36,13 +36,13 @@ let rootDir = '';
 let savedEnv: Record<string, string | undefined> = {};
 
 async function writeGlobal(body: string): Promise<void> {
-  await mkdir(path.join(rootDir, 'config'), { recursive: true });
-  await writeFile(path.join(rootDir, 'config', 'global.yaml'), body, 'utf8');
+  await mkdir(path.join(rootDir, 'data', 'config'), { recursive: true });
+  await writeFile(path.join(rootDir, 'data', 'config', 'global.yaml'), body, 'utf8');
 }
 
 async function writeBot(name: string, body: string): Promise<void> {
-  await mkdir(path.join(rootDir, 'config', 'bots'), { recursive: true });
-  await writeFile(path.join(rootDir, 'config', 'bots', name), body, 'utf8');
+  await mkdir(path.join(rootDir, 'data', 'config', 'bots'), { recursive: true });
+  await writeFile(path.join(rootDir, 'data', 'config', 'bots', name), body, 'utf8');
 }
 
 function newLoader(events?: EventBus): ConfigLoader {
@@ -151,7 +151,7 @@ describe('ConfigLoader', () => {
   it('deep-merges global, bot and provider local overrides without creating duplicate bots', async () => {
     await mkdir(path.join(rootDir, 'data'), { recursive: true });
     await writeGlobal(['logLevel: info', 'session:', '  maxMessages: 5', '  ttlSeconds: 60', 'ai:', '  options:', '    budget:', '      rpm: 10', '      concurrency: 2', ''].join('\n'));
-    await writeFile(path.join(rootDir, 'config', 'global.local.yaml'), ['session:', '  maxMessages: 9', 'ai:', '  options:', '    budget:', '      concurrency: 4', 'futureGlobal:', '  enabled: true', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'data', 'config', 'global.local.yaml'), ['session:', '  maxMessages: 9', 'ai:', '  options:', '    budget:', '      concurrency: 4', 'futureGlobal:', '  enabled: true', ''].join('\n'));
     await writeFile(path.join(rootDir, 'data', 'provider.yaml'), ['provider: openai-compatible', 'model: tracked-model', 'options:', '  headers:', '    x-one: tracked', '    x-two: tracked', ''].join('\n'));
     await writeFile(path.join(rootDir, 'data', 'provider.local.yaml'), ['model: local-provider-model', 'options:', '  headers:', '    x-two: local', ''].join('\n'));
     await writeBot('main.yaml', ['name: Main', 'ai:', '  options:', '    budget:', '      rpm: 20', 'session:', '  scope: user', ''].join('\n'));
@@ -178,7 +178,7 @@ describe('ConfigLoader', () => {
 
   it('keeps environment precedence above all local YAML overrides', async () => {
     await writeGlobal(['ai:', '  model: tracked', ''].join('\n'));
-    await writeFile(path.join(rootDir, 'config', 'global.local.yaml'), ['logLevel: debug', 'ai:', '  model: local-global', ''].join('\n'));
+    await writeFile(path.join(rootDir, 'data', 'config', 'global.local.yaml'), ['logLevel: debug', 'ai:', '  model: local-global', ''].join('\n'));
     await writeBot('main.yaml', ['ai:', '  model: tracked-bot', ''].join('\n'));
     await writeBot('main.local.yaml', ['ai:', '  model: local-bot', ''].join('\n'));
     process.env['LOG_LEVEL'] = 'error';
@@ -422,5 +422,48 @@ describe('ConfigLoader', () => {
     expect(cfg.bots[0]?.discord.token).toBe('yaml-token-1234567890');
     expect(cfg.bots[0]?.ai.apiKey).toBe('yaml-key-1234567890');
     expect(loader.current()).toBe(cfg);
+  });
+});
+
+describe('data/ relocation', () => {
+  it('loads config and env exclusively from data/', async () => {
+    await writeGlobal('logLevel: warn\n');
+    await writeBot('main.yaml', 'name: Volume Bot\n');
+    await writeFile(path.join(rootDir, 'data', '.env'), 'AI_MODEL=base-model\n');
+    await writeFile(path.join(rootDir, 'data', '.env.local'), 'AI_MODEL=local-model\n');
+    const loader = newLoader();
+    const cfg = await loader.load();
+    expect(loader.configDir).toBe(path.join(rootDir, 'data', 'config'));
+    expect(cfg.global.logLevel).toBe('warn');
+    expect(cfg.bots[0]?.name).toBe('Volume Bot');
+    expect(cfg.bots[0]?.ai.model).toBe('local-model');
+  });
+
+  it('lets data/ env files override a pre-relocation root copy', async () => {
+    await writeGlobal('logLevel: info\n');
+    await writeBot('main.yaml', 'name: Main\n');
+    await writeFile(path.join(rootDir, '.env.local'), 'AI_MODEL=root-model\n');
+    await writeFile(path.join(rootDir, 'data', '.env.local'), 'AI_MODEL=data-model\n');
+    expect((await newLoader().load()).bots[0]?.ai.model).toBe('data-model');
+  });
+
+  it('still reads a pre-relocation config/ tree when data/config is absent', async () => {
+    await mkdir(path.join(rootDir, 'config', 'bots'), { recursive: true });
+    await writeFile(path.join(rootDir, 'config', 'global.yaml'), 'logLevel: error\n');
+    await writeFile(path.join(rootDir, 'config', 'bots', 'legacy.yaml'), 'id: legacy\nname: Legacy\n');
+    const loader = newLoader();
+    const cfg = await loader.load();
+    expect(loader.configDir).toBe(path.join(rootDir, 'config'));
+    expect(cfg.global.logLevel).toBe('error');
+    expect(cfg.bots[0]?.id).toBe('legacy');
+  });
+
+  it('prefers data/config over a leftover legacy tree', async () => {
+    await writeGlobal('logLevel: warn\n');
+    await mkdir(path.join(rootDir, 'config'), { recursive: true });
+    await writeFile(path.join(rootDir, 'config', 'global.yaml'), 'logLevel: error\n');
+    const loader = newLoader();
+    expect(loader.configDir).toBe(path.join(rootDir, 'data', 'config'));
+    expect((await loader.load()).global.logLevel).toBe('warn');
   });
 });

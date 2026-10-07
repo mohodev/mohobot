@@ -6,13 +6,13 @@
  *    and passes src/index.ts as an argument. node runs .mjs natively, so there is
  *    no "unknown file extension" / shebang guessing involved.
  *  - watch is DISABLED on purpose. MohoBot ships its own HotReloader
- *    (config/global.yaml -> hotReload, paths: config + plugins, debounceMs: 300).
+ *    (data/config/global.yaml -> hotReload, paths: data/config + plugins, debounceMs: 300).
  *    Letting pm2 also watch would kill/respawn the process on every edit and drop
  *    the Discord gateway connection. pm2 here is only an OS-level process guard.
  *  - autorestart stays ON: it is complementary to the in-process Supervisor.
  *    Supervisor handles bot-level faults, pm2 handles a real process death.
  *  - instances: 1 / fork mode: a Discord gateway must never be clustered.
- *  - .env is read by the app's own ConfigLoader (rootDir/.env), so DISCORD_TOKEN
+ *  - .env is read by the app's own ConfigLoader (rootDir/data/.env + rootDir/.env), so DISCORD_TOKEN
  *    and KILO_API_KEY are NOT duplicated here.
  *  - MOHO_ROOT pins the project root absolutely so config discovery never depends
  *    on the pm2 daemon's cwd (which can differ from this app's cwd after a daemon

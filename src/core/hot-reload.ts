@@ -1,7 +1,7 @@
 /**
  * Hot reload watcher.
  *
- * Watches config/, plugins/ and characters/ and hands debounced, classified
+ * Watches data/config/, plugins/ and characters/ and hands debounced, classified
  * change events to the runtime. The watcher itself NEVER applies a change and
  * never throws upward - a failed reload leaves the previous version running.
  */
@@ -86,7 +86,9 @@ export class HotReloader implements Managed {
   /** Exposed for tests: classify a path without touching the filesystem. */
   classify(changed: string): ReloadEvent['kind'] {
     const rel = path.relative(this.#rootDir, changed).replaceAll('\\', '/');
-    if (rel.startsWith('config/')) return 'config';
+    // `config/` is the pre-migration location, kept so a stale watcher config
+    // still classifies correctly.
+    if (rel.startsWith('data/config/') || rel.startsWith('config/')) return 'config';
     if (['data/config.json', 'data/provider.yaml', 'data/provider.local.yaml'].includes(rel)) return 'config';
     if (rel.startsWith('plugins/')) return 'plugin';
     if (rel.startsWith('characters/')) return 'character';
