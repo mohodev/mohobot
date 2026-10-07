@@ -7,7 +7,6 @@
  */
 
 import { z } from 'zod';
-import { RemoteStorageConfigSchema } from '../storage/remote-config.js';
 
 export const LogLevelSchema = z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 
@@ -228,7 +227,9 @@ export type BotConfig = z.infer<typeof BotConfigSchema>;
 export const StorageConfigSchema = z.object({
   /**
    * Registered driver name. Open string, NOT an enum, so a plugin can register
-   * 'postgres' or 'redis' and select it here with no schema change.
+   * e.g. 'postgres' and select it here with no schema change. SQLite is the
+   * only built-in driver; anything unregistered degrades to SQLite with a
+   * warning instead of silently losing data.
    */
   driver: z.string().default('sqlite'),
   path: z.string().default('./data/mohobot.db'),
@@ -267,7 +268,6 @@ export const GlobalConfigSchema = z.object({
   logLevel: LogLevelSchema.default('info'),
   admin: z.object({host:z.string().default('127.0.0.1'),port:z.number().int().min(1).max(65535).default(3210),token:z.string().default('')}).default({}),
   storage: StorageConfigSchema.default({}),
-  remoteStorage: RemoteStorageConfigSchema.default({}),
   supervisor: SupervisorConfigSchema.default({}),
   hotReload: HotReloadConfigSchema.default({}),
   plugins: z

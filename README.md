@@ -2,9 +2,9 @@
 
 > 可长期运行、可扩展、故障隔离的 Discord AI Runtime。
 
-MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供应商路由、SQLite 会话持久化、Outbox、Embedding/Rerank 语义记忆、世界/设备/关系状态、插件热加载、多 Bot、运行监督、管理 WebUI 和首次启动向导。
+MohoBot 当前已经具备：Discord/Console 网关、OpenAI-compatible 多供应商路由、SQLite 会话持久化（唯一存储驱动）、Embedding/Rerank 语义记忆、世界/设备/关系状态、插件热加载、多 Bot、运行监督、管理 WebUI 和首次启动向导。
 
-> **状态说明：** MySQL/Redis/Kafka 是可选扩展，远程同步契约已定义但不应在未配置时阻塞本地运行。模型目录是动态参考快照，不把 NVIDIA Free Endpoint 数量写死。详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/IMMERSION.md`](docs/IMMERSION.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
+> **状态说明：** 存储只保留 SQLite——MySQL/Redis/Kafka 镜像与 Outbox 已整体移除（需要时可由插件注册新的存储驱动）。模型目录是动态参考快照，不把 NVIDIA Free Endpoint 数量写死。详见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/IMMERSION.md`](docs/IMMERSION.md) 与 [`docs/AUDIT.md`](docs/AUDIT.md)。
 
 ## 快速开始
 
@@ -135,7 +135,7 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 **上下文摘要：** `session.contextSummary`（全局或单 Bot，深合并）默认开启——会话变长时，最旧的若干轮会被 LLM 折叠为一份滚动摘要，并在下一次回复时作为系统消息注入，而不是被直接丢弃；摘要失败时保留原文，`mock` 提供方不会启用。完整字段、触发规则与回滚方式见 [`docs/CONTEXT_SUMMARY_MIGRATION.md`](docs/CONTEXT_SUMMARY_MIGRATION.md)。设 `enabled: false` 即恢复旧行为。
 
-可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
+存储只有 SQLite 一个驱动（`storage.driver: sqlite`，默认值）；`memory`/MySQL/Redis/Kafka 等其它存储选项已删除，未知驱动名会降级为 SQLite 并告警。`storage.path` 默认 `./data/mohobot.db`，备份目录 `data/backups/`。
 
 ## ACP (Agent Client Protocol)
 

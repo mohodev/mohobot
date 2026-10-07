@@ -7,7 +7,7 @@ boot is resolved through a registry, never through an `if/else` in runtime code.
 |---|---|---|
 | `providers` | AI backends | `bots/<id>.yaml` -> `ai.provider` |
 | `gateways` | Chat platforms | `bots/<id>.yaml` -> `adapter` |
-| `storages` | Persistence drivers | `global.yaml` -> `storage.driver` |
+| `storages` | Persistence drivers | `data/config/global.yaml` -> `storage.driver` (SQLite is the only built-in) |
 | `memories` | Long-term memory | `bots/<id>.yaml` -> `memory.adapter` |
 
 ## The proof, not the promise

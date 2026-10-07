@@ -7,47 +7,20 @@
 
 `?` 必须同时满足：Bot 的 `admin.enabled=true`、发送者 Discord ID 在 `admin.userIds`。不满足时静默，不泄露权限状态。
 
-## 数据分层：SQLite + MySQL + Redis
+## 数据分层：SQLite（唯一存储）
 
-### SQLite（本地热路径、离线可用）
+持久化只使用 SQLite：`storage.driver` 默认且唯一内置 `sqlite`（WAL、TTL、聊天索引），数据文件为 `data/mohobot.db`，备份在 `data/backups/`。注册表仍允许插件注册额外驱动（`storage.driver` 是开放字符串），但运行时不再内置 memory / MySQL / Redis / Kafka 任何驱动、镜像或 Outbox。
+
+### SQLite 承载的内容
 
 - 活跃会话和最近上下文
 - 当前世界/设备状态
-- 最近关系缓存、限流、待处理任务
+- 关系缓存、限流、待处理任务、管理审计
 - 最近 N 天聊天索引
 
-SQLite 是用户回复路径的首选，远程数据库不可用时必须继续工作。
+SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `storage.allowEphemeralFallback` 显式决定是否降级为无持久化运行，否则拒绝启动（fail closed）。
 
-### MySQL（远程权威归档与副本）
-
-- 角色日记、角色包版本、长期记忆正本
-- 用户画像、关系事件、社交图谱
-- 归档聊天记录和审计日志
-- 可选的 SQLite 热数据定时镜像
-
-模式：`local-only`、`async-mirror`、`remote-authoritative`。
-
-- `local-only`：默认；不需要远程服务。
-- `async-mirror`：SQLite 先落盘，Outbox 后台重试同步 MySQL；适合聊天记录和运营数据。
-- `remote-authoritative`：仅日记/长期角色文稿等冷数据允许；读操作有随机可配置延迟以支持沉浸模式，但必须在产品/角色设定中明确，不可冒充真实人类设备或在线状态。
-
-MySQL 写入必须通过最小权限账号、TLS、固定 schema 与参数化查询。禁止把任意 SQL 暴露给模型。
-
-### Redis（可选加速层，不是真相来源）
-
-适合：
-- 分布式 RPM/并发限流
-- Topic Buffer、通知/设备状态短 TTL
-- 任务去重、幂等键、热会话缓存
-- 多实例时的轻量队列
-
-不适合：角色日记、永久记忆、审计正本。配置 ACL、专用 key 前缀与 TTL；禁止 `FLUSHALL` 类模型动作。
-
-### Kafka（规模化后才启用）
-
-仅在多进程/多机、需要可靠异步事件流水（聊天归档、反思、画像、世界事件、分析）时启用。
-
-当前单机版本使用 SQLite Outbox + `OutboxWorker`；可选 `MySqlRemoteMirror` 通过参数化、幂等 event_id 写入远程归档，可选 `KafkaMirror` 发布版本化 envelope。二者均由注入的最小客户端接口提供驱动，未配置时不加载、不成为启动依赖。
+历史设计中的 MySQL 归档、Redis 缓存、Kafka 事件流与 Outbox 异步镜像已在“只保留 SQLite 存储”的重构中整体移除；如需多节点或远程归档，应通过插件注册新的存储驱动重新引入，而不是复活内置分支。
 
 ## 模型阵列
 
@@ -63,7 +36,7 @@ MySQL 写入必须通过最小权限账号、TLS、固定 schema 与参数化查
 
 ```text
 消息/事件 -> Topic Buffer -> 社交决策 -> 上下文/关系/设备/世界 -> 模型
-  -> ReplyPlan 解码 -> Discord 格式化/分段/延迟 -> 存档/反思 Outbox
+  -> ReplyPlan 解码 -> Discord 格式化/分段/延迟 -> SQLite 存档/反思
 ```
 
 模型输出只能得到 `ReplyPlan`：`ignore` 或受限 segments；发送器处理 Discord 限制、禁止 mass mention、分段和失败降级。

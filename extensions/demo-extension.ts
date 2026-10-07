@@ -8,7 +8,7 @@
  *   bots/main.yaml:  adapter: webhook
  *                    ai: { provider: echo-upper }
  *                    memory: { adapter: keyword }
- *   global.yaml:     storage: { driver: jsonl }
+ *   data/config/global.yaml: storage: { driver: jsonl }
  *
  * Delete this file and the runtime behaves exactly as before.
  */

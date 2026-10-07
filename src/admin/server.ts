@@ -46,7 +46,6 @@ export interface AdminServerOptions {
   logger: Logger;
   storage: Storage;
   snapshots: () => BotSnapshot[];
-  remoteHealth?: () => Promise<unknown>;
   configPublication?: ConfigPublicationAdapter;
   modelHealth?: () => Promise<unknown>;
   botControl?: BotControlFacade;
@@ -329,12 +328,9 @@ export class AdminServer {
       return this.#ok({messages:chatLog.query({limit,direction:direction as DiscordChatDirection|undefined,channelId:stringParam(url,'channelId'),botId:stringParam(url,'botId')})});
     }
     const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
-    if(method==='GET'&&pathname==='/api/ops/outbox'){const outbox=await requireOps(this.#opts.ops).listOutbox({limit:intParam(url,'limit'),offset:intParam(url,'offset'),status:stringParam(url,'status') as any});return this.#ok({outbox});}
-    const outboxRetry=pathname.match(/^\/api\/ops\/outbox\/([^/]+)\/retry$/);if(method==='POST'&&outboxRetry){const event=await requireOps(this.#opts.ops).retryOutbox(decodeURIComponent(outboxRetry[1]!));return this.#ok({event});}
     if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:this.#opts.taskControl?{items:this.#opts.taskControl.list()} : requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
     const taskAction=pathname.match(/^\/api\/tasks\/([^/]+)\/(pause|resume|run)$/);if(method==='POST'&&taskAction){const control=this.#opts.taskControl;if(!control)throw new HttpError(409,'task control unavailable');const id=decodeURIComponent(taskAction[1]!);const action=taskAction[2]!;const task=action==='pause'?control.pause(id):action==='resume'?control.resume(id):await control.runNow(id);return this.#ok({task});}
     if (method === 'GET' && pathname === '/api/admin/health') return this.#ok({ health: healthSnapshot(this.#opts.snapshots()) });
-    if (method === 'GET' && pathname === '/api/remote/health') return this.#ok({ health: await this.#opts.remoteHealth?.() ?? { configured: false } });
     if (method === 'GET' && pathname === '/api/config/publication') return this.#ok({ publication: await this.#opts.configPublication?.get() ?? null });
     if (method === 'POST' && pathname === '/api/config/publish') {
       if (!this.#opts.configPublication) throw new HttpError(409, 'config publication unavailable');

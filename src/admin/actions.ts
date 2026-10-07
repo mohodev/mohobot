@@ -13,8 +13,6 @@ export const ADMIN_ACTIONS: readonly AdminAction[] = [
   { id: 'runtime.health', title: 'Dependency health', risk: 'read', confirmation: false, description: 'Read configured service connectivity, never credentials.' },
   { id: 'plugin.list', title: 'Plugin inventory', risk: 'read', confirmation: false, description: 'Read loaded plugin records.' },
   { id: 'plugin.reload', title: 'Reload plugin', risk: 'reversible', confirmation: true, description: 'Reload one existing plugin after explicit confirmation.' },
-  { id: 'mysql.health', title: 'MySQL health', risk: 'read', confirmation: false, description: 'Reserved: read-only connectivity check through a least-privilege account.' },
-  { id: 'redis.health', title: 'Redis health', risk: 'read', confirmation: false, description: 'Reserved: read-only connectivity check through a namespaced ACL account.' },
 ] as const;
 
 export class AuditTrail {
@@ -31,8 +29,6 @@ export class AuditTrail {
 export function healthSnapshot(bots: BotSnapshot[]): Record<string, unknown> {
   return {
     runtime: bots.length > 0 ? 'up' : 'idle',
-    mysql: { configured: Boolean(process.env.MOHO_MYSQL_URL), connected: false, mode: 'not-probed' },
-    redis: { configured: Boolean(process.env.MOHO_REDIS_URL), connected: false, mode: 'not-probed' },
     bots: bots.length,
   };
 }

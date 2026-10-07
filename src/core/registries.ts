@@ -7,7 +7,7 @@
  *
  *   providers  - AI backends           (openai-compatible, mock, ...)
  *   gateways   - chat platforms        (discord, console, ...)
- *   storages   - persistence drivers   (sqlite, memory, ...)
+ *   storages   - persistence drivers   (sqlite builtin, plugin-registered ...)
  *   memories   - long-term memory      (null, ...)
  */
 

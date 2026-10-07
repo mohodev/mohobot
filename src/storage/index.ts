@@ -7,7 +7,6 @@ import path from 'node:path';
 import type { StorageConfig } from '../config/schema.js';
 import type { Logger } from '../core/logger.js';
 import { registries, type MemoryFactory, type StorageFactory } from '../core/registries.js';
-import { MemoryStorage } from './memory.js';
 import { SqliteStorage } from './sqlite.js';
 import { nullMemoryAdapter, type QueryFilter, type ScopedStorage, type Storage, type StoredRecord } from './types.js';
 import { SemanticMemoryAdapter } from '../memory/semantic-memory.js';
@@ -24,7 +23,6 @@ export interface CreateStorageOptions {
 }
 
 export const SQLITE_DRIVER = 'sqlite';
-export const MEMORY_DRIVER = 'memory';
 export const NULL_MEMORY_ADAPTER = 'null';
 export const SEMANTIC_MEMORY_ADAPTER = 'semantic';
 
@@ -37,7 +35,6 @@ const sqliteFactory: StorageFactory = (cfg, deps) => {
     : undefined;
   return new SqliteStorage({ path: resolved, logger: deps.logger, backupDir });
 };
-const memoryFactory: StorageFactory = (_cfg, deps) => new MemoryStorage({ logger: deps.logger });
 const nullMemoryFactory: MemoryFactory = () => nullMemoryAdapter;
 const semanticMemoryFactory: MemoryFactory = (deps) => {
   if (!deps.storage) throw new Error('semantic memory requires a storage driver');
@@ -51,18 +48,16 @@ const semanticMemoryFactory: MemoryFactory = (deps) => {
   return new SemanticMemoryAdapter({ storage: deps.storage, logger: deps.logger, recallLimit, candidateLimit, embeddingBatchSize,channelDomain,allowedScopes });
 };
 
-/** Register built-in storage drivers and memory adapters. Idempotent. */
+/**
+ * Register built-in storage drivers and memory adapters. Idempotent.
+ * SQLite is the only built-in persistence driver; `MemoryStorage` survives as
+ * an in-process test fixture, not as a configurable driver.
+ */
 export function registerBuiltinStorage(): void {
   if (!registries.storages.has(SQLITE_DRIVER)) {
     registries.storages.register(SQLITE_DRIVER, sqliteFactory, {
       source: 'builtin',
       description: 'better-sqlite3 key/value store with WAL and TTL',
-    });
-  }
-  if (!registries.storages.has(MEMORY_DRIVER)) {
-    registries.storages.register(MEMORY_DRIVER, memoryFactory, {
-      source: 'builtin',
-      description: 'in-process Map store; nothing survives a restart',
     });
   }
   if (!registries.memories.has(NULL_MEMORY_ADAPTER)) {
@@ -84,12 +79,13 @@ registerBuiltinStorage();
 /**
  * Build the configured Storage driver. Does not call init().
  *
- * An unknown driver name degrades to the in-memory driver with a warning so a
- * config typo cannot stop the runtime from booting.
+ * An unknown driver name degrades to SQLite with a warning so a config typo
+ * cannot stop the runtime from booting - and, unlike a memory fallback, it
+ * cannot silently discard persisted state either.
  */
 export function createStorage(cfg: StorageConfig, opts: CreateStorageOptions): Storage {
   const requested = (cfg.driver ?? SQLITE_DRIVER).trim() || SQLITE_DRIVER;
-  const factory = registries.storages.resolve(requested, MEMORY_DRIVER, opts.logger);
+  const factory = registries.storages.resolve(requested, SQLITE_DRIVER, opts.logger);
   return factory(cfg, opts);
 }
 

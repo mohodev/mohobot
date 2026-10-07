@@ -28,7 +28,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 ## Architecture constraints
 
 - `discord.js` is confined to `src/discord/` (sole runtime importer is `client.ts`); `src/core/types.ts` deliberately imports no SDKs or `discord.js`.
-- Exactly four extension registries — providers, gateways, storages, memories — selected by open-string config (`ai.provider`, `adapter`, `storage.driver`, `memory.adapter`). An unknown name degrades with a warning (unknown provider → `openai-compatible`, gateway → `console`, driver → `memory`); nothing crashes on a typo.
+- Exactly four extension registries — providers, gateways, storages, memories — selected by open-string config (`ai.provider`, `adapter`, `storage.driver`, `memory.adapter`). An unknown name degrades with a warning (unknown provider → `openai-compatible`, gateway → `console`, storage driver → `sqlite`); nothing crashes on a typo. SQLite is the only built-in storage driver (`MemoryStorage` remains purely a test fixture).
 - Two extension paths: `extensions/*.ts` (auto-loaded at boot, export `register`) and `plugins/<id>/` (entry via `plugin.json`, auto-reaped on unload). Adding a new pipeline stage or event kind still requires editing `src/`.
 - Message handling is serialized per session to keep AI replies ordered.
 - Live model context is `SessionManager` (`src/session/manager.ts`), **not** `ContextArchiver` (audit-only JSONL archive that never feeds the model). Old turns are folded into a rolling LLM summary (`session.contextSummary`, background `summary` task lane) and injected by the pipeline as a system block; summarizer failure keeps the turns and the hard `maxMessages`/`maxChars` trim stays the fallback. Mock providers never get a summarizer.
@@ -60,5 +60,5 @@ printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 ## References
 
 - `docs/EXTENDING.md` — extension points, `needsKey` credential gate, what still requires core edits.
-- `docs/ARCHITECTURE.md` — persona/control planes, SQLite/MySQL/Redis layering, model task types.
+- `docs/ARCHITECTURE.md` — persona/control planes, SQLite-only storage layering, model task types.
 - `docs/AUDIT.md` — verified baseline and known open risks (plugin timeout limits, admin permission model).

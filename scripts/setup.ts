@@ -34,7 +34,6 @@ const DIRECTORIES = [
   'data/models',
   'data/prompts',
   'data/runtime',
-  'data/storage',
   'data/world',
   'logs',
   '.secrets',

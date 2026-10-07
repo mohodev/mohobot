@@ -29,8 +29,6 @@ import { BotRuntime } from './bot/runtime.js';
 import { createStorage } from './storage/index.js';
 import type { Storage } from './storage/types.js';
 import { AdminServer } from './admin/server.js';
-import type { OptionalRemoteDrivers } from './storage/remote-factory.js';
-import { createRemoteRuntime, type RemoteRuntime } from './storage/remote-runtime.js';
 import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 import{DebugChatFacade}from'./admin/debug-chat.js';
@@ -45,7 +43,6 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = process.env.MOHO_ROOT ?? process.cwd();
 
 export interface RuntimeOptions {
-  remoteDrivers?: OptionalRemoteDrivers;
   exit?: (code: number) => never | void;
 }
 
@@ -61,7 +58,6 @@ export class Runtime {
   #bots = new Map<string, BotRuntime>();
   #hotReload?: HotReloader;
   #admin?: AdminServer;
-  #remote?: RemoteRuntime;
   #shuttingDown = false;
   readonly #options: RuntimeOptions;
 
@@ -116,28 +112,6 @@ export class Runtime {
       }
       this.#logger.error({err:detail},'storage init failed; explicit ephemeral fallback enabled');
       this.#storage=undefined;
-    }
-
-    const remoteConfig = this.#config.global.remoteStorage;
-    if (!this.#storage && remoteConfig.mode === 'remote-authoritative') {
-      throw new Error('remote-authoritative requires initialized local coordination storage');
-    }
-    if (this.#storage) {
-      this.#remote = createRemoteRuntime({
-        config: remoteConfig,
-        storage: this.#storage,
-        events: this.#events,
-        logger: this.#logger,
-        drivers: this.#options.remoteDrivers,
-      });
-      this.#remote.coordinator.start();
-      const remoteHealth = await this.#remote.coordinator.health();
-      const unavailable = Object.entries(remoteHealth.remote)
-        .filter(([, status]) => status.enabled && !status.ok)
-        .map(([name]) => name);
-      if (remoteConfig.mode === 'async-mirror' && unavailable.length > 0) {
-        this.#logger.warn({ unavailable }, 'remote mirror degraded; local outbox remains authoritative');
-      }
     }
 
     this.#logGatewayEvents();
@@ -203,7 +177,6 @@ export class Runtime {
         snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
         botControl,
         modelHealth: async () => botControl.modelHealth(),
-        remoteHealth: this.#remote ? () => this.#remote!.coordinator.health() : undefined,
         configPublication:publicationAdmin,
         ops:new OpsControlFacade({storage:this.#storage,listTasks:()=>this.#tasks.list()}),
         taskControl:new TaskControlFacade({tasks:this.#tasks}),
@@ -348,8 +321,6 @@ export class Runtime {
       await this.#hotReload?.stop();
       await this.#tasks?.stopAll(3000);
       await this.#supervisor?.shutdown();
-      await this.#remote?.stopEventBridge();
-      await this.#remote?.coordinator.stop();
       await this.#storage?.close();
     } catch (error) {
       this.#logger.error({ err: error instanceof Error ? error.message : String(error) }, 'shutdown error');

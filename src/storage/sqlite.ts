@@ -6,7 +6,6 @@
  * JSON text. Expiry is enforced lazily on read plus periodically by purgeExpired().
  */
 
-import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -15,7 +14,6 @@ import Database from 'better-sqlite3';
 import type { Logger } from '../core/logger.js';
 import { attachChatLogDb, detachChatLogDb } from './chatlog.js';
 import { migrateSqlite } from './migrations.js';
-import type { AtomicOutboxStorage, ClaimOptions, OutboxEvent, ReleaseOptions } from './outbox.js';
 import {
   CURRENT_RECORD_VERSION, CURRENT_WRITER_VERSION, expectedRecordType,
   RecordMetadataError, validateRecordMetadata,
@@ -34,9 +32,6 @@ interface Row {
   writer_version: number | null;
 }
 
-const OUTBOX_PREFIX = 'outbox:';
-const MAX_OUTBOX_ERROR_LENGTH = 2_000;
-
 export interface SqliteStorageOptions {
   /** File path, or ':memory:' for an ephemeral database. */
   path: string;
@@ -51,7 +46,7 @@ function sanitizeCount(value: number | undefined, fallback: number): number {
   return int < 0 ? fallback : int;
 }
 
-export class SqliteStorage implements Storage, AtomicOutboxStorage {
+export class SqliteStorage implements Storage {
   readonly #path: string;
   readonly #backupDir: string | undefined;
   readonly #log: Logger;
@@ -168,82 +163,6 @@ export class SqliteStorage implements Storage, AtomicOutboxStorage {
     return info.changes;
   }
 
-  async claimOutboxAtomic<T = unknown>(workerId: string, options: Required<ClaimOptions>): Promise<OutboxEvent<T>[]> {
-    const db = this.#must();
-    const run = db.transaction(() => {
-      this.#recoverExpiredOutbox(db, options.now);
-      const rows = db.prepare(
-        `SELECT key, value FROM kv
-         WHERE key LIKE ? || '%' AND (expires_at IS NULL OR expires_at > ?)
-         ORDER BY updated_at ASC, key ASC`,
-      ).all(OUTBOX_PREFIX, options.now) as Array<Pick<Row, 'key' | 'value'>>;
-      const candidates = rows
-        .map((row) => ({ row, event: this.#decodeOutbox<T>(row.key, row.value) }))
-        .filter((entry): entry is { row: Pick<Row, 'key' | 'value'>; event: OutboxEvent<T> } => entry.event !== undefined)
-        .filter(({ event }) => (event.status === 'pending' || event.status === 'failed') && event.nextAttemptAt <= options.now)
-        .sort((a, b) => (a.event.createdAt - b.event.createdAt) || a.event.eventId.localeCompare(b.event.eventId))
-        .slice(0, options.limit);
-      const claimed: OutboxEvent<T>[] = [];
-      const update = db.prepare(
-        `UPDATE kv SET value = ?, updated_at = ?, record_type = 'outbox-event', record_version = 1, writer_version = 1
-         WHERE key = ? AND value = ?`,
-      );
-      for (const { row, event } of candidates) {
-        const next: OutboxEvent<T> = {
-          ...event,
-          status: 'processing',
-          attempts: Math.max(0, Math.floor(event.attempts)) + 1,
-          updatedAt: options.now,
-          workerId,
-          claimToken: randomUUID(),
-          claimExpiresAt: options.now + options.leaseMs,
-        };
-        if (update.run(JSON.stringify(next), options.now, row.key, row.value).changes === 1) claimed.push(next);
-      }
-      return claimed;
-    });
-    return run.immediate();
-  }
-
-  async releaseOutboxAtomic(eventId: string, workerId: string, options: ReleaseOptions & { now: number }): Promise<OutboxEvent | undefined> {
-    const db = this.#must();
-    const key = `${OUTBOX_PREFIX}${eventId}`;
-    const run = db.transaction(() => {
-      const row = db.prepare('SELECT key, value, updated_at, expires_at FROM kv WHERE key = ?').get(key) as Row | undefined;
-      if (!row) return undefined;
-      const current = this.#decodeOutbox(row.key, row.value);
-      if (!current) return undefined;
-      if (current.status !== 'processing' || current.workerId !== workerId || current.claimToken !== options.claimToken) return current;
-      const done = options.done === true;
-      const next: OutboxEvent = {
-        ...current,
-        status: done ? 'done' : 'failed',
-        updatedAt: options.now,
-        nextAttemptAt: done ? options.now : options.now + Math.max(0, options.retryAfterMs ?? 0),
-        workerId: undefined,
-        claimToken: undefined,
-        claimExpiresAt: undefined,
-        ...(done
-          ? { lastError: undefined }
-          : options.error ? { lastError: options.error.slice(0, MAX_OUTBOX_ERROR_LENGTH) } : {}),
-      };
-      const changed = db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?')
-        .run(JSON.stringify(next), options.now, key, row.value).changes;
-      return changed === 1 ? next : this.#decodeOutbox(key, (db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as { value: string }).value);
-    });
-    return run.immediate();
-  }
-
-  async retryFailedOutboxAtomic(eventId:string,now:number):Promise<OutboxEvent|undefined>{
-    const db=this.#must(),key=`${OUTBOX_PREFIX}${eventId}`;
-    const run=db.transaction(()=>{const row=db.prepare('SELECT key, value, updated_at, expires_at FROM kv WHERE key = ?').get(key)as Row|undefined;if(!row)return undefined;const current=this.#decodeOutbox(row.key,row.value);if(!current||current.status!=='failed')return undefined;const next:OutboxEvent={...current,status:'pending',updatedAt:now,nextAttemptAt:now,workerId:undefined,claimToken:undefined,claimExpiresAt:undefined,lastError:undefined};const changed=db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?').run(JSON.stringify(next),now,key,row.value).changes;return changed===1?next:undefined;});
-    return run.immediate();
-  }
-
-  async recoverExpiredOutboxAtomic(now: number): Promise<number> {
-    return this.#must().transaction(() => this.#recoverExpiredOutbox(this.#must(), now)).immediate();
-  }
-
   async close(): Promise<void> {
     if (this.#db === undefined) return;
     detachChatLogDb(this.#db);
@@ -258,36 +177,6 @@ export class SqliteStorage implements Storage, AtomicOutboxStorage {
   #must(): DatabaseHandle {
     if (this.#db === undefined) throw new Error('SqliteStorage not initialised - call init() first');
     return this.#db;
-  }
-
-  #recoverExpiredOutbox(db: DatabaseHandle, now: number): number {
-    const rows = db.prepare("SELECT key, value FROM kv WHERE key LIKE ? || '%'").all(OUTBOX_PREFIX) as Array<Pick<Row, 'key' | 'value'>>;
-    const update = db.prepare('UPDATE kv SET value = ?, updated_at = ? WHERE key = ? AND value = ?');
-    let recovered = 0;
-    for (const row of rows) {
-      const event = this.#decodeOutbox(row.key, row.value);
-      if (!event || event.status !== 'processing' || event.claimExpiresAt === undefined || event.claimExpiresAt > now) continue;
-      const next: OutboxEvent = {
-        ...event,
-        status: 'pending',
-        updatedAt: now,
-        nextAttemptAt: now,
-        workerId: undefined,
-        claimToken: undefined,
-        claimExpiresAt: undefined,
-      };
-      recovered += update.run(JSON.stringify(next), now, row.key, row.value).changes;
-    }
-    return recovered;
-  }
-
-  #decodeOutbox<T = unknown>(key: string, raw: string): OutboxEvent<T> | undefined {
-    const value = this.#decode<OutboxEvent<T>>({key,value:raw,updated_at:0,expires_at:null,record_type:'outbox-event',record_version:CURRENT_RECORD_VERSION,writer_version:CURRENT_WRITER_VERSION});
-    if (!value || typeof value !== 'object' || typeof value.eventId !== 'string' || typeof value.status !== 'string') {
-      this.#log.warn({ key }, 'skipping invalid outbox row');
-      return undefined;
-    }
-    return value;
   }
 
   /** Corrupt, mismatched, or future rows are skipped instead of reaching old business code. */
