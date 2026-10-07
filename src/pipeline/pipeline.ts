@@ -39,6 +39,7 @@ import { discordChatLog } from '../core/discord-chat-log.js';
 import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 import { ContextArchiver, type ContextEntry } from '../context-archiver/index.js';
+import { BanError, BanStore, formatDuration, looksLikeDuration, parseDuration } from './ban-store.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -107,6 +108,8 @@ export interface PipelineDeps {
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
   /** Context archiver for JSONL session persistence. */
   contextArchiver?: ContextArchiver;
+  /** Runtime ban list; banned users are silently ignored before any processing. */
+  bans?: BanStore;
 }
 
 export interface PipelineStats {
@@ -256,6 +259,9 @@ export class MessagePipeline {
     const trace = this.#traces.start({ botId: message.botId, messageId: message.id, channelId: message.channel.id, userId: message.author.id });
     this.#chatLog('in', message, message.content, 'received', trace.id);
     this.#trace(trace, 'observed', { mentionsBot: message.mentionsBot, dm: message.channel.dm, length: message.content.length });
+    // Banned users never reach the topic buffer, so their text cannot leak into
+    // a merged turn that also carries someone else's message.
+    if (await this.#isBanned(message, trace)) return;
     const key = this.#queueKey(message);
     const merged = await this.#topics.push(key, message);
     // Earlier callers share the same merged turn; only the newest invocation
@@ -296,6 +302,65 @@ export class MessagePipeline {
       await current;
     } finally {
       if (this.#queues.get(queueKey) === current) this.#queues.delete(queueKey);
+    }
+  }
+
+  /** Administrators are never subject to bans, so a mistaken ban cannot lock out the operator. */
+  async #isBanned(message: MohoMessage, trace: ChatTrace): Promise<boolean> {
+    const bans = this.#deps.bans;
+    if (!bans || message.author.isBotManager === true) return false;
+    await bans.ready();
+    const ban = bans.check(message.author.id, message.channel.id);
+    if (!ban) return false;
+    this.#stats.skipped += 1;
+    this.#trace(trace, 'ignored', { reason: 'banned', scope: ban.channelId ? 'channel' : 'global' });
+    this.#logger.debug({ traceId: trace.id, user: message.author.id, scope: ban.channelId ? 'channel' : 'global' }, 'banned user ignored');
+    return true;
+  }
+
+  async #adminBanCommand(name: 'ban' | 'unban' | 'banlist', rawArgs: string[], message: MohoMessage): Promise<void> {
+    const bans = this.#deps.bans;
+    if (!bans) { await this.#reply(message, '封禁功能不可用：当前运行时没有配置存储。'); return; }
+    await bans.ready();
+    const here = rawArgs.some((a) => a.toLowerCase() === '--here');
+    const args = rawArgs.filter((a) => a.toLowerCase() !== '--here');
+    const scopeChannel = here ? message.channel.id : undefined;
+    try {
+      if (name === 'banlist') {
+        const rows = bans.list();
+        if (rows.length === 0) { await this.#reply(message, '当前没有生效的封禁。'); return; }
+        const now = Date.now();
+        const lines = rows.slice(0, 20).map((r) => {
+          const left = r.expiresAt === undefined ? '永久' : `剩余 ${formatDuration(r.expiresAt - now)}`;
+          return `· ${r.userId} · ${r.channelId ? `频道 ${r.channelId}` : '全局'} · ${left}${r.reason ? ` · ${r.reason}` : ''}`;
+        });
+        await this.#reply(message, `生效中的封禁（${rows.length}）：\n${lines.join('\n')}${rows.length > 20 ? '\n…（仅显示前 20 条）' : ''}`);
+        return;
+      }
+      if (!args[0]) {
+        await this.#reply(message, name === 'ban'
+          ? '用法：`?ban <用户ID或@> [时长如 30m/2h/1d2h] [原因]`，加 `--here` 仅封本频道；不写时长为永久。'
+          : '用法：`?unban <用户ID或@>`，加 `--here` 仅解除本频道的封禁。');
+        return;
+      }
+      if (name === 'unban') {
+        const removed = await bans.unban(args[0], scopeChannel);
+        await this.#reply(message, removed ? '已解除封禁。' : '该用户在此范围内没有生效的封禁。');
+        this.#logger.info({ by: message.author.id, target: args[0], scope: here ? 'channel' : 'global' }, 'admin unban');
+        return;
+      }
+      const target = args[0];
+      const durationMs = args[1] && looksLikeDuration(args[1]) ? parseDuration(args[1]) : undefined;
+      const reason = args.slice(durationMs === undefined ? 1 : 2).join(' ');
+      const bare = target.replace(/^<@!?|>$/g, '');
+      if (bare === message.author.id) { await this.#reply(message, '不能封禁自己。'); return; }
+      if (this.#deps.config.admin.userIds.includes(bare)) { await this.#reply(message, '不能封禁已配置的管理员。'); return; }
+      const record = await bans.ban({ userId: target, channelId: scopeChannel, durationMs, reason, by: message.author.id });
+      await this.#reply(message, `已封禁 ${record.userId}（${here ? '本频道' : '全局'}，${record.expiresAt === undefined ? '永久' : `持续 ${formatDuration(record.expiresAt - record.createdAt)}`}）。`);
+      this.#logger.info({ by: message.author.id, target: record.userId, scope: here ? 'channel' : 'global', permanent: record.expiresAt === undefined }, 'admin ban');
+    } catch (error) {
+      if (error instanceof BanError) { await this.#reply(message, `操作失败：${error.message}`); return; }
+      throw error;
     }
   }
 
@@ -622,7 +687,11 @@ export class MessagePipeline {
 
   async #dispatchAdminCommand(name: string, args: string[], message: MohoMessage): Promise<boolean> {
     if (name === 'admin-help') {
-      await this.#reply(message, '管理指令：`?admin-help` · `?status`。危险操作只能通过本地管理面板二次确认。');
+      await this.#reply(message, '管理指令：`?admin-help` · `?status` · `?ban` · `?unban` · `?banlist`。危险操作只能通过本地管理面板二次确认。');
+      return true;
+    }
+    if (name === 'ban' || name === 'unban' || name === 'banlist') {
+      await this.#adminBanCommand(name, args, message);
       return true;
     }
     if (name === 'status') {

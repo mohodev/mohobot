@@ -25,6 +25,7 @@ import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
+import { BanStore } from '../pipeline/ban-store.js';
 import { scopeStorage } from '../storage/index.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
 import { WorldStore } from '../admin/world.js';
@@ -235,6 +236,7 @@ export class BotRuntime implements Managed {
       publicRelationships,
       reflection,
       contextArchiver: this.#archiver,
+      bans: BanStore.for(this.#deps.storage, this.#logger),
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },
