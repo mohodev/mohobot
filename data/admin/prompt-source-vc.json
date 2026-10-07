@@ -1,7 +1,8 @@
 {
   "name": "vc-character-prompt",
   "repository": "https://github.com/CarefreeSongs712/vc-character-prompt",
-  "commit": "17e068c98dd59c8b33a14e0bcfd95635623476c7",
+  "commit": "b932b68c3a0efdef1145a09a32bf0201e81ffe85",
   "license": "not declared in source repository; keep imported prompt local unless permission is confirmed",
-  "importedAt": "2026-08-13T00:00:00.000Z"
+  "importedAt": "2026-10-07T00:00:00.000Z",
+  "fileCount": 14
 }
