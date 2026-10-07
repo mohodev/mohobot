@@ -21,7 +21,7 @@
     "scan-secrets": "tsx scripts/scan-secrets.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^13.0.3",
     "chokidar": "^4.0.3",
     "discord.js": "^14.16.3",
     "pino": "^9.5.0",
