@@ -131,6 +131,8 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 `config/global.yaml` 保存可跟踪的运行参数；`data/provider.yaml` 保存可跟踪的 Provider 默认项；对应的 `.local.yaml` 只放机器差异，仍不得写入密钥（密钥只从环境变量读取）。新版本增加的未知字段在旧版运行时只会告警并忽略，不会阻断启动。NVIDIA Build/NIM 模型目录仅作动态参考，启用前需按当前账号做健康检查。
 
+**上下文摘要：** `session.contextSummary`（全局或单 Bot，深合并）默认开启——会话变长时，最旧的若干轮会被 LLM 折叠为一份滚动摘要，并在下一次回复时作为系统消息注入，而不是被直接丢弃；摘要失败时保留原文，`mock` 提供方不会启用。完整字段、触发规则与回滚方式见 [`docs/CONTEXT_SUMMARY_MIGRATION.md`](docs/CONTEXT_SUMMARY_MIGRATION.md)。设 `enabled: false` 即恢复旧行为。
+
 可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
 
 ## 插件
