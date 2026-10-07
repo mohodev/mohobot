@@ -158,7 +158,21 @@ npx tsx src/acp/index.ts
 }
 ```
 
-支持的方法：`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/delete`、`session/list`。流式响应通过 `session/update` 通知推送。
+支持的方法：`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/delete`、`session/list`、`session/load`、`session/resume`、`session/close`。流式响应通过 `session/update` 通知推送。
+
+## OpenCode CLI Provider
+
+MohoBot 内置 `opencode-cli` provider，通过子进程调用 `opencode run`，复用当前 OpenCode 登录态，无需 API key。
+
+```yaml
+# data/provider.yaml
+provider: opencode-cli
+model: opencode/ling-3.1-flash-free
+temperature: 0.8
+options:
+  bin: opencode
+  timeoutMs: 180000
+```
 
 ## 预制提示词
 

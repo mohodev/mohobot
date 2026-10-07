@@ -38,7 +38,7 @@ describe('ACP server', () => {
     expect(result.protocolVersion).toBe(1);
     expect(result.agentInfo.name).toBe('MohoBot');
     expect(result.agentCapabilities.promptCapabilities.embeddedContext).toBe(true);
-    expect(result.agentCapabilities.loadSession).toBe(false);
+    expect(result.agentCapabilities.loadSession).toBe(true);
   });
 
   it('creates and deletes sessions', () => {
@@ -144,6 +144,51 @@ describe('ACP server', () => {
     expect(lastCall?.messages[0]).toEqual({ role: 'user', content: 'First message' });
     expect(lastCall?.messages[1]).toEqual({ role: 'assistant', content: 'response' });
     expect(lastCall?.messages[2]).toEqual({ role: 'user', content: 'Second message' });
+  });
+
+  it('loads a session and replays history', () => {
+    const server = createServer(mockProvider('ok'));
+    const newResult = (server as any).handleSessionNew({ cwd: '/tmp' });
+    const sessionId = newResult.sessionId;
+
+    // Manually add some messages to the session
+    const session = (server as any).sessions.get(sessionId);
+    session.messages.push(
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there!' },
+    );
+
+    const result = (server as any).handleSessionLoad(1, { sessionId });
+    expect(result.result).toEqual({});
+    expect(result.error).toBeUndefined();
+  });
+
+  it('resumes a session without replaying', () => {
+    const server = createServer(mockProvider('ok'));
+    const newResult = (server as any).handleSessionNew({ cwd: '/tmp' });
+    const sessionId = newResult.sessionId;
+
+    const result = (server as any).handleSessionResume(1, { sessionId });
+    expect(result.result).toEqual({});
+    expect(result.error).toBeUndefined();
+  });
+
+  it('closes a session and aborts in-flight work', () => {
+    const server = createServer(mockProvider('ok'));
+    const newResult = (server as any).handleSessionNew({ cwd: '/tmp' });
+    const sessionId = newResult.sessionId;
+
+    const result = (server as any).handleSessionClose({ sessionId });
+    expect(result).toEqual({});
+    expect((server as any).sessions.has(sessionId)).toBe(false);
+  });
+
+  it('returns error for load/resume of unknown session', () => {
+    const server = createServer(mockProvider('ok'));
+    const loadResult = (server as any).handleSessionLoad(1, { sessionId: 'nonexistent' });
+    expect(loadResult.error).toBeDefined();
+    const resumeResult = (server as any).handleSessionResume(1, { sessionId: 'nonexistent' });
+    expect(resumeResult.error).toBeDefined();
   });
 
   it('returns cancelled stop reason when aborted', async () => {

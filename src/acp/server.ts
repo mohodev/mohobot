@@ -169,7 +169,11 @@ export class AcpServer {
         case 'session/prompt':
           return await this.handleSessionPrompt(id, params ?? {});
         case 'session/load':
-          return { jsonrpc: '2.0', id, error: { code: -32601, message: 'session/load not supported' } };
+          return this.handleSessionLoad(id, params ?? {});
+        case 'session/resume':
+          return this.handleSessionResume(id, params ?? {});
+        case 'session/close':
+          return { jsonrpc: '2.0', id, result: this.handleSessionClose(params ?? {}) };
         case 'session/delete':
           return { jsonrpc: '2.0', id, result: this.handleSessionDelete(params ?? {}) };
         case 'session/list':
@@ -207,7 +211,7 @@ export class AcpServer {
     return {
       protocolVersion: this.protocolVersion,
       agentCapabilities: {
-        loadSession: false,
+        loadSession: true,
         promptCapabilities: {
           image: false,
           audio: false,
@@ -222,6 +226,8 @@ export class AcpServer {
         },
         sessionCapabilities: {
           delete: {},
+          resume: {},
+          close: {},
         },
       },
       agentInfo: {
@@ -331,6 +337,46 @@ export class AcpServer {
     const existed = this.sessions.delete(sessionId);
     if (existed) {
       this.logger.info({ sessionId }, 'ACP session deleted');
+    }
+    return {};
+  }
+
+  private handleSessionLoad(id: number | string, params: Record<string, unknown>): JsonRpcResponse {
+    const sessionId = typeof params.sessionId === 'string' ? params.sessionId : '';
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: `Session not found: ${sessionId}` } };
+    }
+    // Replay conversation history via session/update notifications
+    for (const message of session.messages) {
+      const messageId = `acp_msg_${this.nextMessageId++}`;
+      this.sendUpdate(sessionId, {
+        sessionUpdate: message.role === 'user' ? 'user_message_chunk' : 'agent_message_chunk',
+        messageId,
+        content: { type: 'text', text: message.content },
+      });
+    }
+    this.logger.info({ sessionId, messages: session.messages.length }, 'ACP session loaded');
+    return { jsonrpc: '2.0', id, result: {} };
+  }
+
+  private handleSessionResume(id: number | string, params: Record<string, unknown>): JsonRpcResponse {
+    const sessionId = typeof params.sessionId === 'string' ? params.sessionId : '';
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: `Session not found: ${sessionId}` } };
+    }
+    this.logger.info({ sessionId }, 'ACP session resumed');
+    return { jsonrpc: '2.0', id, result: {} };
+  }
+
+  private handleSessionClose(params: Record<string, unknown>): Record<string, unknown> {
+    const sessionId = typeof params.sessionId === 'string' ? params.sessionId : '';
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.abortController.abort();
+      this.sessions.delete(sessionId);
+      this.logger.info({ sessionId }, 'ACP session closed');
     }
     return {};
   }

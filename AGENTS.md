@@ -13,7 +13,8 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `npm run setup -- --non-interactive` — creates `.env.local`, admin token, dirs, SQLite. Idempotent; never overwrites an existing env.
 - `npm run build` — `tsc -p tsconfig.build.json` into `dist/`, then copies each `plugins/*/plugin.json`.
 - `npm run scan-secrets` — redacted credential scan of tracked files (`-- --history` adds every commit's added lines). `npm test` fails if a tracked file looks like it holds a credential; use `secretscan:ignore` on the line for a verified false positive. Known leaks in history are listed in `docs/AUDIT.md`.
-- `npm run acp` — start the ACP (Agent Client Protocol) v1 server on stdio, so ACP-compatible editors can use MohoBot as an AI agent backend. Implements `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/delete`, `session/list` with streaming `session/update` notifications.
+- `npm run acp` — start the ACP (Agent Client Protocol) v1 server on stdio, so ACP-compatible editors can use MohoBot as an AI agent backend. Implements `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/delete`, `session/list`, `session/load`, `session/resume`, `session/close` with streaming `session/update` notifications.
+- `opencode-cli` provider — drives the local `opencode run` CLI, reusing the signed-in OpenCode session (no API key needed). Set `AI_PROVIDER=opencode-cli` and `AI_MODEL=opencode/<model>` to use it.
 
 ## Toolchain gotchas
 

@@ -13,6 +13,7 @@ import type { Logger } from '../core/logger.js';
 import { registries, type ProviderFactory } from '../core/registries.js';
 import { MockProvider } from './mock.js';
 import { OpenAICompatibleProvider } from './openai-compatible.js';
+import { OpenCodeCliProvider } from './opencode-cli.js';
 import type { AIProvider } from './types.js';
 import { BudgetedProvider } from './router.js';
 import { isProviderProfiles, MultiProviderRouter, type TaskRoute } from './multi-router.js';
@@ -20,6 +21,7 @@ import { isProviderProfiles, MultiProviderRouter, type TaskRoute } from './multi
 export * from './types.js';
 export * from './openai-compatible.js';
 export * from './mock.js';
+export * from './opencode-cli.js';
 
 export interface CreateProviderDeps {
   logger: Logger;
@@ -31,10 +33,13 @@ export interface CreateProviderDeps {
 
 export const BUILTIN_PROVIDER = 'openai-compatible';
 export const MOCK_PROVIDER = 'mock';
+/** Drives the local `opencode` CLI; credentials live in OpenCode, not here. */
+export const OPENCODE_CLI_PROVIDER = 'opencode-cli';
 
 const openAIFactory: ProviderFactory = (cfg, deps) => new OpenAICompatibleProvider(cfg, deps);
 const mockFactory: ProviderFactory = (cfg) =>
   new MockProvider({ model: cfg.model === 'mock' ? 'mock' : `mock:${cfg.model}` });
+const opencodeCliFactory: ProviderFactory = (cfg, deps) => new OpenCodeCliProvider(cfg, deps);
 
 /** Register the built-ins. Idempotent, so repeated imports are safe. */
 export function registerBuiltinProviders(): void {
@@ -48,6 +53,15 @@ export function registerBuiltinProviders(): void {
     registries.providers.register(MOCK_PROVIDER, mockFactory, {
       source: 'builtin',
       description: 'Offline canned responses; used when no credentials are set',
+    });
+  }
+  if (!registries.providers.has(OPENCODE_CLI_PROVIDER)) {
+    registries.providers.register(OPENCODE_CLI_PROVIDER, opencodeCliFactory, {
+      source: 'builtin',
+      description: 'Local `opencode run` CLI; uses the signed-in OpenCode session, no API key',
+      // The credential lives inside OpenCode's own store, so an empty
+      // AI_API_KEY must never demote this provider to mock.
+      needsKey: () => false,
     });
   }
 }
