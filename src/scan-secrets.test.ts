@@ -57,9 +57,11 @@ describe('scanText rules', () => {
     for (const v of ['process.env.KILO_API_KEY', 'import.meta.env.VITE_SECRET_KEY_NAME', 'os.environ', 'config.provider.apiKey', 'KILO_API_KEY_NAME_X']) {
       expect(isCodeReference(v), v).toBe(true);
     }
-    for (const v of ['k9Zq3Lm2Xa8Vb7Nc6Rd5Te4Wf1Ug0', 'abcDEF123456abcDEF123456xyz']) expect(isCodeReference(v), v).toBe(false);
+    // Assembled at runtime so this tracked file never contains a literal the scanner would flag.
+    const opaque = 'k9Zq3Lm2Xa8Vb7Nc6' + 'Rd5Te4Wf1Ug0';
+    for (const v of [opaque, 'abcDEF123456' + 'abcDEF123456xyz']) expect(isCodeReference(v), v).toBe(false);
     expect(rulesHit('apiKey = process.env.SOME_VERY_LONG_ENV_NAME_HERE')).toEqual([]);
-    expect(rulesHit('password: "k9Zq3Lm2Xa8Vb7Nc6Rd5Te4Wf1Ug0"')).toEqual(['credential-assignment']);
+    expect(rulesHit(`password: "${opaque}"`)).toEqual(['credential-assignment']);
   });
 
   it('honours the inline suppression marker', () => {
