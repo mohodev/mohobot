@@ -17,10 +17,10 @@
 | LLM 备用模型回退 | multi-router TaskRoute primary→fallback | ✅ 已有 |
 | 群聊最近消息注入 | topic-buffer 共享 timeline | ✅ 已有 |
 | 说话人标注 | pipeline name=username | ✅ 已有 |
-| 上下文 AI 总结压缩(40轮→总结15轮) | 无（maxMessages=20 硬裁剪+TTL+语义记忆补偿） | ⚠️ 设计差异 |
+| 上下文 AI 总结压缩(40轮→总结15轮) | `SessionManager` 滚动摘要（轮数/字符双触发，失败保留原文，见 docs/CONTEXT_SUMMARY_MIGRATION.md） | ✅ 已移植 |
 | 戳一戳反射 / TTS唱歌规划 / 图片phash去重 | 无 | ➖ QQ 特有，Discord 不适用 |
 | OneBot v11 反向 WS 多 bot | Discord gateway 多 bot 配置 | ➖ 平台差异 |
 
 ## 决定
 - **不迁移 Python**（RUNTIME_HARDEN_TODO 最后一项就此关闭）：上游平台(QQ)与本项目(Discord)不同，TS 版功能面已覆盖其通用架构思想。
-- 可选增强（非必须）：session 满时 AI 总结压缩替代硬裁剪。当前 20 条+语义记忆够用，暂不做。
+- ~~可选增强：session 满时 AI 总结压缩替代硬裁剪~~ → 已于 2026-10 实现（`session.contextSummary`）。

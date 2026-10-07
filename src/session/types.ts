@@ -4,6 +4,7 @@
  */
 
 import type { ChatMessage, Platform } from '../core/types.js';
+import type { SessionSummary } from '../storage/types.js';
 
 export interface SessionKeyInput {
   botId: string;
@@ -29,6 +30,8 @@ export interface Session {
   channelId: string;
   userId?: string;
   messages: ChatMessage[];
+  /** Rolling summary of turns compacted out of `messages`. */
+  summary?: SessionSummary;
   updatedAt: number;
 }
 
@@ -47,6 +50,8 @@ export interface SessionManagerLike {
   updateSourceMessage?(input: SourceMessageUpdate): Promise<boolean>;
   /** Preserve a tombstone while removing the turn from future model context. */
   deleteSourceMessage?(input: SourceMessageMutation): Promise<boolean>;
+  /** Rolling summary of older, compacted turns (undefined when none). */
+  getSummary?(input: SessionKeyInput): Promise<string | undefined>;
   /** Assemble the prompt: system + (memory) + trimmed history. */
   buildContext(input: SessionKeyInput, systemPrompt: string): Promise<ChatMessage[]>;
   clear(input: SessionKeyInput): Promise<void>;

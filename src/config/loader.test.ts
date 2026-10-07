@@ -271,6 +271,31 @@ describe('ConfigLoader', () => {
     expect(cfg.global.ai.model).toBe('global-model');
   });
 
+  it('defaults context summaries on and deep-merges per-bot overrides over global ones', async () => {
+    await writeGlobal(['session:', '  contextSummary:', '    trimAtRounds: 30', '    maxSummaryChars: 900', ''].join('\n'));
+    await writeBot('main.yaml', ['session:', '  contextSummary:', '    trimAtRounds: 12', ''].join('\n'));
+    await writeBot('quiet.yaml', ['session:', '  contextSummary:', '    enabled: false', ''].join('\n'));
+    await writeBot('plain.yaml', ['name: Plain', ''].join('\n'));
+
+    const cfg = await newLoader().load();
+    const byId = (id: string) => cfg.bots.find((b) => b.id === id)?.session.contextSummary;
+
+    expect(cfg.global.session.contextSummary).toMatchObject({ enabled: true, trimAtRounds: 30, maxSummaryChars: 900, trimRemoveRounds: 15 });
+    // Bot tweaks one knob: it wins, the global knob it did not touch survives.
+    expect(byId('main')).toMatchObject({ enabled: true, trimAtRounds: 12, maxSummaryChars: 900 });
+    // Bot opts out without clobbering the inherited tuning.
+    expect(byId('quiet')).toMatchObject({ enabled: false, trimAtRounds: 30, maxSummaryChars: 900 });
+    // No override: pure global.
+    expect(byId('plain')).toMatchObject({ enabled: true, trimAtRounds: 30 });
+  });
+
+  it('keeps a global opt-out when a bot only tunes another summary knob', async () => {
+    await writeGlobal(['session:', '  contextSummary:', '    enabled: false', ''].join('\n'));
+    await writeBot('main.yaml', ['session:', '  contextSummary:', '    trimAtRounds: 8', ''].join('\n'));
+    const cfg = await newLoader().load();
+    expect(cfg.bots[0]?.session.contextSummary).toMatchObject({ enabled: false, trimAtRounds: 8 });
+  });
+
   it('gives env vars precedence over yaml, and per-bot env over global env', async () => {
     await writeGlobal(['logLevel: info', 'ai:', '  model: yaml-model', ''].join('\n'));
     await writeBot('main.yaml', ['ai:', '  model: bot-yaml-model', ''].join('\n'));

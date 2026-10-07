@@ -15,12 +15,25 @@ import type {
 } from './types.js';
 import { decodePersistedSession } from './codec.js';
 
+/**
+ * Folds old turns into a rolling summary. Returning undefined/empty (or
+ * throwing) means "could not summarize": the manager keeps the data and the
+ * hard trim stays the fallback.
+ */
+export type Summarizer = (input: {
+  previousSummary?: string;
+  messages: ChatMessage[];
+  maxChars: number;
+}) => Promise<string | undefined>;
+
 export interface SessionManagerOptions {
   botId: string;
   config: SessionConfig;
   storage?: Storage;
   logger: Logger;
   memory?: MemoryAdapter;
+  /** Optional; can also be attached later with setSummarizer(). */
+  summarizer?: Summarizer;
 }
 
 /** `session:<botId>:<channelId>[:<userId>]` depending on scope. */
@@ -55,6 +68,9 @@ export class SessionManager implements SessionManagerLike {
   readonly #writeBlocked = new Set<string>();
   /** Per-manager write queue, preserving append/delete order in storage. */
   #pending: Promise<void> = Promise.resolve();
+  #summarizer: Summarizer | undefined;
+  /** In-flight compaction per session key: at most one summarizer call per session. */
+  readonly #compacting = new Map<string, Promise<boolean>>();
 
   constructor(opts: SessionManagerOptions) {
     this.#botId = opts.botId;
@@ -62,6 +78,17 @@ export class SessionManager implements SessionManagerLike {
     this.#storage = opts.storage;
     this.#logger = opts.logger;
     this.#memory = opts.memory ?? nullMemoryAdapter;
+    this.#summarizer = opts.summarizer;
+  }
+
+  /** Attach (or detach with undefined) the LLM summarizer. */
+  setSummarizer(summarizer: Summarizer | undefined): void {
+    this.#summarizer = summarizer;
+  }
+
+  /** True when turns are folded into a summary instead of being hard-dropped. */
+  get summarizing(): boolean {
+    return this.#config.contextSummary.enabled && this.#summarizer !== undefined;
   }
 
   keyFor(input: SessionKeyInput): string {
@@ -127,6 +154,7 @@ export class SessionManager implements SessionManagerLike {
         channelId: stored.channelId || input.channelId,
         userId: this.#config.scope === 'channel' ? undefined : (stored.userId ?? input.userId),
         messages: [...stored.messages],
+        ...(stored.summary ? { summary: { ...stored.summary } } : {}),
         updatedAt: stored.updatedAt,
       };
     } catch (error) {
@@ -141,6 +169,7 @@ export class SessionManager implements SessionManagerLike {
     this.#trim(session);
     session.updatedAt = Date.now();
     this.#save(session);
+    this.#scheduleCompaction(session);
   }
 
   /**
@@ -236,6 +265,7 @@ export class SessionManager implements SessionManagerLike {
           channelId: value.channelId || input.channelId,
           userId: value.userId,
           messages: value.messages.map((message) => ({ ...message })),
+          ...(value.summary ? { summary: { ...value.summary } } : {}),
           updatedAt: value.updatedAt,
         };
         this.#cache.set(row.key, session);
@@ -251,7 +281,12 @@ export class SessionManager implements SessionManagerLike {
 
   /** Enforce maxMessages then maxChars, dropping the oldest turns first. */
   #trim(session: Session): void {
-    const maxMessages = this.#config.maxMessages;
+    // While summarizing, the message ceiling sits above the compaction trigger
+    // so the oldest turns get folded into the summary before the hard trim can
+    // drop them. Without a summarizer this is exactly the legacy behaviour.
+    const maxMessages = this.summarizing
+      ? Math.max(this.#config.maxMessages, this.#config.contextSummary.trimAtRounds * 2 + 4)
+      : this.#config.maxMessages;
     const maxChars = this.#config.maxChars;
 
     if (session.messages.length > maxMessages) {
@@ -268,6 +303,133 @@ export class SessionManager implements SessionManagerLike {
     if (session.messages.length === 1 && only && only.content.length > maxChars) {
       session.messages[0] = { ...only, content: only.content.slice(0, maxChars) };
     }
+  }
+
+  // ── LLM summary compaction ───────────────────────────────────────────
+
+  /** Size trigger: enough rounds, or the char budget is nearly used up. */
+  #needsSizeCompaction(session: Session): boolean {
+    const cs = this.#config.contextSummary;
+    if (session.messages.length - cs.minKeepMessages <= 0) return false;
+    const active = session.messages.filter((m) => !m.deleted);
+    if (Math.ceil(active.length / 2) >= cs.trimAtRounds) return true;
+    return totalChars(active) >= this.#config.maxChars * cs.triggerRatio;
+  }
+
+  /** Oldest messages to fold in: trimRemoveRounds rounds, extended until the chars fit half the budget. */
+  #pickSizeHead(session: Session): ChatMessage[] {
+    const cs = this.#config.contextSummary;
+    const messages = session.messages;
+    const cap = messages.length - cs.minKeepMessages;
+    if (cap <= 0) return [];
+    let n = Math.min(cap, cs.trimRemoveRounds * 2);
+    const target = this.#config.maxChars * 0.5;
+    let remaining = 0;
+    for (let i = n; i < messages.length; i += 1) if (!messages[i]!.deleted) remaining += messages[i]!.content.length;
+    while (n < cap && remaining > target) {
+      const next = messages[n]!;
+      if (!next.deleted) remaining -= next.content.length;
+      n += 1;
+    }
+    return messages.slice(0, n);
+  }
+
+  /** Leading turns older than summaryAgeHours (turns without a timestamp are never "old"). */
+  #pickAgeHead(session: Session, now: number): ChatMessage[] {
+    const cs = this.#config.contextSummary;
+    const cap = session.messages.length - cs.minKeepMessages;
+    if (cap <= 0) return [];
+    const cutoff = now - cs.summaryAgeHours * 3_600_000;
+    let n = 0;
+    while (n < cap) {
+      const at = session.messages[n]!.createdAt;
+      if (at === undefined || at >= cutoff) break;
+      n += 1;
+    }
+    const head = session.messages.slice(0, n);
+    // Not worth an LLM call for a couple of stray lines.
+    return head.filter((m) => !m.deleted).length >= 4 ? head : [];
+  }
+
+  #scheduleCompaction(session: Session, mode: 'size' | 'age' = 'size'): boolean {
+    if (!this.summarizing || this.#compacting.has(session.key)) return false;
+    if (this.#writeBlocked.has(session.key)) return false;
+    if (mode === 'size' && !this.#needsSizeCompaction(session)) return false;
+    const task = this.#compact(session, mode).catch((error: unknown) => {
+      this.#logger.warn({ key: session.key, error: describe(error) }, 'context compaction failed; keeping data');
+      return false;
+    }).finally(() => {
+      if (this.#compacting.get(session.key) === task) this.#compacting.delete(session.key);
+    });
+    this.#compacting.set(session.key, task);
+    return true;
+  }
+
+  /**
+   * One compaction pass. The slow summarizer call runs outside any lock, so the
+   * merge re-checks that the session is still live and its head is untouched;
+   * otherwise the result is discarded and the data stays as it was.
+   */
+  async #compact(session: Session, mode: 'size' | 'age'): Promise<boolean> {
+    const summarizer = this.#summarizer;
+    if (!summarizer) return false;
+    const cs = this.#config.contextSummary;
+    const head = mode === 'size' ? this.#pickSizeHead(session) : this.#pickAgeHead(session, Date.now());
+    if (head.length === 0) return false;
+
+    const active = head.filter((m) => !m.deleted && m.role !== 'system');
+    const stillValid = (): boolean => this.#cache.get(session.key) === session
+      && session.messages.length >= head.length
+      && head.every((m, i) => session.messages[i] === m);
+
+    let text: string | undefined;
+    if (active.length > 0) {
+      const raw = await summarizer({ previousSummary: session.summary?.text, messages: active.map((m) => ({ ...m })), maxChars: cs.maxSummaryChars });
+      text = raw?.trim();
+      if (!text) {
+        this.#logger.debug({ key: session.key, mode }, 'summarizer returned nothing; keeping data');
+        return false;
+      }
+      if (text.length > cs.maxSummaryChars) text = text.slice(0, cs.maxSummaryChars);
+    }
+    // Tombstone-only heads are simply dropped; nothing to summarize.
+    if (!stillValid()) {
+      this.#logger.debug({ key: session.key, mode }, 'session changed during summarization; result discarded');
+      return false;
+    }
+    session.messages.splice(0, head.length);
+    const now = Date.now();
+    if (text) {
+      session.summary = { text, updatedAt: now, coveredMessages: (session.summary?.coveredMessages ?? 0) + active.length };
+    }
+    session.updatedAt = now;
+    this.#save(session);
+    this.#logger.info({ key: session.key, mode, folded: active.length, kept: session.messages.length }, 'context compacted into summary');
+    return true;
+  }
+
+  /**
+   * Periodic age-based compaction of idle cached sessions. Schedules work in
+   * the background and returns how many sessions were queued, so a slow model
+   * can never stall the housekeeping task. Sessions already evicted from the
+   * cache are picked up the next time they are hydrated and appended to.
+   */
+  async sweepCompaction(now: number = Date.now()): Promise<number> {
+    const cs = this.#config.contextSummary;
+    if (!this.summarizing || !cs.sweepEnabled) return 0;
+    let queued = 0;
+    for (const session of this.#cache.values()) {
+      if (this.#compacting.has(session.key)) continue;
+      if (this.#needsSizeCompaction(session)) {
+        if (this.#scheduleCompaction(session, 'size')) queued += 1;
+        continue;
+      }
+      const recentlySummarized = session.summary !== undefined && now - session.summary.updatedAt < cs.minIntervalHours * 3_600_000;
+      if (recentlySummarized) continue;
+      if (this.#pickAgeHead(session, now).length === 0) continue;
+      if (this.#scheduleCompaction(session, 'age')) queued += 1;
+    }
+    return queued;
   }
 
   async buildContext(input: SessionKeyInput, systemPrompt: string): Promise<ChatMessage[]> {
@@ -314,9 +476,16 @@ export class SessionManager implements SessionManagerLike {
     return [{ role: 'system', content: systemPrompt }, ...recalled, ...stamped];
   }
 
+  /** Rolling summary of turns compacted out of the live window, if any. */
+  async getSummary(input: SessionKeyInput): Promise<string | undefined> {
+    const session = await this.get(input);
+    return session.summary?.text;
+  }
+
   async clear(input: SessionKeyInput): Promise<void> {
     const key = this.keyFor(input);
     this.#cache.delete(key);
+    this.#compacting.delete(key);
     this.#hydrated.delete(key);
     this.#hydrating.delete(key);
     this.#writeBlocked.delete(key);
@@ -340,6 +509,7 @@ export class SessionManager implements SessionManagerLike {
     }
     for (const key of keys) {
       this.#cache.delete(key);
+      this.#compacting.delete(key);
       this.#hydrated.delete(key);
       this.#hydrating.delete(key);
       if (this.#persistEnabled && this.#storage) await this.#track(key, 'session channel delete failed', () => this.#storage!.delete(key));
@@ -351,7 +521,7 @@ export class SessionManager implements SessionManagerLike {
     const cutoff = Date.now() - this.#config.ttlSeconds * 1000;
     let removed = 0;
     for (const [key, session] of this.#cache) {
-      if (session.updatedAt < cutoff) {
+      if (session.updatedAt < cutoff && !this.#compacting.has(key)) {
         this.#cache.delete(key);
         this.#hydrated.delete(key);
         this.#hydrating.delete(key);
@@ -368,6 +538,10 @@ export class SessionManager implements SessionManagerLike {
 
   /** Await every fire-and-forget storage write (graceful shutdown / tests). */
   async flush(): Promise<void> {
+    // A finished compaction queues a save, so drain compactions first.
+    while (this.#compacting.size > 0) {
+      await Promise.allSettled([...this.#compacting.values()]);
+    }
     await this.#pending;
   }
 
@@ -381,12 +555,14 @@ export class SessionManager implements SessionManagerLike {
     }
     const record: PersistedSession = {
       kind: 'session',
-      recordVersion: 1,
+      // v2 only when a summary exists, so unsummarized sessions stay readable by older builds.
+      recordVersion: session.summary ? 2 : 1,
       key: session.key,
       botId: session.botId,
       channelId: session.channelId,
       userId: session.userId,
       messages: session.messages.map((m) => ({ ...m })),
+      ...(session.summary ? { summary: { ...session.summary } } : {}),
       updatedAt: session.updatedAt,
     };
     void this.#track(session.key, 'session persist failed', async () => {

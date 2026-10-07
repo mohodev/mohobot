@@ -17,7 +17,7 @@ export interface ChatOptions {
   onDelta?: (delta: string) => void;
   stream?: boolean;
   /** Scheduler lane; defaults to reply. Kept out of provider HTTP payloads. */
-  task?: 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin';
+  task?: 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin' | 'summary';
 }
 
 export interface AIUsage {

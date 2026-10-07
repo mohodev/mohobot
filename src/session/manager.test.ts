@@ -201,10 +201,10 @@ describe('SessionManager persistence', () => {
     storage.data.set(key,{key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[{role:'user',content:'legacy ok'},{role:'root',content:'bad'},{role:'user',content:7}],updatedAt:10});
     const legacy=new SessionManager({botId:'bot1',config:config({persist:true}),logger,storage});
     expect((await legacy.get(input)).messages.map(m=>m.content)).toEqual(['legacy ok']);
-    storage.data.set(key,{kind:'session',recordVersion:2,key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[{role:'user',content:'future'}],updatedAt:11});
+    storage.data.set(key,{kind:'session',recordVersion:3,key,botId:'bot1',channelId:'chan1',userId:'user1',messages:[{role:'user',content:'future'}],updatedAt:11});
     const future=new SessionManager({botId:'bot1',config:config({persist:true}),logger,storage});
     expect((await future.get(input)).messages).toEqual([]);await future.append(input,user('must not overwrite'));await future.flush();
-    expect(storage.data.get(key)).toMatchObject({recordVersion:2});
+    expect(storage.data.get(key)).toMatchObject({recordVersion:3});
   });
 
   it('deduplicates concurrent cold hydration by promise', async () => {

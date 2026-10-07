@@ -35,7 +35,36 @@ export const AIConfigSchema = z.object({
 });
 export type AIConfig = z.infer<typeof AIConfigSchema>;
 
+/**
+ * LLM context summarization. When enabled and a summarizer is attached, the
+ * oldest turns are folded into a rolling summary instead of being dropped by
+ * the hard maxMessages/maxChars trim, which stays as the failure fallback.
+ */
+export const ContextSummaryConfigSchema = z.object({
+  /** Master switch. Off (or no summarizer attached) = plain hard trimming. */
+  enabled: z.boolean().default(true),
+  /** Compact once the active turns reach this many rounds (2 messages = 1 round). */
+  trimAtRounds: z.number().int().min(2).default(40),
+  /** How many of the oldest rounds one compaction folds into the summary. */
+  trimRemoveRounds: z.number().int().min(1).default(15),
+  /** Also compact when active chars reach this fraction of session.maxChars. */
+  triggerRatio: z.number().min(0.3).max(0.95).default(0.8),
+  /** Never compact away the newest N messages. */
+  minKeepMessages: z.number().int().min(2).default(4),
+  /** Hard cap on stored summary length (chars). */
+  maxSummaryChars: z.number().int().min(200).default(1500),
+  /** Turns older than this are eligible for the periodic age sweep. */
+  summaryAgeHours: z.number().min(1).default(3),
+  /** Periodic age-based compaction of idle sessions. */
+  sweepEnabled: z.boolean().default(true),
+  /** A freshly summarized session is not age-compacted again within this window. */
+  minIntervalHours: z.number().min(1).default(24),
+});
+export type ContextSummaryConfig = z.infer<typeof ContextSummaryConfigSchema>;
+
 export const SessionConfigSchema = z.object({
+  /** Rolling LLM summary of older turns (see ContextSummaryConfigSchema). */
+  contextSummary: ContextSummaryConfigSchema.default({}),
   /** Max chat turns kept per session (system prompt excluded). */
   maxMessages: z.number().int().positive().default(20),
   /** Rough character budget for the assembled context. */
@@ -145,7 +174,9 @@ export const BotConfigSchema = z.object({
   systemPromptFile: z.string().optional(),
   discord: DiscordConfigSchema.default({}),
   ai: AIConfigSchema.partial().default({}),
-  session: SessionConfigSchema.partial().default({}),
+  // contextSummary stays truly partial here (no defaults) so a bot that tweaks
+  // one knob does not silently reset the other knobs the global config set.
+  session: SessionConfigSchema.extend({ contextSummary: ContextSummaryConfigSchema.partial() }).partial().default({}),
   memory: MemoryConfigSchema.partial().default({}),
   media: MediaConfigOverrideSchema.default({}),
   /** Plugin ids disabled for this bot only. */

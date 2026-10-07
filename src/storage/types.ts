@@ -39,15 +39,30 @@ export interface ScopedStorage {
   query<T>(filter?: Omit<QueryFilter, 'prefix'> & { prefix?: string }): Promise<StoredRecord<T>[]>;
 }
 
-/** Shape persisted for one conversation session. */
+/** Rolling LLM summary of turns that were compacted out of `messages`. */
+export interface SessionSummary {
+  text: string;
+  updatedAt: number;
+  /** Total messages folded into this summary over its lifetime. */
+  coveredMessages: number;
+}
+
+/**
+ * Shape persisted for one conversation session.
+ *
+ * recordVersion 1 = plain session. recordVersion 2 = session carrying a
+ * `summary`. Writers emit 1 whenever there is no summary so an older binary
+ * keeps reading every session that was never summarized.
+ */
 export interface PersistedSession {
   kind: 'session';
-  recordVersion: 1;
+  recordVersion: 1 | 2;
   key: string;
   botId: string;
   channelId: string;
   userId?: string;
   messages: ChatMessage[];
+  summary?: SessionSummary;
   updatedAt: number;
 }
 

@@ -467,9 +467,15 @@ export class ConfigLoader {
       : this.#parseOr(AIConfigSchema, this.#applyAiEnv(this.#applyAiEnv(mergedAi, ''), prefix), mergedAi, `bot ${bot.id} ai (env)`);
     const ai = selectedAi;
 
+    const { contextSummary: botContextSummary, ...botSessionRest } = bot.session;
     let session = this.#parseOr(
       SessionConfigSchema,
-      { ...global.session, ...pruneUndefined(bot.session) },
+      {
+        ...global.session,
+        ...pruneUndefined(botSessionRest),
+        // Deep-merge so a bot overriding one summary knob keeps the global rest.
+        contextSummary: { ...global.session.contextSummary, ...pruneUndefined(botContextSummary ?? {}) },
+      },
       global.session,
       `bot ${bot.id} session`,
     );

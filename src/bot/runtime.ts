@@ -20,6 +20,7 @@ import { HealthCoordinator, type HealthSnapshot } from '../ai/health-coordinator
 import { createGateway } from '../discord/index.js';
 import type { Gateway, GatewayStatus } from '../discord/types.js';
 import { SessionManager } from '../session/manager.js';
+import { createProviderSummarizer } from '../session/summarizer.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
@@ -33,6 +34,7 @@ import { SafeMediaDownloader } from '../media/downloader.js';
 import { VisionRouter } from '../media/vision.js';
 import { MediaRuntime } from '../media/runtime.js';
 import { OpenAICompatibleOcrProvider, OpenAICompatibleVisionProvider } from '../media/openai-compatible.js';
+import { ContextArchiver } from '../context-archiver/index.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -71,9 +73,11 @@ export class BotRuntime implements Managed {
   #sessions?: SessionManager;
   #plugins?: PluginManager;
   #pipeline?: MessagePipeline;
+  #archiver?: ContextArchiver;
   #unsubscribe: Array<() => void> = [];
   #sweepTaskId?: string;
   #worldTickTaskId?: string;
+  #contextArchiveTaskId?: string;
   #healthTaskId?: string;
   #health?: HealthCoordinator;
   #running = false;
@@ -183,6 +187,14 @@ export class BotRuntime implements Managed {
       events: this.#deps.events,
       botId: cfg.id,
     });
+    // The summarizer needs the live provider, which is built after sessions
+    // (plugins load in between). Offline/mock providers yield no summarizer, so
+    // sessions then keep the legacy hard trim instead of storing canned text.
+    if (this.#sessions && cfg.session.contextSummary.enabled) {
+      const summarizer = createProviderSummarizer(this.#provider, { timeoutMs: cfg.ai.timeoutMs, logger: this.#logger });
+      this.#sessions.setSummarizer(summarizer);
+      this.#logger.info({ active: summarizer !== undefined }, 'context summary compaction');
+    }
     if (this.#provider instanceof MultiProviderRouter) {
       this.#health = new HealthCoordinator({ router: this.#provider, logger: this.#logger });
       this.#healthTaskId = this.#health.start(this.#deps.tasks);
@@ -204,6 +216,13 @@ export class BotRuntime implements Managed {
 
     const reflection = this.#deps.storage ? new ProfileReflectionWorker(this.#deps.storage, this.#logger) : undefined;
     const publicRelationships = await PublicRelationshipStore.load(this.#deps.rootDir, cfg.id);
+    this.#archiver = new ContextArchiver({
+      rootDir: this.#deps.rootDir,
+      logger: this.#logger,
+      maxTurnsPerFile: 40,
+      archiveAgeHours: 24,
+      compressArchived: true,
+    });
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -215,6 +234,7 @@ export class BotRuntime implements Managed {
       media,
       publicRelationships,
       reflection,
+      contextArchiver: this.#archiver,
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },
@@ -291,6 +311,9 @@ export class BotRuntime implements Managed {
     // Periodic housekeeping - owned by the TaskManager, never a bare interval.
     this.#sweepTaskId = this.#deps.tasks.spawn(
       async () => {
+        // Queue age-based summaries first: a session being compacted is never evicted.
+        const queued = (await this.#sessions?.sweepCompaction()) ?? 0;
+        if (queued > 0) this.#logger.debug({ queued }, 'age-based context compaction queued');
         const removed = (await this.#sessions?.sweep()) ?? 0;
         this.#pipeline?.sweep();
         if (removed > 0) this.#logger.debug({ removed }, 'idle sessions swept');
@@ -301,6 +324,14 @@ export class BotRuntime implements Managed {
     this.#worldTickTaskId = this.#deps.tasks.spawn(
       async () => { await new WorldStore(this.#deps.rootDir, cfg.id).tick(); },
       { name: `${this.name}:world-tick`, intervalMs: 60_000, timeoutMs: 5_000 },
+    );
+
+    this.#contextArchiveTaskId = this.#deps.tasks.spawn(
+      async () => {
+        const processed = await this.#archiver?.sweep();
+        if (processed && processed > 0) this.#logger.debug({ processed }, 'context archive sweep completed');
+      },
+      { name: `${this.name}:context-archive-sweep`, intervalMs: 300_000, timeoutMs: 10_000 }, // 5 minutes
     );
 
     this.#running = true;
@@ -328,6 +359,10 @@ export class BotRuntime implements Managed {
     if (this.#worldTickTaskId) {
       this.#deps.tasks.cancel(this.#worldTickTaskId);
       this.#worldTickTaskId = undefined;
+    }
+    if (this.#contextArchiveTaskId) {
+      this.#deps.tasks.cancel(this.#contextArchiveTaskId);
+      this.#contextArchiveTaskId = undefined;
     }
     if (this.#healthTaskId) {
       this.#deps.tasks.cancel(this.#healthTaskId);

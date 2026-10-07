@@ -38,6 +38,7 @@ import { runtimeMetrics } from '../core/runtime-metrics.js';
 import { discordChatLog } from '../core/discord-chat-log.js';
 import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
+import { ContextArchiver, type ContextEntry } from '../context-archiver/index.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -76,6 +77,15 @@ export function buildContextAnchor(): string {
   ].join('\n');
 }
 
+/** Wrap a rolling summary so the model reads it as memory, not as a speaker. */
+export function buildHistorySummaryBlock(summary: string): string {
+  return [
+    '[历史对话摘要 - 系统注入，非用户发言]',
+    '以下是更早之前对话的压缩记忆，其后的消息才是最近的原始对话。请把它当作已知背景自然地衔接，不要逐字复述，也不要把它当成用户刚说的话。',
+    summary.trim(),
+  ].join('\n');
+}
+
 export interface PipelineDeps {
   config: ResolvedBotConfig;
   provider: AIProvider;
@@ -95,6 +105,8 @@ export interface PipelineDeps {
   /** Explicit public-only relation facts; never derived from affinity or DMs. */
   publicRelationships?: PublicRelationshipStore;
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
+  /** Context archiver for JSONL session persistence. */
+  contextArchiver?: ContextArchiver;
 }
 
 export interface PipelineStats {
@@ -195,6 +207,7 @@ export class MessagePipeline {
   readonly #traces: ChatTraceStore;
   readonly #device: DeviceStore;
   readonly #world: WorldStore;
+  readonly #archiver?: ContextArchiver;
   readonly #queues = new Map<string, Promise<void>>();
   /** Live generation per session key; a newer direct summon aborts it (interrupt & merge). */
   readonly #active = new Map<string, AbortController>();
@@ -209,6 +222,7 @@ export class MessagePipeline {
     const root = deps.stateRoot ?? (process.env.MOHO_ROOT || process.cwd());
     this.#device = new DeviceStore(root, deps.config.id);
     this.#world = new WorldStore(root, deps.config.id);
+    this.#archiver = deps.contextArchiver;
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
   }
 
@@ -437,10 +451,19 @@ export class MessagePipeline {
       }
     }
     const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context()]);
+    // Older turns that were compacted out of the live window. Optional on the
+    // session contract, and a lookup failure must never cost the reply.
+    let historySummary: string | undefined;
+    try {
+      historySummary = await this.#deps.sessions.getSummary?.(key);
+    } catch (error) {
+      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'history summary lookup failed; continuing without it');
+    }
     messages = [
       { role: 'system', content: cfg.systemPrompt },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
+      ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
       ...messages.filter((m) => m.role !== 'system'),
     ];
@@ -536,6 +559,7 @@ export class MessagePipeline {
     }
     this.#trace(trace, 'delivered', { protocol: 'reply-plan', segments: plan.segments.length });
     this.#noteReply(message.channel.id);
+    this.#archiveContext(message, prompt, reply, trace.id);
     try {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
@@ -558,6 +582,33 @@ export class MessagePipeline {
         .then(({ facts }) => this.#trace(trace, 'memory_written', { reflectionFacts: facts }))
         .catch(() => this.#trace(trace, 'memory_failed', { reflection: true }));
     }
+  }
+
+  /**
+   * Append user turn and assistant reply to the JSONL context archive.
+   */
+  #archiveContext(message: MohoMessage, userPrompt: string, assistantReply: string, traceId?: string): void {
+    if (!this.#archiver) return;
+    const botId = message.botId || this.#deps.config.id;
+    const channelId = message.channel.id;
+
+    // User turn
+    const userEntry: ContextEntry = {
+      role: 'user',
+      content: userPrompt,
+      timestamp: message.createdAt ?? Date.now(),
+      senderId: message.author.id,
+      senderName: message.author.username,
+    };
+    void this.#archiver.append(botId, channelId, userEntry).catch(() => {});
+
+    // Assistant reply
+    const assistantEntry: ContextEntry = {
+      role: 'assistant',
+      content: assistantReply,
+      timestamp: Date.now(),
+    };
+    void this.#archiver.append(botId, channelId, assistantEntry).catch(() => {});
   }
 
   #parseCommand(content: string, prefix: '?'): { name: string; args: string[] } | undefined {
