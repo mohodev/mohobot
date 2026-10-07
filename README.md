@@ -135,6 +135,31 @@ Extension registries: Provider / Gateway / Storage / Memory
 
 可选扩展配置见 `data/storage/remote.example.yaml`：SQLite 本地热路径、Outbox 异步同步 MySQL、Redis 短 TTL 缓存/限流、Kafka 多节点事件流。未配置远程服务时全部自动降级为本地实现。
 
+## ACP (Agent Client Protocol)
+
+MohoBot 内置 ACP v1 server，可让任何 ACP 兼容编辑器（Zed、VS Code、JetBrains、Avante.nvim 等）把 MohoBot 作为 AI agent 后端使用。
+
+```bash
+npm run acp
+# 或
+npx tsx src/acp/index.ts
+```
+
+编辑器配置示例（Zed `~/.config/zed/settings.json`）：
+
+```json
+{
+  "agent_servers": {
+    "MohoBot": {
+      "command": "npx",
+      "args": ["tsx", "src/acp/index.ts"]
+    }
+  }
+}
+```
+
+支持的方法：`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/delete`、`session/list`。流式响应通过 `session/update` 通知推送。
+
 ## 预制提示词
 
 `data/prompts/` 下已导入 14 个来自 [`CarefreeSongs712/vc-character-prompt`](https://github.com/CarefreeSongs712/vc-character-prompt) 的预制提示词（commit `b932b68`），覆盖 12 位虚拟歌手角色（天依、初音未来、墨清弦、乐正绫、言和、心华、星尘、诗岸、摩柯、海伊、赤羽、龙牙）及 1 个图片识别提示词。这些文件可直接作为 `systemPromptFile` 使用，或作为角色 Bot 的预设提示词导入。引用记录见 `data/admin/prompt-source-vc.json`。

@@ -18,7 +18,8 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "scan-secrets": "tsx scripts/scan-secrets.ts"
+    "scan-secrets": "tsx scripts/scan-secrets.ts",
+    "acp": "tsx src/acp/index.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
