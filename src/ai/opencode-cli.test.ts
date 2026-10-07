@@ -5,7 +5,7 @@ import { AIConfigSchema } from '../config/schema.js';
 import { createNullLogger } from '../core/logger.js';
 import { createProvider, OPENCODE_CLI_PROVIDER, registerBuiltinProviders } from './index.js';
 import { AIError } from './types.js';
-import { extractText, OpenCodeCliProvider, renderPrompt } from './opencode-cli.js';
+import { extractText, isServiceTransportError, OpenCodeCliProvider, renderPrompt } from './opencode-cli.js';
 
 const logger = createNullLogger();
 
@@ -88,9 +88,60 @@ describe('OpenCodeCliProvider', () => {
     const response = await promise;
     expect(response.content).toBe('你好，世界！');
     expect(response.usage).toEqual({ input: 100, output: 20, totalTokens: 120 });
-    // one-shot args: run --standalone -m <model> --format json -- <prompt>
+    // one-shot args: run -m <model> --format json -- <prompt> (shared background service)
+    const args = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string[];
+    expect(args.slice(0, 4)).toEqual(['run', '-m', 'opencode/ling-3.1-flash-free', '--format']);
+    expect(args).not.toContain('--standalone');
+  });
+
+  it('boots a private server per call when options.standalone is true', async () => {
+    const child = fakeChild();
+    const spawn = spawnSequence([child]);
+    const provider = new OpenCodeCliProvider(config({ options: { standalone: true } }), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: '你好' }]);
+    emitJson(child, sampleEvents);
+    child.emit('close', 0);
+    await promise;
+
     const args = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string[];
     expect(args.slice(0, 5)).toEqual(['run', '--standalone', '-m', 'opencode/ling-3.1-flash-free', '--format']);
+  });
+
+  it('falls back to --standalone once when the background service is unusable', async () => {
+    const broken = fakeChild();
+    const isolated = fakeChild();
+    const spawn = spawnSequence([broken, isolated]);
+    const provider = new OpenCodeCliProvider(config(), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'x' }]);
+    broken.stderr.emit('data', Buffer.from('Error: Server process exited with code 1\nError: Managed service port 49374 on 127.0.0.1 is already in use by another process.'));
+    broken.emit('close', 1);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    emitJson(isolated, sampleEvents);
+    isolated.emit('close', 0);
+
+    const response = await promise;
+    expect(response.content).toBe('你好，世界！');
+    const calls = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+    expect((calls[0]?.[1] as string[])).not.toContain('--standalone');
+    expect((calls[1]?.[1] as string[])).toContain('--standalone');
+  });
+
+  it('does not retry model-side or timeout failures through the standalone fallback', async () => {
+    const child = fakeChild();
+    const spawn = spawnSequence([child]);
+    const provider = new OpenCodeCliProvider(config(), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'x' }]);
+    child.stderr.emit('data', Buffer.from('provider 429 rate limited'));
+    child.emit('close', 1);
+    await expect(promise).rejects.toMatchObject({ name: 'AIError', kind: 'server' });
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    expect(isServiceTransportError(new AIError('opencode run timed out after 50ms', { kind: 'timeout', retryable: true }))).toBe(false);
+    expect(isServiceTransportError(new AIError('request aborted by caller', { kind: 'aborted', retryable: false }))).toBe(false);
+    expect(isServiceTransportError(new AIError('Error: Managed service port 49374 is already in use', { kind: 'server', retryable: true }))).toBe(true);
   });
 
   it('kills the child and reports a timeout', async () => {

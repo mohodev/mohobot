@@ -12,6 +12,12 @@
  * every MohoBot call is one `opencode run` invocation that receives the whole
  * conversation as a single prompt and prints a JSON event stream back.
  *
+ * By default the invocation joins OpenCode's resident background service
+ * (`opencode service`, idempotently ensured by the CLI itself) instead of
+ * booting a private server: measured ~3-4s less per call. `options.standalone`
+ * opts back into per-call isolation, and a service-transport failure retries
+ * once with `--standalone` so a broken service can never take chat down.
+ *
  * Hard rules honoured here (same contract as every provider):
  *  - only AIError escapes chat();
  *  - the child process is always killed on timeout/abort;
@@ -49,6 +55,16 @@ const MAX_PROMPT_CHARS = 100_000;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Only failures the background service itself can cause - retrying those with
+ * `--standalone` helps. Model-side exits, timeouts and aborts never match, so
+ * a fallback cannot mask them or double their wait.
+ */
+export function isServiceTransportError(error: unknown): boolean {
+  if (!(error instanceof AIError) || error.kind === 'timeout' || error.kind === 'aborted') return false;
+  return /managed service|service port|port \d+.*in use|server process exited|eaddrinuse|econnrefused/i.test(error.message);
 }
 
 /** Compress the message array into one prompt the CLI can consume. */
@@ -118,12 +134,16 @@ export class OpenCodeCliProvider implements AIProvider {
   readonly #bin: string;
   readonly #spawn: typeof spawn;
   readonly #timeoutMs: number;
+  readonly #standalone: boolean;
 
   constructor(cfg: AIConfig, deps: OpenCodeCliDeps) {
     this.#logger = deps.logger;
     this.model = cfg.model;
     this.#bin = deps.bin ?? (typeof cfg.options['bin'] === 'string' ? cfg.options['bin'] : 'opencode');
     this.#spawn = deps.spawnImpl ?? spawn;
+    // Default: reuse the resident `opencode service` (faster). Opt out with
+    // `options.standalone: true` for a private server per call.
+    this.#standalone = cfg.options['standalone'] === true;
     const configuredTimeout = Number(cfg.options['timeoutMs']);
     this.#timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : (cfg.timeoutMs || DEFAULT_TIMEOUT_MS);
   }
@@ -139,7 +159,15 @@ export class OpenCodeCliProvider implements AIProvider {
     const model = options.model ?? this.model;
     const timeoutMs = options.timeoutMs ?? this.#timeoutMs;
 
-    const stdout = await this.#run(['run', '--standalone', '-m', model, '--format', 'json', '--', prompt], timeoutMs, options.signal);
+    let stdout: string;
+    try {
+      stdout = await this.#run(this.#args(model, prompt, this.#standalone), timeoutMs, options.signal);
+    } catch (error) {
+      if (this.#standalone || !isServiceTransportError(error)) throw error;
+      // Background service unreachable/corrupt: one isolated retry keeps chat alive.
+      this.#logger.warn({ err: describe(error) }, 'opencode background service unusable; retrying with --standalone');
+      stdout = await this.#run(this.#args(model, prompt, true), timeoutMs, options.signal);
+    }
     const content = extractText(stdout);
     if (!content) {
       throw new AIError('opencode run produced no text output', { kind: 'server', retryable: true });
@@ -160,6 +188,11 @@ export class OpenCodeCliProvider implements AIProvider {
     } catch (error) {
       return { ok: false, detail: describe(error) };
     }
+  }
+
+  /** One-shot invocation args; `standalone` swaps the shared service for a private server. */
+  #args(model: string, prompt: string, standalone: boolean): string[] {
+    return ['run', ...(standalone ? ['--standalone'] : []), '-m', model, '--format', 'json', '--', prompt];
   }
 
   /** Spawn one CLI invocation; resolve with stdout, reject with AIError. */
