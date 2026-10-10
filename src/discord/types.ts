@@ -26,5 +26,7 @@ export interface Gateway extends Managed {
   typing(channelId: string): Promise<void>;
   status(): GatewayStatus;
   guildInventory?(guildId: string): Promise<GuildInventory>;
+  /** Guilds visible to this bot. Used by broadcast targeting. */
+  listGuilds?(): Promise<Array<{ id: string; name: string }>>;
   applyGuildPlan?(plan: GuildPlan): Promise<{ applied: number; skipped: number }>;
 }

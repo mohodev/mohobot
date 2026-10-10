@@ -26,6 +26,8 @@ import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { PersonaAbService } from '../pipeline/persona-ab.js';
+import { BroadcastManager } from '../admin/broadcast.js';
+import { UsageRecorder, UsageRecordingProvider } from '../ai/usage.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
 import { EmotionManager } from '../emotion/manager.js';
@@ -75,6 +77,8 @@ export class BotRuntime implements Managed {
   #gateway?: Gateway;
   #provider?: AIProvider;
   #emotion?: EmotionManager;
+  #usage?: UsageRecorder;
+  #broadcast?: BroadcastManager;
   #sessions?: SessionManager;
   #plugins?: PluginManager;
   #pipeline?: MessagePipeline;
@@ -188,11 +192,19 @@ export class BotRuntime implements Managed {
     // Resolve the AI provider AFTER plugins have loaded, so a provider a
     // plugin registered (e.g. kilo) is selectable via ai.provider. Built-in
     // providers and extensions/*.ts are already registered by this point.
-    this.#provider = createProvider(cfg.ai, {
+    const resolved = createProvider(cfg.ai, {
       logger: this.#logger,
       events: this.#deps.events,
       botId: cfg.id,
     });
+    // Token accounting wraps the resolved provider (router included: usage is
+    // recorded per call whatever the route). Never throws, never blocks.
+    this.#usage = this.#deps.storage
+      ? new UsageRecorder({ storage: this.#deps.storage, logger: this.#logger })
+      : undefined;
+    this.#provider = this.#usage
+      ? new UsageRecordingProvider(resolved, { recorder: this.#usage, botId: cfg.id })
+      : resolved;
     // The summarizer needs the live provider, which is built after sessions
     // (plugins load in between). Offline/mock providers yield no summarizer, so
     // sessions then keep the legacy hard trim instead of storing canned text.
@@ -201,8 +213,8 @@ export class BotRuntime implements Managed {
       this.#sessions.setSummarizer(summarizer);
       this.#logger.info({ active: summarizer !== undefined }, 'context summary compaction');
     }
-    if (this.#provider instanceof MultiProviderRouter) {
-      this.#health = new HealthCoordinator({ router: this.#provider, logger: this.#logger });
+    if (resolved instanceof MultiProviderRouter) {
+      this.#health = new HealthCoordinator({ router: resolved, logger: this.#logger });
       this.#healthTaskId = this.#health.start(this.#deps.tasks);
     }
 
@@ -258,6 +270,40 @@ export class BotRuntime implements Managed {
       })
       : undefined;
     this.#emotion = emotion;
+    // Guild broadcast (preview -> confirm). All gateway calls happen lazily
+    // inside command handling, so construction order vs gateway start is free.
+    const broadcast = new BroadcastManager({
+      botName: cfg.name,
+      logger: this.#logger,
+      listGuilds: async () => (await this.#gateway?.listGuilds?.().catch(() => undefined)) ?? [],
+      resolveChannel: async (guildId: string) => {
+        const inventory = await this.#gateway?.guildInventory?.(guildId).catch(() => undefined);
+        const text = (inventory?.channels ?? [])
+          .filter((channel) => channel.kind === 'text')
+          .sort((a, b) => a.position - b.position);
+        const first = text[0];
+        return first ? { id: first.id, name: first.name } : null;
+      },
+      send: async (channelId: string, content: string) => {
+        try {
+          await this.#gateway?.send({ channelId, content, suppressMentions: true });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      announce: async (content: string) => {
+        try {
+          const logChannelId = cfg.discord.logChannelId;
+          if (logChannelId && this.#gateway) {
+            await this.#gateway.send({ channelId: logChannelId, content, suppressMentions: true });
+          }
+        } catch {
+          /* ops surface is best effort */
+        }
+      },
+    });
+    this.#broadcast = broadcast;
     // Persona A/B evaluation (prompt beta testing). Off unless the bot enables
     // it; the store lives under data/persona-ab/<botId> and every mutation is
     // an atomic file write, so no flush task is needed.
@@ -315,6 +361,12 @@ export class BotRuntime implements Managed {
       },
       emotion,
       personaAb,
+      usage: this.#usage ? { report: (days: number) => this.#usage!.report(cfg.id, days) } : undefined,
+      broadcast: {
+        preview: (content: string, authorId: string) => broadcast.preview(content, authorId),
+        confirm: () => broadcast.confirm(),
+        cancel: () => broadcast.cancel(),
+      },
     });
 
     // Redacted operational summaries go to the configured private log channel.

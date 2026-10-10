@@ -17,6 +17,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `opencode-cli` provider — drives the local `opencode run` CLI, reusing the signed-in OpenCode session (no API key needed). Set `AI_PROVIDER=opencode-cli` and `AI_MODEL=opencode/<model>` to use it. Defaults to the resident `opencode service` (one `--standalone` retry if that service is unusable).
 - `emotion` (`src/emotion/`) — 好感度/亲密度/8 维情绪/关系阶段移植自 upstream `mohobot/emotion/`。Pre-LLM 注入语气块，回复后由后台 `task: admin` 二次分析（熔断 + 关键词降级），配置 `emotion.enabled` 默认 false；管理命令 `?好感度` / `?关系阶段` / `?好感排行`。Group gating is `decideSocially` (`src/pipeline/social-decision.ts`): mention/reply/DM always, room questions yes, chatter observed unless `social.proactiveParticipation`.
 - `personaAb` (`src/pipeline/persona-ab.ts`) — 私聊单轮人设 A/B 评估移植自 upstream `mohobot/services/persona_ab*.py`（persona_ab_card 的图片卡片改为 Discord 文本卡片，其余规则保留：同输入同参数、每记录洗牌、仅确认送达计数、投票不切换、中断不发送）。配置 `personaAb` 默认关闭；用户命令 `?ab` / `?ab A` / `?ab switch <id> A`，管理员 `?ab stats`。
+- Discord 本土化移植（QQ 特性按平台重写）：`plugins/fun`（占卜/66 梗，关键词触发）、`plugins/welcome`（首见欢迎，无需特权 intent）、`plugins/bilibili`（BV/av 解析，公开 API 免 key）、`src/ai/usage.ts`（分通道 token 记账 + `?用量`，`task: 'ab'` 独立通道）、`src/admin/broadcast.ts`（`?广播` 预告→确认两步扇出，只覆盖服务器不打扰私聊）。中文 `?` 别名（好感度/用量/广播…）在 `ADMIN_COMMAND_ALIASES` 统一归一化——之前中文命令根本到不了分发，已修。
 
 ## Toolchain gotchas
 

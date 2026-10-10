@@ -2,7 +2,7 @@ import type { AIProvider, AIResponse, ChatOptions } from './types.js';
 import type { ChatMessage } from '../core/types.js';
 
 /** Tasks are scheduled separately so background cognition cannot starve replies. */
-export type ModelTask = 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin' | 'summary';
+export type ModelTask = 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin' | 'summary' | 'ab';
 
 export interface ModelBudget {
   /** Rolling one-minute request ceiling. `0` means unlimited. */

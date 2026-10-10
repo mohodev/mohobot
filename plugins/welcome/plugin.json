@@ -1,0 +1,9 @@
+{
+  "name": "welcome",
+  "version": "1.0.0",
+  "description": "Greets first-seen speakers per guild/channel/DM without consuming their message.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 80
+}

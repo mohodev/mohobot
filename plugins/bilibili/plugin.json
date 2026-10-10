@@ -1,0 +1,12 @@
+{
+  "name": "bilibili",
+  "version": "1.0.0",
+  "description": "Unfurls Bilibili video links (title/author/duration) via the public view API; silent on failure.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 85,
+  "config": {
+    "apiUrl": "https://api.bilibili.com/x/web-interface/view"
+  }
+}

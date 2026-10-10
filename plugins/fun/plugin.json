@@ -1,0 +1,12 @@
+{
+  "name": "fun",
+  "version": "1.0.0",
+  "description": "Divination (/占卜 daily fortune) and the 6/66/666 number meme. Pure message hooks, no model calls.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 90,
+  "config": {
+    "probability": 20
+  }
+}

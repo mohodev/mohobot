@@ -308,6 +308,12 @@ export class DiscordGateway implements Gateway {
     };
   }
 
+  async listGuilds(): Promise<Array<{ id: string; name: string }>> {
+    const client = this.#client;
+    if (!client) return [];
+    return [...client.guilds.cache.values()].map((guild) => ({ id: guild.id, name: guild.name }));
+  }
+
   async guildInventory(guildId: string): Promise<GuildInventory> {
     const client = this.#client;
     if (!client?.isReady()) throw new Error('Discord gateway is not ready');

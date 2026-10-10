@@ -153,4 +153,8 @@ export class ConsoleGateway implements Gateway {
       lastError: this.#lastError,
     };
   }
+
+  async listGuilds(): Promise<Array<{ id: string; name: string }>> {
+    return [];
+  }
 }

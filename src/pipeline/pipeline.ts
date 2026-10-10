@@ -89,9 +89,22 @@ export function buildHistorySummaryBlock(summary: string): string {
   ].join('\n');
 }
 
+/** Chinese aliases for `?` admin commands; handlers use the English keys. */
+export const ADMIN_COMMAND_ALIASES: Record<string, string> = {
+  '好感度': 'favor',
+  '关系阶段': 'stage',
+  '好感排行': 'favor-rank',
+  '设好感': 'set-favor',
+  '设亲密': 'set-intimacy',
+  '用量': 'usage',
+  '广播': 'broadcast',
+  '广播预告': 'broadcast',
+  '广播确认': 'broadcast-confirm',
+  '广播取消': 'broadcast-cancel',
+};
+
 /** Normalizes a `?ab` vote token; returns null for anything that is not a vote. */
-export function normalizeAbVote(token: string): AbVote | null {
-  const text = token.trim();
+export function normalizeAbVote(token: string): AbVote | null {  const text = token.trim();
   if (text === 'A' || text === 'a') return 'A';
   if (text === 'B' || text === 'b') return 'B';
   if (text === '平局' || text === '都不好' || text === '跳过') return text;
@@ -121,6 +134,10 @@ export interface PipelineDeps {
   contextArchiver?: ContextArchiver;
   /** Runtime ban list; banned users are silently ignored before any processing. */
   bans?: BanStore;
+  /** Token accounting reader for `?用量`. Omitted = feature off. */
+  usage?: UsageBridge;
+  /** Two-step guild broadcast for `?广播*`. Omitted = feature off. */
+  broadcast?: BroadcastBridge;
   /**
    * Relationship tracking. The block is injected before the model call and the
    * turn is scheduled after delivery; omitted (or disabled) = feature off.
@@ -131,6 +148,20 @@ export interface PipelineDeps {
    * disabled) = feature off.
    */
   personaAb?: PersonaAbBridge;
+}
+
+/** The slice of the usage recorder the pipeline needs. */
+export interface UsageBridge {
+  report(days: number): Promise<string>;
+}
+
+/**
+ * The slice of the broadcast manager the pipeline needs.
+ */
+export interface BroadcastBridge {
+  preview(content: string, authorId: string): Promise<string>;
+  confirm(): Promise<string>;
+  cancel(): Promise<string>;
 }
 
 /** The slice of the emotion manager the pipeline needs. */
@@ -840,25 +871,71 @@ export class MessagePipeline {
   }
 
   async #dispatchAdminCommand(name: string, args: string[], message: MohoMessage): Promise<boolean> {
-    if (name === 'admin-help') {
-      await this.#reply(message, '管理指令：`?admin-help` · `?status` · `?ban` · `?unban` · `?banlist` · `?好感度` · `?关系阶段` · `?好感排行` · `?设好感`。危险操作只能通过本地管理面板二次确认。');
+    // Chinese aliases documented in README/admin-help; the handlers below use
+    // stable English keys.
+    const canonical = ADMIN_COMMAND_ALIASES[name] ?? name;
+    if (canonical === 'admin-help') {
+      await this.#reply(message, '管理指令：`?admin-help` · `?status` · `?ban` · `?unban` · `?banlist` · `?好感度` · `?关系阶段` · `?好感排行` · `?设好感` · `?用量` · `?广播` · `?ab stats`。危险操作只能通过本地管理面板二次确认。');
       return true;
     }
-    if (name === 'ban' || name === 'unban' || name === 'banlist') {
-      await this.#adminBanCommand(name, args, message);
+    if (canonical === 'ban' || canonical === 'unban' || canonical === 'banlist') {
+      await this.#adminBanCommand(canonical, args, message);
       return true;
     }
-    if (name === 'favor' || name === 'stage' || name === 'favor-rank' || name === 'set-favor' || name === 'set-intimacy') {
-      await this.#emotionCommand(name, args, message);
+    if (canonical === 'favor' || canonical === 'stage' || canonical === 'favor-rank' || canonical === 'set-favor' || canonical === 'set-intimacy') {
+      await this.#emotionCommand(canonical, args, message);
       return true;
     }
-    if (name === 'status') {
+    if (canonical === 'usage') {
+      await this.#usageCommand(args, message);
+      return true;
+    }
+    if (canonical === 'broadcast' || canonical === 'broadcast-confirm' || canonical === 'broadcast-cancel') {
+      await this.#broadcastCommand(canonical, args, message);
+      return true;
+    }
+    if (canonical === 'status') {
       const stats = this.stats();
       await this.#reply(message, `管理状态：已处理 ${stats.handled}，已回复 ${stats.replied}，AI 失败 ${stats.aiFailures}，限流 ${stats.rateLimited}`);
       return true;
     }
     // Unknown ? commands are intentionally silent, including for admins.
     return true;
+  }
+
+  /** `?用量 [天数]` - token accounting. */
+  async #usageCommand(args: string[], message: MohoMessage): Promise<void> {
+    const usage = this.#deps.usage;
+    if (!usage) {
+      await this.#reply(message, '用量统计未启用（需要持久化存储）。');
+      return;
+    }
+    const days = Number.parseInt(args[0] ?? '', 10);
+    const report = await usage.report(Number.isFinite(days) && days > 0 ? days : 1).catch(() => null);
+    await this.#reply(message, report ?? '用量统计读取失败。');
+  }
+
+  /** `?广播 <内容>` / `?广播确认` / `?广播取消` - two-step guild broadcast. */
+  async #broadcastCommand(name: string, args: string[], message: MohoMessage): Promise<void> {
+    const broadcast = this.#deps.broadcast;
+    if (!broadcast) {
+      await this.#reply(message, '广播未启用。');
+      return;
+    }
+    if (name === 'broadcast-confirm') {
+      await this.#reply(message, await broadcast.confirm().catch((error) => `广播失败：${error instanceof Error ? error.message : String(error)}`));
+      return;
+    }
+    if (name === 'broadcast-cancel') {
+      await this.#reply(message, await broadcast.cancel().catch(() => '取消失败。'));
+      return;
+    }
+    const content = args.join(' ').trim();
+    if (!content) {
+      await this.#reply(message, '用法：`?广播 <内容>` 预览，`?广播确认` 发送，`?广播取消` 撤销。');
+      return;
+    }
+    await this.#reply(message, await broadcast.preview(content, message.author.id).catch((error) => `预告失败：${error instanceof Error ? error.message : String(error)}`));
   }
 
   /** `?好感度` / `?关系阶段` / `?好感排行` - read-only relationship state. */
@@ -1045,6 +1122,7 @@ export class MessagePipeline {
     const generate = async (personaContent: string): Promise<string> => {
       const variant = messages.map((m, i) => (i === personaIndex ? { ...m, content: personaContent } : m));
       const response = await this.#deps.provider.chat(variant, {
+        task: 'ab',
         temperature: cfg.ai.temperature,
         timeoutMs: cfg.ai.timeoutMs,
         stream: false,
