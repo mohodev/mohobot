@@ -10,6 +10,8 @@ data/backups/
 data/chat.migrated/
 # ContextArchiver audit JSONL (raw conversation turns)
 data/contexts/
+# EmotionStore: per-user favor/intimacy/mood state (raw conversation excerpts)
+data/emotion/
 # generated simulation, memory, cache and remote-sync state
 data/world/*.json
 data/memory/*.json

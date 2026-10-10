@@ -14,7 +14,8 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `npm run build` — `tsc -p tsconfig.build.json` into `dist/`, then copies each `plugins/*/plugin.json`.
 - `npm run scan-secrets` — redacted credential scan of tracked files (`-- --history` adds every commit's added lines). `npm test` fails if a tracked file looks like it holds a credential; use `secretscan:ignore` on the line for a verified false positive. Known leaks in history are listed in `docs/AUDIT.md`.
 - `npm run acp` — start the ACP (Agent Client Protocol) v1 server on stdio, so ACP-compatible editors can use MohoBot as an AI agent backend. Implements `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/delete`, `session/list`, `session/load`, `session/resume`, `session/close` with streaming `session/update` notifications.
-- `opencode-cli` provider — drives the local `opencode run` CLI, reusing the signed-in OpenCode session (no API key needed). Set `AI_PROVIDER=opencode-cli` and `AI_MODEL=opencode/<model>` to use it.
+- `opencode-cli` provider — drives the local `opencode run` CLI, reusing the signed-in OpenCode session (no API key needed). Set `AI_PROVIDER=opencode-cli` and `AI_MODEL=opencode/<model>` to use it. Defaults to the resident `opencode service` (one `--standalone` retry if that service is unusable).
+- `emotion` (`src/emotion/`) — 好感度/亲密度/8 维情绪/关系阶段移植自 upstream `mohobot/emotion/`。Pre-LLM 注入语气块，回复后由后台 `task: admin` 二次分析（熔断 + 关键词降级），配置 `emotion.enabled` 默认 false；管理命令 `?好感度` / `?关系阶段` / `?好感排行`。Group gating is `decideSocially` (`src/pipeline/social-decision.ts`): mention/reply/DM always, room questions yes, chatter observed unless `social.proactiveParticipation`.
 
 ## Toolchain gotchas
 

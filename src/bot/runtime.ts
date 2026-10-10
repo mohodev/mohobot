@@ -26,6 +26,7 @@ import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
+import { EmotionManager } from '../emotion/manager.js';
 import { scopeStorage } from '../storage/index.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
 import { WorldStore } from '../admin/world.js';
@@ -71,6 +72,7 @@ export class BotRuntime implements Managed {
 
   #gateway?: Gateway;
   #provider?: AIProvider;
+  #emotion?: EmotionManager;
   #sessions?: SessionManager;
   #plugins?: PluginManager;
   #pipeline?: MessagePipeline;
@@ -79,6 +81,7 @@ export class BotRuntime implements Managed {
   #sweepTaskId?: string;
   #worldTickTaskId?: string;
   #contextArchiveTaskId?: string;
+  #emotionFlushTaskId?: string;
   #healthTaskId?: string;
   #health?: HealthCoordinator;
   #running = false;
@@ -217,6 +220,42 @@ export class BotRuntime implements Managed {
 
     const reflection = this.#deps.storage ? new ProfileReflectionWorker(this.#deps.storage, this.#logger) : undefined;
     const publicRelationships = await PublicRelationshipStore.load(this.#deps.rootDir, cfg.id);
+    // Relationship tracking (favor/intimacy/mood). Off unless the bot enables
+    // it, and it owns its own debounced JSON store under data/emotion/<botId>.
+    const emotion = cfg.emotion.enabled
+      ? new EmotionManager({
+        rootDir: this.#deps.rootDir,
+        botId: cfg.id,
+        logger: this.#logger,
+        config: {
+          enabled: true,
+          analysisRoundCooldown: cfg.emotion.analysisRoundCooldown,
+          minIntervalMs: cfg.emotion.minIntervalMs,
+          forceUpdateInterval: cfg.emotion.forceUpdateInterval,
+          keywordThreshold: cfg.emotion.keywordThreshold,
+          significanceThreshold: cfg.emotion.significanceThreshold,
+          smartUpdate: cfg.emotion.smartUpdate,
+          analysisTimeoutMs: cfg.emotion.analysisTimeoutMs,
+          maxConcurrent: cfg.emotion.maxConcurrent,
+          favorMin: cfg.emotion.favorMin,
+          favorMax: cfg.emotion.favorMax,
+          intimacyMin: cfg.emotion.intimacyMin,
+          intimacyMax: cfg.emotion.intimacyMax,
+        },
+        chat: async (prompt, model) => {
+          const provider = this.#provider;
+          if (!provider) return null;
+          const response = await provider.chat([{ role: 'user', content: prompt }], {
+            task: 'admin',
+            temperature: 0.3,
+            stream: false,
+            ...(model ? { model } : {}),
+          });
+          return response.content;
+        },
+      })
+      : undefined;
+    this.#emotion = emotion;
     this.#archiver = new ContextArchiver({
       rootDir: this.#deps.rootDir,
       logger: this.#logger,
@@ -240,6 +279,7 @@ export class BotRuntime implements Managed {
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },
+      emotion,
     });
 
     // Redacted operational summaries go to the configured private log channel.
@@ -336,6 +376,14 @@ export class BotRuntime implements Managed {
       { name: `${this.name}:context-archive-sweep`, intervalMs: 300_000, timeoutMs: 10_000 }, // 5 minutes
     );
 
+    this.#emotionFlushTaskId = emotion ? this.#deps.tasks.spawn(
+      async () => {
+        await emotion.settle();
+        await emotion.flush();
+      },
+      { name: `${this.name}:emotion-flush`, intervalMs: 60_000, timeoutMs: 15_000 },
+    ) : undefined;
+
     this.#running = true;
     this.#deps.events.emit('bot:started', { botId: cfg.id });
     this.#logger.info('bot started');
@@ -365,6 +413,19 @@ export class BotRuntime implements Managed {
     if (this.#contextArchiveTaskId) {
       this.#deps.tasks.cancel(this.#contextArchiveTaskId);
       this.#contextArchiveTaskId = undefined;
+    }
+    if (this.#emotionFlushTaskId) {
+      this.#deps.tasks.cancel(this.#emotionFlushTaskId);
+      this.#emotionFlushTaskId = undefined;
+    }
+    if (this.#emotion) {
+      try {
+        await this.#emotion.settle();
+        await this.#emotion.flush();
+      } catch (error) {
+        this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'emotion flush on shutdown failed');
+      }
+      this.#emotion = undefined;
     }
     if (this.#healthTaskId) {
       this.#deps.tasks.cancel(this.#healthTaskId);

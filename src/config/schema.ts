@@ -197,12 +197,55 @@ export const BotConfigSchema = z.object({
     enabled: z.boolean().default(false),
     updateIntervalSeconds: z.number().int().min(60).max(3600).default(300),
   }).default({}),
+  /**
+   * How the bot behaves in group conversations nobody addressed it in. By
+   * default it listens: it answers mentions, replies, DMs, peer RP banter and
+   * room questions, and stays quiet for everything else so it never feels like
+   * a slot machine. Opting in restores occasional voluntary participation.
+   */
+  social: z
+    .object({
+      proactiveParticipation: z.boolean().default(false),
+      /** Odds per observed message when proactiveParticipation is on. */
+      proactiveChance: z.number().min(0).max(1).default(0.16),
+    })
+    .default({}),
   /** Per-user rate limit. */
   rateLimit: z
     .object({
       enabled: z.boolean().default(true),
       windowMs: z.number().int().positive().default(10000),
       max: z.number().int().positive().default(3),
+    })
+    .default({}),
+  /**
+   * Relationship tracking: favor/intimacy plus an eight-dimension mood, updated
+   * after each reply by a second LLM pass (with keyword fallback when that
+   * model is unavailable) and injected into the reply prompt as a tone guide.
+   * Disabled by default - it adds one small analysis call per analysed turn.
+   */
+  emotion: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Turns skipped between analyses when nothing forces one. */
+      analysisRoundCooldown: z.number().int().min(0).max(20).default(2),
+      /** Wall-clock floor between two analyses for one user. */
+      minIntervalMs: z.number().int().min(0).max(3600_000).default(60000),
+      /** Hard cap: analyse at least every N analysed turns. */
+      forceUpdateInterval: z.number().int().min(1).max(100).default(8),
+      /** Emotional keyword weight needed to justify an analysis. */
+      keywordThreshold: z.number().int().min(1).max(20).default(3),
+      /** Significance needed to write a long-term interaction record. */
+      significanceThreshold: z.number().int().min(1).max(10).default(3),
+      /** Skip the analysis entirely when nothing emotional happened. */
+      smartUpdate: z.boolean().default(true),
+      analysisTimeoutMs: z.number().int().min(1000).max(300_000).default(90000),
+      /** Concurrent analysis calls; the rest queue. */
+      maxConcurrent: z.number().int().min(1).max(8).default(2),
+      favorMin: z.number().int().min(-100).max(0).default(-100),
+      favorMax: z.number().int().min(0).max(100).default(100),
+      intimacyMin: z.number().int().min(0).max(100).default(0),
+      intimacyMax: z.number().int().min(1).max(200).default(100),
     })
     .default({}),
   /**

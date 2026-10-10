@@ -111,6 +111,29 @@ export interface PipelineDeps {
   contextArchiver?: ContextArchiver;
   /** Runtime ban list; banned users are silently ignored before any processing. */
   bans?: BanStore;
+  /**
+   * Relationship tracking. The block is injected before the model call and the
+   * turn is scheduled after delivery; omitted (or disabled) = feature off.
+   */
+  emotion?: EmotionBridge;
+}
+
+/** The slice of the emotion manager the pipeline needs. */
+export interface EmotionBridge {
+  buildContextBlock(userKey: string): Promise<string>;
+  scheduleTurn(userKey: string, userText: string, aiReply: string): void;
+  /** Read-only snapshot for `?好感度` / `?关系阶段`. */
+  getSnapshot(userKey: string): Promise<{
+    userKey: string; favor: number; intimacy: number; stageName: string; stageDescription: string;
+    compositeScore: number; progressToNext: number; nextStageName: string; nextStageThreshold: number | null;
+    dominantMood: string; attitude: string; relationship: string;
+    interactions: { total: number; positive: number; negative: number; positiveRatio: number };
+    advice: string;
+  }>;
+  /** Leaderboard rows for `?好感排行`. */
+  ranking(limit: number, direction: 'top' | 'bottom'): Promise<Array<{ userKey: string; averageScore: number; favor: number; intimacy: number; stage: string }>>;
+  setFavor(userKey: string, value: number): void;
+  setIntimacy(userKey: string, value: number): void;
 }
 
 export interface PipelineStats {
@@ -475,7 +498,14 @@ export class MessagePipeline {
     const [device, world] = await Promise.all([this.#device.get(), this.#world.get()]);
     const social = decideSocially(
       { ...message, content: prompt },
-      { recentReplies: this.#recentReplyCount(message.channel.id), energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2, deviceDelay: this.#device.shouldDelay(device) },
+      {
+        recentReplies: this.#recentReplyCount(message.channel.id),
+        energy: world.mood.energy ?? 0.65,
+        stress: world.mood.stress ?? 0.2,
+        deviceDelay: this.#device.shouldDelay(device),
+        proactiveParticipation: cfg.social.proactiveParticipation,
+        proactiveChance: cfg.social.proactiveChance,
+      },
     );
     if (social.action === 'ignore') {
       this.#stats.skipped += 1;
@@ -531,7 +561,19 @@ export class MessagePipeline {
         log.warn({ err: error instanceof Error ? error.message : String(error) }, 'media observation failed; using attachment metadata');
       }
     }
+    // Live time anchor, character world state and the user's relationship state
+    // are all separate system blocks: the persona prompt stays untouched.
     const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context()]);
+    // Relationship state for this user. Never fatal: a broken store must not
+    // cost the reply, it only means the bot forgets how it feels about them.
+    let emotionBlock: string | undefined;
+    if (this.#deps.emotion) {
+      try {
+        emotionBlock = await this.#deps.emotion.buildContextBlock(message.author.id);
+      } catch (error) {
+        log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'emotion block build failed; continuing without it');
+      }
+    }
     // Older turns that were compacted out of the live window. Optional on the
     // session contract, and a lookup failure must never cost the reply.
     let historySummary: string | undefined;
@@ -546,6 +588,7 @@ export class MessagePipeline {
       { role: 'system', content: worldContext },
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
+      ...(emotionBlock ? [{ role: 'system' as const, content: emotionBlock }] : []),
       ...messages.filter((m) => m.role !== 'system'),
     ];
 
@@ -639,8 +682,7 @@ export class MessagePipeline {
       return;
     }
     this.#trace(trace, 'delivered', { protocol: 'reply-plan', segments: plan.segments.length });
-    this.#noteReply(message.channel.id);
-    this.#archiveContext(message, prompt, reply, trace.id);
+    this.#noteReply(message.channel.id);    this.#archiveContext(message, prompt, reply, trace.id);
     try {
       const sessions = this.#deps.sessions;
       const assistantTurn = { role: 'assistant' as const, content: reply };
@@ -656,6 +698,17 @@ export class MessagePipeline {
     } catch (error) {
       this.#trace(trace, 'memory_failed');
       log.warn({ err: error instanceof Error ? error.message : String(error), traceId: trace.id }, 'failed to persist assistant turn');
+    }
+    if (this.#deps.emotion) {
+      // Fire-and-forget like reflection: the relationship update must never
+      // delay or block the reply that already landed.
+      try {
+        this.#deps.emotion.scheduleTurn(message.author.id, prompt, reply);
+        this.#trace(trace, 'memory_written', { emotion: true });
+      } catch (error) {
+        this.#trace(trace, 'memory_failed', { emotion: true });
+        log.warn({ err: error instanceof Error ? error.message : String(error), traceId: trace.id }, 'emotion turn scheduling failed');
+      }
     }
     this.#stats.replied += 1;
     if (this.#deps.reflection) {
@@ -703,11 +756,15 @@ export class MessagePipeline {
 
   async #dispatchAdminCommand(name: string, args: string[], message: MohoMessage): Promise<boolean> {
     if (name === 'admin-help') {
-      await this.#reply(message, '管理指令：`?admin-help` · `?status` · `?ban` · `?unban` · `?banlist`。危险操作只能通过本地管理面板二次确认。');
+      await this.#reply(message, '管理指令：`?admin-help` · `?status` · `?ban` · `?unban` · `?banlist` · `?好感度` · `?关系阶段` · `?好感排行` · `?设好感`。危险操作只能通过本地管理面板二次确认。');
       return true;
     }
     if (name === 'ban' || name === 'unban' || name === 'banlist') {
       await this.#adminBanCommand(name, args, message);
+      return true;
+    }
+    if (name === 'favor' || name === 'stage' || name === 'favor-rank' || name === 'set-favor' || name === 'set-intimacy') {
+      await this.#emotionCommand(name, args, message);
       return true;
     }
     if (name === 'status') {
@@ -717,6 +774,58 @@ export class MessagePipeline {
     }
     // Unknown ? commands are intentionally silent, including for admins.
     return true;
+  }
+
+  /** `?好感度` / `?关系阶段` / `?好感排行` - read-only relationship state. */
+  async #emotionCommand(name: string, args: string[], message: MohoMessage): Promise<void> {
+    const emotion = this.#deps.emotion;
+    if (!emotion) {
+      await this.#reply(message, '情感系统未启用（bot 配置 `emotion.enabled` 为 false）。');
+      return;
+    }
+    if (name === 'set-favor' || name === 'set-intimacy') {
+      const target = args[0]?.trim();
+      const value = Number.parseInt(args[1] ?? '', 10);
+      if (!target || !Number.isFinite(value)) {
+        await this.#reply(message, name === 'set-favor' ? '用法：`?设好感 <用户ID> <数值 -100~100>`' : '用法：`?设亲密 <用户ID> <数值 0~100>`');
+        return;
+      }
+      if (name === 'set-favor') emotion.setFavor(target, value);
+      else emotion.setIntimacy(target, value);
+      const snapshot = await emotion.getSnapshot(target);
+      await this.#reply(message, `已更新 ${target}：好感 ${snapshot.favor} / 亲密 ${snapshot.intimacy}（${snapshot.stageName}）`);
+      return;
+    }
+    if (name === 'favor-rank') {
+      const limit = Number.parseInt(args[0] ?? '', 10);
+      const rows = await emotion.ranking(Number.isFinite(limit) && limit > 0 ? limit : 10, 'top');
+      if (rows.length === 0) {
+        await this.#reply(message, '暂无好感度数据。');
+        return;
+      }
+      const lines = rows.map((row, index) => `${index + 1}. ${row.userKey} — 好感 ${row.favor} / 亲密 ${row.intimacy}（综合 ${row.averageScore.toFixed(1)}，${row.stage}）`);
+      await this.#reply(message, ['好感度排行', ...lines].join('\n'));
+      return;
+    }
+    // Bare `?好感度` / `?关系阶段` read the caller's own state.
+    const target = args[0]?.trim() || message.author.id;
+    const snapshot = await emotion.getSnapshot(target);
+    if (name === 'stage') {
+      await this.#reply(message, [
+        `关系阶段：${snapshot.stageName} — ${snapshot.stageDescription}`,
+        `复合评分：${snapshot.compositeScore.toFixed(1)}${snapshot.nextStageThreshold ? `（下一阶段「${snapshot.nextStageName}」阈值 ${snapshot.nextStageThreshold}，进度 ${snapshot.progressToNext.toFixed(0)}%）` : '（已达最高阶段）'}`,
+        snapshot.advice,
+      ].join('\n'));
+      return;
+    }
+    await this.#reply(message, [
+      '💗 好感度',
+      `好感度：${snapshot.favor}｜亲密度：${snapshot.intimacy}`,
+      `关系阶段：${snapshot.stageName}（进度 ${snapshot.progressToNext.toFixed(0)}%）`,
+      `主导情感：${snapshot.dominantMood}`,
+      `态度倾向：${snapshot.attitude}｜关系描述：${snapshot.relationship}`,
+      `互动：${snapshot.interactions.total} 次（正面 ${snapshot.interactions.positive} / 负面 ${snapshot.interactions.negative}）`,
+    ].join('\n'));
   }
 
   /* Text command dispatch is deliberately removed for persona bots. Plugin

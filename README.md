@@ -176,6 +176,52 @@ options:
   timeoutMs: 180000
 ```
 
+默认复用在后台常驻的 `opencode service`（每次调用省 3–4 秒私有 server 冷启动）；服务不可用时自动回退一次 `--standalone`。若要保持完全隔离：
+
+```yaml
+options:
+  standalone: true
+```
+
+## 好感度与关系阶段
+
+移植自 [`CarefreeSongs712/mohobot`](https://github.com/CarefreeSongs712/mohobot) 的 `mohobot/emotion/`（astrbot-plugin-emotionai_pro）。默认关闭，开启后每次回复会由第二次 LLM 调用给这段关系打分，并在下一次回复前注入语气引导：
+
+- **好感度**（-100~100）与**亲密度**（0~100）
+- **8 维情绪**（喜悦/信任/恐惧/惊讶/悲伤/厌恶/愤怒/期待），只用于语气
+- **关系阶段**：初识 → 深化 → 承诺 → 共生；负好感走冷淡/反感/敌对三条修复线。升阶段吃满阈值，掉阶段要低于阈值 5 点（滞后带，一条坏消息不会让关系立即掉级）
+- 首次互动、情绪关键词、久未更新、每 N 轮强制分析四种触发；轮次冷却 + 最小时间间隔双闸门
+- 分析用 LLM 连续失败 3 次后熔断 5 分钟，改走关键词降级——**模型偶发故障不会让好感度系统变成错误来源**
+
+```yaml
+# data/config/bots/main.yaml
+emotion:
+  enabled: true
+```
+
+启用后在管理端（`?`，仅管理员 Bot 的授权用户）：
+
+| 命令 | 说明 |
+|---|---|
+| `?好感度 [用户ID]` | 好感/亲密/阶段/主导情感/态度/互动统计 |
+| `?关系阶段 [用户ID]` | 阶段、复合评分、下一阶段阈值与进度、进阶建议 |
+| `?好感排行 [条数]` | 加权综合分排行 |
+| `?设好感 <用户ID> <数值>` / `?设亲密 <用户ID> <数值>` | 手动设置 |
+
+数据落在 `<root>/data/emotion/<botId>/user_states.json` 与 `memory.json`（仅显著互动入库，每用户上限 50 条），由任务系统每分钟批量落盘，关闭时也会兜底 flush。
+
+### 群消息策略
+
+`social` 控制"没人叫它时说不说话"（默认只听不说）：
+
+| 场景 | 行为 |
+|---|---|
+| 被 @ / 引用回复 / 私聊 | 一定回复 |
+| 白名单里的 RP 角色插嘴 | 回复（连续 3 次后冷却） |
+| 群里有人提问 | 回复（连答 6 次后收声） |
+| 寒暄/附和/普通陈述 | 只观察，不说话 |
+| `social.proactiveParticipation: true` | 按概率主动插话（默认 16%，受精力/压力调节） |
+
 ## 预制提示词
 
 `data/prompts/` 下已导入 14 个来自 [`CarefreeSongs712/vc-character-prompt`](https://github.com/CarefreeSongs712/vc-character-prompt) 的预制提示词（commit `b932b68`），覆盖 12 位虚拟歌手角色（天依、初音未来、墨清弦、乐正绫、言和、心华、星尘、诗岸、摩柯、海伊、赤羽、龙牙）及 1 个图片识别提示词。这些文件可直接作为 `systemPromptFile` 使用，或作为角色 Bot 的预设提示词导入。引用记录见 `data/admin/prompt-source-vc.json`。
