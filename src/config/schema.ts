@@ -23,12 +23,12 @@ export const AIConfigSchema = z.object({
   apiKey: z.string().default(''),
   model: z.string().default('gpt-4o-mini'),
   temperature: z.number().min(0).max(2).default(0.8),
-  timeoutMs: z.number().int().positive().default(60000),
+  timeoutMs: z.number().int().positive().default(120000),
   retries: z.number().int().min(0).max(10).default(2),
   retryBaseDelayMs: z.number().int().positive().default(500),
   stream: z.boolean().default(false),
   /** Message shown to users when the AI call ultimately fails. */
-  fallbackReply: z.string().default('I could not reach my brain just now - try again in a moment.'),
+  fallbackReply: z.string().default('（刚才没连上，想说的话再发一次吧）'),
   /** Free-form provider-specific options, passed through untouched. */
   options: z.record(z.unknown()).default({}),
 });

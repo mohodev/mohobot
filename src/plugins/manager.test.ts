@@ -404,4 +404,27 @@ describe('PluginManager', () => {
 
     expect(await pm.runAfterAI(makeMessage('x'), 'base')).toBe('base-one-two');
   });
+
+  it('matches declared string and regex triggers for the noise gate', async () => {
+    await writePlugin(
+      'trig',
+      `export default { name: 'trig', triggers: ['占卜', /^\\/占卜(\\s|$)/, /BV[a-zA-Z0-9]{10}/] };`,
+      { name: 'trig', version: '1.0.0' },
+    );
+    await writePlugin('plain', `export default { name: 'plain' };`, {
+      name: 'plain',
+      version: '1.0.0',
+    });
+    const pm = makeManager();
+    await pm.loadAll();
+
+    expect(pm.isTriggerContent('占卜')).toBe(true);
+    expect(pm.isTriggerContent('  占卜  ')).toBe(true);
+    expect(pm.isTriggerContent('/占卜 事业')).toBe(true);
+    expect(pm.isTriggerContent('看这个 BV1xx411c7mD')).toBe(true);
+    expect(pm.isTriggerContent('我在研究占卜理论')).toBe(false);
+    expect(pm.isTriggerContent('今天天气不错')).toBe(false);
+    expect(pm.isTriggerContent('')).toBe(false);
+    expect(pm.isTriggerContent('占卜', ['trig'])).toBe(false);
+  });
 });

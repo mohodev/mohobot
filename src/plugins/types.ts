@@ -102,6 +102,15 @@ export interface MessageHookResult {
 
 export interface Plugin {
   readonly name: string;
+  /**
+   * Content this plugin will handle, exempt from the repeat-guard noise gate.
+   * Exact strings match case-insensitively after trimming; regexes test raw.
+   * Declare what onMessage actually answers (e.g. divination keywords, meme
+   * triggers, link patterns) so deliberate repeats keep working - the guard
+   * exists for runaway clients and bot echo loops, not for users pressing a
+   * working button three times.
+   */
+  readonly triggers?: ReadonlyArray<string | RegExp>;
   onLoad?(ctx: PluginContext): void | Promise<void>;
   onUnload?(): void | Promise<void>;
   onMessage?(message: MohoMessage, ctx: PluginContext): MessageHookResult | void | Promise<MessageHookResult | void>;

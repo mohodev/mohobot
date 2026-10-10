@@ -92,6 +92,7 @@ export async function fetchVideo(
 
 const plugin: Plugin = {
   name: 'bilibili',
+  triggers: [/bilibili\.com\/video\//i, /BV[a-zA-Z0-9]{10}/, /av\d{5,15}/i],
 
   async onMessage(message: MohoMessage, ctx) {
     if (message.author.bot) return undefined;

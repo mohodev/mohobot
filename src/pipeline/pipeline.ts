@@ -420,6 +420,13 @@ export class MessagePipeline {
   #isNoise(message: MohoMessage, trace: ChatTrace): boolean {
     const cfg = this.#deps.config.repeatGuard;
     if (!cfg.enabled || message.author.isBotManager === true) return false;
+    // Deliberate operations are never noise: admin `?` commands, and content a
+    // plugin declares it handles (divination keywords, meme triggers, links).
+    // The guard exists for runaway clients and bot echo loops, not for a user
+    // pressing a working button three times.
+    const text = message.content.trim();
+    if (text.startsWith('?')) return false;
+    if (this.#deps.plugins?.isTriggerContent(text, this.#deps.config.disabledPlugins ?? [])) return false;
     const reason = this.#repeats.inspect(`${message.botId}:${message.channel.id}:${message.author.id}`, message.content);
     if (!reason) return false;
     this.#stats.skipped += 1;
@@ -1302,16 +1309,19 @@ export class MessagePipeline {
   }
 
   #friendlyError(kind: string, fallback: string): string {
+    // User-facing, in Chinese, and clearly a system aside (brackets) rather
+    // than the character speaking - a failure notice must never masquerade as
+    // roleplay. Keep each to one line: it shares the channel with real chat.
     switch (kind) {
       case 'timeout':
-        return 'That took too long and timed out. Try again?';
+        return '（刚才那句想得太久超时了，再发一次试试？）';
       case 'rate_limit':
-        return 'Upstream is rate limiting me right now - give it a moment.';
+        return '（对面限流了，歇个几秒再找我吧）';
       case 'auth':
-        return 'My AI credentials are invalid. An admin needs to check the configuration.';
+        return '（我的模型钥匙好像失效了，叫管理员看一眼配置吧）';
       case 'network':
       case 'server':
-        return 'The AI service is temporarily unavailable. Please retry shortly.';
+        return '（AI 服务刚才没连上，过会儿再试一次吧）';
       default:
         return fallback;
     }

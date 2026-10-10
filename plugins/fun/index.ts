@@ -69,6 +69,7 @@ export function six66Reply(text: string): string | undefined {
 
 const plugin: Plugin = {
   name: 'fun',
+  triggers: ['占卜', '今日占卜', '/占卜', '6', '66', '666', /^\/占卜(\s|$)/],
 
   async onMessage(message: MohoMessage, ctx) {
     if (message.author.bot) return undefined;

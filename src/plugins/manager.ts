@@ -274,8 +274,7 @@ export class PluginManager {
    * Run onMessage across active plugins in priority order.
    * Returns the accumulated result; a plugin returning `stop` short-circuits.
    */
-  async runMessageHooks(message: MohoMessage, skip: string[] = []): Promise<MessageHookResult> {
-    const acc: MessageHookResult = {};
+  async runMessageHooks(message: MohoMessage, skip: string[] = []): Promise<MessageHookResult> {    const acc: MessageHookResult = {};
     let current = message;
     for (const entry of this.#active(skip)) {
       if (!entry.plugin.onMessage) continue;
@@ -294,6 +293,24 @@ export class PluginManager {
       }
     }
     return acc;
+  }
+
+  /**
+   * True when a loaded plugin declares it handles this content. Used by the
+   * repeat-guard noise gate: trigger content is deliberate, never spam.
+   */
+  isTriggerContent(text: string, skip: string[] = []): boolean {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    for (const entry of this.#active(skip)) {
+      const triggers = entry.plugin.triggers;
+      if (!triggers) continue;
+      for (const pattern of triggers) {
+        if (typeof pattern === 'string' ? lower === pattern.toLowerCase() : pattern.test(trimmed)) return true;
+      }
+    }
+    return false;
   }
 
   async runBeforeAI(

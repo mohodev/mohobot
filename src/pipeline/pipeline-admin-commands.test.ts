@@ -11,6 +11,7 @@ import { EventBus } from '../core/event.js';
 import { createNullLogger } from '../core/logger.js';
 import type { MohoMessage } from '../core/types.js';
 import type { SessionManagerLike } from '../session/types.js';
+import { AIError } from '../ai/types.js';
 import { ADMIN_COMMAND_ALIASES, MessagePipeline, type BroadcastBridge, type UsageBridge } from './pipeline.js';
 import { TopicBuffer } from './topic-buffer.js';
 
@@ -100,7 +101,130 @@ describe('?好感度 (Chinese alias end-to-end)', () => {
   });
 });
 
-describe('?用量', () => {  it('reports through the bridge and parses the day window', async () => {
+describe('repeat-guard trigger exemption', () => {
+  it('never swallows deliberate trigger content, even repeated', async () => {
+    // Inject a hook-only plugins facade: every 占卜 is answered, no AI needed.
+    const hooked = buildWithPlugins();
+    await hooked.run('占卜', false);
+    await hooked.run('占卜', false);
+    await hooked.run('占卜', false);
+    expect(hooked.outgoing).toEqual(['🔮 test fortune', '🔮 test fortune', '🔮 test fortune']);
+  });
+
+  it('never swallows ? admin commands for non-managers either (silent, not noise)', async () => {
+    // Non-admin ? text is intentionally silent (privilege probing), but it must
+    // not consume the repeat budget as noise: covered by the startsWith guard.
+    const hooked = buildWithPlugins();
+    await hooked.run('?用量', false);
+    await hooked.run('?用量', false);
+    await hooked.run('?用量', false);
+    // Silent (not admin), but also not model-answered: just no crash, no reply.
+    expect(hooked.outgoing).toHaveLength(0);
+  });
+
+  function buildWithPlugins() {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false }, admin: { enabled: true, userIds: ['admin1'] } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (() => { const media = MediaConfigSchema.parse(base.media); return { ...media, vision: { ...media.vision, apiKey: '' }, ocr: { ...media.ocr, apiKey: '' } }; })(),
+    };
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; },
+      async append() {},
+      async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }]; },
+      async clear() {}, async sweep() { return 0; }, size() { return 1; },
+    };
+    const outgoing: string[] = [];
+    let seq = 0;
+    const plugins = {
+      async runMessageHooks(message: { content: string }) {
+        if (message.content.trim() === '占卜') return { reply: '🔮 test fortune', stop: true };
+        return {};
+      },
+      isTriggerContent(text: string) { return text.trim() === '占卜'; },
+    };
+    const pipeline = new MessagePipeline({
+      config, sessions,
+      plugins: plugins as never,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: {
+        name: 'test', model: 'test',
+        async chat() { throw new Error('model must not be called'); },
+        async health() { return { ok: true }; },
+      },
+      events: new EventBus(), logger: createNullLogger(), send: async (out) => { outgoing.push(out.content); },
+    });
+    return {
+      outgoing,
+      async run(content: string, admin: boolean) {
+        seq += 1;
+        const message: MohoMessage = {
+          id: `m-${seq}`, platform: 'discord', botId: 'main',
+          channel: { id: 'c', dm: false },
+          author: admin
+            ? { id: 'admin1', username: 'admin', bot: false, isBotManager: true }
+            : { id: 'u9', username: 'user', bot: false },
+          content, mentionsBot: false, attachments: [], createdAt: seq,
+        };
+        await pipeline.handle(message);
+      },
+    };
+  }
+});
+
+describe('model failure replies (user-facing)', () => {
+  async function runWithFailure(kind: string) {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (() => { const media = MediaConfigSchema.parse(base.media); return { ...media, vision: { ...media.vision, apiKey: '' }, ocr: { ...media.ocr, apiKey: '' } }; })(),
+    };
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; },
+      async append() {},
+      async buildContext() { return [{ role: 'user', content: 'hi' }]; },
+      async clear() {}, async sweep() { return 0; }, size() { return 1; },
+    };
+    const outgoing: string[] = [];
+    const pipeline = new MessagePipeline({
+      config, sessions,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: {
+        name: 'test', model: 'test',
+        async chat() { throw new AIError('boom', { kind: kind as never, retryable: true }); },
+        async health() { return { ok: true }; },
+      },
+      events: new EventBus(), logger: createNullLogger(), send: async (out) => { outgoing.push(out.content); },
+    });
+    await pipeline.handle({
+      id: 'm1', platform: 'discord', botId: 'main', channel: { id: 'c', dm: true },
+      author: { id: 'u', username: 'user', bot: false }, content: 'hi', mentionsBot: true,
+      attachments: [], createdAt: 1,
+    });
+    return outgoing;
+  }
+
+  it('answers timeouts, rate limits and outages in Chinese asides, never English dev-speak', async () => {
+    expect(await runWithFailure('timeout')).toEqual(['（刚才那句想得太久超时了，再发一次试试？）']);
+    expect(await runWithFailure('rate_limit')).toEqual(['（对面限流了，歇个几秒再找我吧）']);
+    expect(await runWithFailure('auth')).toEqual(['（我的模型钥匙好像失效了，叫管理员看一眼配置吧）']);
+    expect(await runWithFailure('server')).toEqual(['（AI 服务刚才没连上，过会儿再试一次吧）']);
+    expect(await runWithFailure('network')).toEqual(['（AI 服务刚才没连上，过会儿再试一次吧）']);
+  });
+
+  it('falls back to the configured fallbackReply for unknown kinds', async () => {
+    expect(await runWithFailure('unknown')).toEqual(['（刚才没连上，想说的话再发一次吧）']);
+  });
+});
+
+describe('?用量', () => {
+  it('reports through the bridge and parses the day window', async () => {
     const seen: number[] = [];
     const harness = build({ usage: { report: async (days: number) => { seen.push(days); return `report-${days}`; } } });
     await harness.run('?用量');
