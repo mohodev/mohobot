@@ -24,6 +24,7 @@ import { AIError } from '../ai/types.js';
 import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
 import { decodeReplyPlan, deliverySegments, planText, type ReplyPlan } from './reply-plan.js';
+import type { AbEvaluationOutcome, AbSide, AbVote, PersonaAbRecord, PersonaAbStats, PersonaSnapshot, AbEvaluateOptions } from './persona-ab.js';
 import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
@@ -88,6 +89,15 @@ export function buildHistorySummaryBlock(summary: string): string {
   ].join('\n');
 }
 
+/** Normalizes a `?ab` vote token; returns null for anything that is not a vote. */
+export function normalizeAbVote(token: string): AbVote | null {
+  const text = token.trim();
+  if (text === 'A' || text === 'a') return 'A';
+  if (text === 'B' || text === 'b') return 'B';
+  if (text === '平局' || text === '都不好' || text === '跳过') return text;
+  return null;
+}
+
 export interface PipelineDeps {
   config: ResolvedBotConfig;
   provider: AIProvider;
@@ -116,6 +126,11 @@ export interface PipelineDeps {
    * turn is scheduled after delivery; omitted (or disabled) = feature off.
    */
   emotion?: EmotionBridge;
+  /**
+   * Persona A/B evaluation (prompt beta testing). DMs only; omitted (or
+   * disabled) = feature off.
+   */
+  personaAb?: PersonaAbBridge;
 }
 
 /** The slice of the emotion manager the pipeline needs. */
@@ -134,6 +149,31 @@ export interface EmotionBridge {
   ranking(limit: number, direction: 'top' | 'bottom'): Promise<Array<{ userKey: string; averageScore: number; favor: number; intimacy: number; stage: string }>>;
   setFavor(userKey: string, value: number): void;
   setIntimacy(userKey: string, value: number): void;
+}
+
+/**
+ * The slice of the persona A/B service the pipeline needs. The concrete
+ * PersonaAbService satisfies this structurally; tests inject fakes.
+ */
+export interface PersonaAbBridge {
+  reserve(input: {
+    userId: string;
+    sourceMessageId: string;
+    contextSide: AbSide;
+    baseline: PersonaSnapshot;
+    test: PersonaSnapshot;
+  }): Promise<PersonaAbRecord | null>;
+  evaluate(
+    record: PersonaAbRecord,
+    generate: (personaContent: string) => Promise<string>,
+    opts?: AbEvaluateOptions,
+  ): Promise<AbEvaluationOutcome>;
+  snapshot(side: AbSide, fallbackContent: string, fallbackLabel: string): Promise<PersonaSnapshot>;
+  preference(userId: string): Promise<AbSide | null>;
+  loadVotable(userId: string, identifier?: string): Promise<PersonaAbRecord | null>;
+  vote(userId: string, identifier: string | undefined, choice: AbVote): Promise<PersonaAbRecord>;
+  switchPersona(userId: string, identifier: string, choice: 'A' | 'B'): Promise<PersonaAbRecord>;
+  stats(): Promise<PersonaAbStats>;
 }
 
 export interface PipelineStats {
@@ -449,8 +489,16 @@ export class MessagePipeline {
     // `?` belongs only to the configured administrator bot and allowlisted
     // people. Everybody else sees it as ordinary text and gets no command
     // response, preventing privilege probing in public channels.
+    // Exception: `?ab` voting belongs to the evaluated user themselves (DMs),
+    // plus admins for stats - it is a participation flow, not administration.
     const adminCommand = this.#parseCommand(content, '?');
     if (adminCommand) {
+      if (adminCommand.name === 'ab' && this.#deps.personaAb
+        && (message.channel.dm || (cfg.admin.enabled && message.author.isBotManager === true))) {
+        await this.#dispatchAbCommand(adminCommand.args, message);
+        this.#stats.replied += 1;
+        return;
+      }
       if (cfg.admin.enabled && message.author.isBotManager === true) {
         const handled = await this.#dispatchAdminCommand(adminCommand.name, adminCommand.args, message);
         if (handled) { this.#stats.replied += 1; return; }
@@ -582,8 +630,22 @@ export class MessagePipeline {
     } catch (error) {
       log.warn({ err: error instanceof Error ? error.message : String(error) }, 'history summary lookup failed; continuing without it');
     }
+    // A/B switch binding: when this DM user picked the challenger persona, the
+    // normal chat keeps using it until they switch again. Never fatal: a broken
+    // lookup falls back to the live persona.
+    let personaText = cfg.systemPrompt;
+    if (this.#deps.personaAb && message.channel.dm && !message.author.bot) {
+      try {
+        if ((await this.#deps.personaAb.preference(message.author.id)) === 'test') {
+          personaText = (await this.#deps.personaAb.snapshot('test', cfg.systemPrompt, cfg.name)).content;
+        }
+      } catch (error) {
+        log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'persona-ab preference lookup failed; using live persona');
+        personaText = cfg.systemPrompt;
+      }
+    }
     messages = [
-      { role: 'system', content: cfg.systemPrompt },
+      { role: 'system', content: personaText },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
@@ -597,17 +659,39 @@ export class MessagePipeline {
     }
 
     let reply: string;
-    // reply-plan is a control protocol, not chat text. Buffer every upstream
-    // delta so an incomplete JSON fence can never be sent to Discord.
-    const protocolDeltas: string[] = [];
-    const aiStarted = Date.now();
-    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream, protocol: 'reply-plan' });
+    // Register the live generation so a newer direct summon can abort it.
+    // The normal call and the A/B evaluation below share this controller.
+    const controller = new AbortController();
+    this.#active.set(this.#queueKey(message), controller);
+    const releaseController = (): void => {
+      if (this.#active.get(this.#queueKey(message)) === controller) this.#active.delete(this.#queueKey(message));
+    };
     // Typing starts with the upstream request, not after it completes. This
     // keeps direct messages responsive during slow reasoning-model turns.
     const stopThinkingTyping = this.#startThinkingTyping(message.channel.id);
-    // Register the live generation so a newer direct summon can abort it.
-    const controller = new AbortController();
-    this.#active.set(this.#queueKey(message), controller);
+    const aiStarted = Date.now();
+    // Persona A/B evaluation (DMs only): occasionally answer this turn twice -
+    // once per persona, same input and parameters - and show both for a vote.
+    // The chat reply keeps the persona this user would normally get, so the
+    // evaluation never disturbs the ongoing conversation.
+    const abOutcome = await this.#maybeRunAbEvaluation(message, messages, personaText, cfg, trace, controller);
+    if (abOutcome && abOutcome.reply.length > 0) {
+      stopThinkingTyping();
+      releaseController();
+      if (abOutcome.aborted || controller.signal.aborted) {
+        this.#stats.skipped += 1;
+        this.#trace(trace, 'aborted', { reason: 'superseded', latencyMs: Date.now() - aiStarted });
+        log.info({ traceId: trace.id }, 'persona-ab evaluation superseded; answer dropped');
+        return;
+      }
+      reply = abOutcome.reply;
+      runtimeMetrics.ai.record(Date.now() - aiStarted, true);
+      this.#trace(trace, 'model_completed', { model: this.#deps.provider.model, latencyMs: Date.now() - aiStarted, length: reply.length, protocol: 'persona-ab' });
+    } else {
+    // reply-plan is a control protocol, not chat text. Buffer every upstream
+    // delta so an incomplete JSON fence can never be sent to Discord.
+    const protocolDeltas: string[] = [];
+    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream, protocol: 'reply-plan' });
     try {
       const response = await this.#deps.provider.chat(messages, {
         temperature: cfg.ai.temperature,
@@ -646,6 +730,7 @@ export class MessagePipeline {
       stopThinkingTyping();
       if (this.#active.get(this.#queueKey(message)) === controller) this.#active.delete(this.#queueKey(message));
     }
+    } // end else: normal single model call (abOutcome was null or failed over)
     // The summon may land between model completion and delivery; never let a
     // superseded answer race the fresh turn.
     if (controller.signal.aborted) {
@@ -906,6 +991,188 @@ export class MessagePipeline {
     const timer = setInterval(send, 8_000);
     timer.unref?.();
     return () => clearInterval(timer);
+  }
+
+  /**
+   * Persona A/B evaluation for one DM turn. Returns null when no evaluation
+   * was reserved (normal single call proceeds), otherwise the evaluated reply.
+   * An empty reply means the evaluation failed over: the caller falls through
+   * to the normal call so the user still gets an answer.
+   */
+  async #maybeRunAbEvaluation(
+    message: MohoMessage,
+    messages: ChatMessage[],
+    personaText: string,
+    cfg: ResolvedBotConfig,
+    trace: ChatTrace,
+    controller: AbortController,
+  ): Promise<{ reply: string; aborted: boolean } | null> {
+    const ab = this.#deps.personaAb;
+    if (!ab || !message.channel.dm || message.author.bot) return null;
+    const log = this.#logger.child({ component: 'pipeline', traceId: trace.id });
+    let baseline: PersonaSnapshot;
+    let test: PersonaSnapshot;
+    let preference: AbSide | null;
+    try {
+      [preference, baseline, test] = await Promise.all([
+        ab.preference(message.author.id),
+        ab.snapshot('baseline', cfg.systemPrompt, cfg.name),
+        ab.snapshot('test', cfg.systemPrompt, cfg.name),
+      ]);
+    } catch (error) {
+      log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'persona-ab snapshot failed; answering normally');
+      return null;
+    }
+    let record: PersonaAbRecord | null;
+    try {
+      record = await ab.reserve({
+        userId: message.author.id,
+        sourceMessageId: message.id,
+        contextSide: preference ?? 'baseline',
+        baseline,
+        test,
+      });
+    } catch (error) {
+      log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'persona-ab reserve failed; answering normally');
+      return null;
+    }
+    if (!record) return null;
+    this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: false, protocol: 'persona-ab' });
+
+    // Both candidates share the prepared input; only the persona block changes.
+    const at = messages.findIndex((m) => m.role === 'system' && m.content === personaText);
+    const personaIndex = at >= 0 ? at : 0;
+    const generate = async (personaContent: string): Promise<string> => {
+      const variant = messages.map((m, i) => (i === personaIndex ? { ...m, content: personaContent } : m));
+      const response = await this.#deps.provider.chat(variant, {
+        temperature: cfg.ai.temperature,
+        timeoutMs: cfg.ai.timeoutMs,
+        stream: false,
+        signal: controller.signal,
+      });
+      return response.content.trim();
+    };
+    // The card bypasses reply-plan parsing: it is status UI, not chat text.
+    const send = async (content: string): Promise<boolean> => {
+      try {
+        await this.#deps.send({ channelId: message.channel.id, content, suppressMentions: true });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      return await ab.evaluate(record, generate, { send, shouldAbort: () => controller.signal.aborted });
+    } catch (error) {
+      log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'persona-ab evaluation crashed; answering normally');
+      return { reply: '', aborted: controller.signal.aborted };
+    }
+  }
+
+  /** `?ab` voting and stats. Votes are owner-only; stats are admin-only. */
+  async #dispatchAbCommand(args: string[], message: MohoMessage): Promise<void> {
+    const cfg = this.#deps.config;
+    const ab = this.#deps.personaAb;
+    if (!ab || !cfg.personaAb.enabled) {
+      await this.#reply(message, '人设对比评估未启用。');
+      return;
+    }
+    const [subRaw, ...rest] = args;
+    const sub = (subRaw ?? '').trim();
+    const isAdmin = cfg.admin.enabled && message.author.isBotManager === true;
+
+    if (sub === '' || sub === '状态') {
+      const pending = await ab.loadVotable(message.author.id).catch(() => null);
+      if (!pending) {
+        await this.#reply(message, '当前没有待投票的人设对比。私聊中偶尔会触发一次对比评估，届时我会展示 A / B 两版回复。');
+        return;
+      }
+      await this.#reply(message, [
+        `🧪 待投票的人设对比（编号 ${pending.id}）`,
+        `将在 <t:${Math.floor(pending.expiresAt / 1000)}:R> 过期`,
+        '`?ab A` / `?ab B` / `?ab 平局` / `?ab 都不好` / `?ab 跳过`',
+      ].join('\n'));
+      return;
+    }
+
+    if (sub === 'stats' || sub === '统计') {
+      if (!isAdmin) {
+        await this.#reply(message, '该命令仅管理员可用。');
+        return;
+      }
+      const stats = await ab.stats().catch(() => null);
+      if (!stats) {
+        await this.#reply(message, '统计读取失败。');
+        return;
+      }
+      await this.#reply(message, [
+        '🧪 人设对比统计',
+        `展示：${stats.shown}｜投票：${stats.votes}（回应率 ${(stats.responseRate * 100).toFixed(1)}%）`,
+        `基准胜：${stats.baselineWins}｜挑战胜：${stats.testWins}｜平局：${stats.ties}｜都不喜欢：${stats.bothBad}｜跳过：${stats.skipped}`,
+        `过期：${stats.expired}｜失败：${stats.failed}`,
+        stats.notice,
+      ].join('\n'));
+      return;
+    }
+
+    const voteChoice = normalizeAbVote(sub);
+    if (voteChoice && rest.length === 0) {
+      if (!message.channel.dm) {
+        await this.#reply(message, '投票请在与我的私聊里进行（评估只发生在私聊）。');
+        return;
+      }
+      try {
+        const record = await ab.vote(message.author.id, undefined, voteChoice);
+        await this.#reply(message, [
+          `已记录投票：${record.vote}（重复提交不改票）。未切换人设，历史不变。`,
+          `如需切换：\`?ab switch ${record.id} A\`（或 B）`,
+        ].join('\n'));
+      } catch {
+        await this.#reply(message, '没有可投票的评估（可能已过期或尚未完整展示）。用 `?ab` 查看状态。');
+      }
+      return;
+    }
+
+    if ((sub === 'vote' || sub === '投票') && rest.length >= 2) {
+      if (!message.channel.dm) {
+        await this.#reply(message, '投票请在与我的私聊里进行（评估只发生在私聊）。');
+        return;
+      }
+      const choice = normalizeAbVote(rest[1] ?? '');
+      if (!choice) {
+        await this.#reply(message, '用法：`?ab vote <编号> A`（A / B / 平局 / 都不好 / 跳过）。');
+        return;
+      }
+      try {
+        const record = await ab.vote(message.author.id, rest[0], choice);
+        await this.#reply(message, `已记录投票：${record.vote}（重复提交不改票）。未切换人设，历史不变。`);
+      } catch {
+        await this.#reply(message, '投票失败：评估不存在、未完整展示或已过期（仅限本人私聊记录）。');
+      }
+      return;
+    }
+
+    if ((sub === 'switch' || sub === '切换') && rest.length >= 2) {
+      if (!message.channel.dm) {
+        await this.#reply(message, '切换请在与我的私聊里进行。');
+        return;
+      }
+      const side = (rest[1] ?? '').toUpperCase();
+      if (side !== 'A' && side !== 'B') {
+        await this.#reply(message, '用法：`?ab switch <编号> A`（或 B）。');
+        return;
+      }
+      try {
+        const record = await ab.switchPersona(message.author.id, rest[0]!, side);
+        const label = record.personas[record.switch!.side]!.label;
+        await this.#reply(message, `已将你的人设偏好切换到 ${side}（${label}），聊天记录保留。之后在这个私聊里的对话都会用它，直到你再切换。`);
+      } catch {
+        await this.#reply(message, '切换失败：评估不存在、未投票或已过期。');
+      }
+      return;
+    }
+
+    await this.#reply(message, '用法：`?ab`（查看待投票）· `?ab A/B/平局/都不好/跳过`（投票）· `?ab switch <编号> A`（切换人设）· `?ab stats`（管理员统计）。');
   }
 
   async #replyPlan(message: MohoMessage, plan: ReplyPlan, traceId?: string): Promise<boolean> {

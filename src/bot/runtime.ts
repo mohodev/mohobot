@@ -6,6 +6,7 @@
  * bot; sibling bots and the runtime keep going.
  */
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { GlobalConfig, ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
@@ -24,6 +25,7 @@ import { createProviderSummarizer } from '../session/summarizer.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { PluginManager } from '../plugins/manager.js';
 import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
+import { PersonaAbService } from '../pipeline/persona-ab.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
 import { EmotionManager } from '../emotion/manager.js';
@@ -256,6 +258,38 @@ export class BotRuntime implements Managed {
       })
       : undefined;
     this.#emotion = emotion;
+    // Persona A/B evaluation (prompt beta testing). Off unless the bot enables
+    // it; the store lives under data/persona-ab/<botId> and every mutation is
+    // an atomic file write, so no flush task is needed.
+    const personaAb = cfg.personaAb.enabled
+      ? new PersonaAbService({
+        rootDir: this.#deps.rootDir,
+        botId: cfg.id,
+        config: {
+          enabled: true,
+          baselinePromptFile: cfg.personaAb.baselinePromptFile,
+          testPromptFile: cfg.personaAb.testPromptFile,
+          probability: cfg.personaAb.probability,
+          cooldownSeconds: cfg.personaAb.cooldownSeconds,
+          pendingSeconds: cfg.personaAb.pendingSeconds,
+        },
+        loadPrompt: async (file) => {
+          const text = await fs.readFile(path.join(this.#deps.rootDir, file), 'utf8');
+          if (!text.trim()) throw new Error(`persona prompt file is empty: ${file}`);
+          return text;
+        },
+        // Fallback sender; the pipeline overrides it per evaluation so the
+        // card lands in the DM channel being answered.
+        send: async () => false,
+      })
+      : undefined;
+    if (personaAb) {
+      const repaired = await personaAb.recover().catch((error) => {
+        this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'persona-ab recovery failed');
+        return 0;
+      });
+      if (repaired > 0) this.#logger.info({ repaired }, 'persona-ab interrupted evaluations repaired');
+    }
     this.#archiver = new ContextArchiver({
       rootDir: this.#deps.rootDir,
       logger: this.#logger,
@@ -280,6 +314,7 @@ export class BotRuntime implements Managed {
         await this.#gateway?.typing(channelId);
       },
       emotion,
+      personaAb,
     });
 
     // Redacted operational summaries go to the configured private log channel.

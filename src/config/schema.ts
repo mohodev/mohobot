@@ -210,6 +210,28 @@ export const BotConfigSchema = z.object({
       proactiveChance: z.number().min(0).max(1).default(0.16),
     })
     .default({}),
+  /**
+   * Private single-turn persona A/B evaluation: a DM is occasionally answered
+   * twice with the same input and parameters, swapping only the persona, and
+   * the user votes anonymously. This is how a prompt beta is tested against
+   * the shipped baseline. Disabled by default - an evaluation costs roughly
+   * two extra model calls plus the card delivery.
+   */
+  personaAb: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Prompt file for the control side; unset = the bot's live persona. */
+      baselinePromptFile: z.string().min(1).optional(),
+      /** Prompt file for the challenger side; unset = no evaluation can run. */
+      testPromptFile: z.string().min(1).optional(),
+      /** Sampling probability per DM once the slot and cooldown allow it. */
+      probability: z.number().min(0).max(1).default(0.05),
+      /** Quiet period per user after each evaluation. */
+      cooldownSeconds: z.number().int().min(0).max(86400).default(900),
+      /** How long a delivered card stays votable. */
+      pendingSeconds: z.number().int().min(60).max(604800).default(86400),
+    })
+    .default({}),
   /** Per-user rate limit. */
   rateLimit: z
     .object({
