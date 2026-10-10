@@ -5,7 +5,7 @@ import { AIConfigSchema } from '../config/schema.js';
 import { createNullLogger } from '../core/logger.js';
 import { createProvider, OPENCODE_CLI_PROVIDER, registerBuiltinProviders } from './index.js';
 import { AIError } from './types.js';
-import { extractText, isServiceTransportError, OpenCodeCliProvider, renderPrompt } from './opencode-cli.js';
+import { extractSessionId, extractText, isServiceTransportError, OpenCodeCliProvider, renderPrompt } from './opencode-cli.js';
 
 const logger = createNullLogger();
 
@@ -205,6 +205,82 @@ describe('OpenCodeCliProvider', () => {
   });
 });
 
+describe('opencode-cli session cleanup', () => {
+  const sessionEvents = [
+    { type: 'step_start', sessionID: 'ses_test123abc', part: { type: 'step-start' } },
+    { type: 'text', sessionID: 'ses_test123abc', part: { type: 'text', text: '嗨' } },
+    { type: 'step_finish', sessionID: 'ses_test123abc', part: { type: 'step-finish', tokens: { input: 5, output: 1 } } },
+  ];
+
+  it('extracts the session id from a json stream and ignores junk', () => {
+    expect(extractSessionId('{"type":"text","sessionID":"ses_abc123_XYZ"}')).toBe('ses_abc123_XYZ');
+    expect(extractSessionId('no json here')).toBeNull();
+    expect(extractSessionId('{"sessionID":"not-a-session"}')).toBeNull();
+    expect(extractSessionId('{"sessionID":"ses-bad-chars!"}')).toBeNull();
+    expect(extractSessionId('')).toBeNull();
+  });
+
+  it('deletes the server-side session after a successful call', async () => {
+    const run = fakeChild();
+    const del = fakeChild();
+    const spawn = spawnSequence([run, del]);
+    const provider = new OpenCodeCliProvider(config(), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'hi' }]);
+    emitJson(run, sessionEvents);
+    run.emit('close', 0);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    del.emit('close', 0);
+
+    const response = await promise;
+    expect(response.content).toBe('嗨');
+    const calls = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+    expect(calls[0]?.[1]).toContain('run');
+    expect(calls[1]?.[1]).toEqual(['session', 'delete', 'ses_test123abc']);
+  });
+
+  it('still returns the answer when the delete fails', async () => {
+    const run = fakeChild();
+    const del = fakeChild();
+    const spawn = spawnSequence([run, del]);
+    const provider = new OpenCodeCliProvider(config(), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'hi' }]);
+    emitJson(run, sessionEvents);
+    run.emit('close', 0);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    del.emit('close', 1); // delete failed: housekeeping must not fail the turn
+
+    const response = await promise;
+    expect(response.content).toBe('嗨');
+  });
+
+  it('skips the delete when the output carries no session id', async () => {
+    const run = fakeChild();
+    const spawn = spawnSequence([run]);
+    const provider = new OpenCodeCliProvider(config(), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'hi' }]);
+    emitJson(run, sampleEvents);
+    run.emit('close', 0);
+    const response = await promise;
+    expect(response.content).toBe('你好，世界！');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the delete when sessionCleanup is disabled', async () => {
+    const run = fakeChild();
+    const spawn = spawnSequence([run]);
+    const provider = new OpenCodeCliProvider(config({ options: { sessionCleanup: false } }), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'hi' }]);
+    emitJson(run, sessionEvents);
+    run.emit('close', 0);
+    const response = await promise;
+    expect(response.content).toBe('嗨');
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+});
 describe('opencode-cli registration', () => {
   it('stays real even with an empty AI_API_KEY (credential lives in OpenCode)', () => {
     registerBuiltinProviders();

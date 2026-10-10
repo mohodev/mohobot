@@ -12,6 +12,11 @@
  * every MohoBot call is one `opencode run` invocation that receives the whole
  * conversation as a single prompt and prints a JSON event stream back.
  *
+ * Each one-shot run leaves a server-side session behind, so the provider
+ * deletes it right after the call (`session delete`, best effort, ~0.2s).
+ * Without that the operator's `opencode session list` would fill with one
+ * junk entry per bot reply. Opt out with `options.sessionCleanup: false`.
+ *
  * By default the invocation joins OpenCode's resident background service
  * (`opencode service`, idempotently ensured by the CLI itself) instead of
  * booting a private server: measured ~3-4s less per call. `options.standalone`
@@ -52,6 +57,8 @@ interface CliEvent {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_PROMPT_CHARS = 100_000;
+/** Best-effort `session delete` budget: never slow a turn for housekeeping. */
+const SESSION_CLEANUP_TIMEOUT_MS = 10_000;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -104,6 +111,12 @@ export function extractText(stdout: string): string {
   return text.trim();
 }
 
+/** Pull the server-side session id out of a `--format json` stream, if any. */
+export function extractSessionId(stdout: string): string | null {
+  const match = stdout.match(/"sessionID"\s*:\s*"(ses_[A-Za-z0-9_]+)"/);
+  return match ? match[1]! : null;
+}
+
 /** Last step-finish token accounting, best effort. */
 function extractUsage(stdout: string): { input?: number; output?: number } | undefined {
   let usage: { input?: number; output?: number } | undefined;
@@ -135,6 +148,7 @@ export class OpenCodeCliProvider implements AIProvider {
   readonly #spawn: typeof spawn;
   readonly #timeoutMs: number;
   readonly #standalone: boolean;
+  readonly #sessionCleanup: boolean;
 
   constructor(cfg: AIConfig, deps: OpenCodeCliDeps) {
     this.#logger = deps.logger;
@@ -144,6 +158,10 @@ export class OpenCodeCliProvider implements AIProvider {
     // Default: reuse the resident `opencode service` (faster). Opt out with
     // `options.standalone: true` for a private server per call.
     this.#standalone = cfg.options['standalone'] === true;
+    // Every one-shot `run` leaves a server-side session behind; delete it so
+    // the operator's session list is not flooded. Opt out with
+    // `options.sessionCleanup: false` when debugging the provider.
+    this.#sessionCleanup = cfg.options['sessionCleanup'] !== false;
     const configuredTimeout = Number(cfg.options['timeoutMs']);
     this.#timeoutMs = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : (cfg.timeoutMs || DEFAULT_TIMEOUT_MS);
   }
@@ -238,16 +256,48 @@ export class OpenCodeCliProvider implements AIProvider {
       child.once('close', (code) => {
         const out = Buffer.concat(stdout).toString('utf8');
         const err = Buffer.concat(stderr).toString('utf8');
-        if (code === 0) {
-          finish(() => resolve(out));
-          return;
-        }
-        this.#logger.warn({ code, stderr: err.slice(0, 300) }, 'opencode run exited non-zero');
-        finish(() => reject(new AIError(`opencode run exited ${code}: ${err.trim().slice(0, 200) || 'no stderr'}`, {
-          kind: code === null ? 'aborted' : 'server',
-          retryable: code !== null,
-        })));
+        // Server-side sessions outlive the child on every path (success,
+        // failure, timeout kill, abort kill): remove ours before settling so
+        // one chat turn never leaves one session behind. Best effort only.
+        void this.#cleanupSession(out).finally(() => {
+          if (code === 0) {
+            finish(() => resolve(out));
+            return;
+          }
+          this.#logger.warn({ code, stderr: err.slice(0, 300) }, 'opencode run exited non-zero');
+          finish(() => reject(new AIError(`opencode run exited ${code}: ${err.trim().slice(0, 200) || 'no stderr'}`, {
+            kind: code === null ? 'aborted' : 'server',
+            retryable: code !== null,
+          })));
+        });
       });
     });
+  }
+
+  /**
+   * Deletes the server-side session a `run` left behind. Resolves in all
+   * cases (missing id, spawn failure, non-zero exit, timeout): housekeeping
+   * must never fail the turn that triggered it.
+   */
+  async #cleanupSession(stdout: string): Promise<void> {
+    if (!this.#sessionCleanup) return;
+    const sessionId = extractSessionId(stdout);
+    if (!sessionId) return;
+    await new Promise<void>((resolve) => {
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = this.#spawn(this.#bin, ['session', 'delete', sessionId], { stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+      } catch {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        resolve();
+      }, SESSION_CLEANUP_TIMEOUT_MS);
+      timer.unref?.();
+      child.once('error', () => { clearTimeout(timer); resolve(); });
+      child.once('close', () => { clearTimeout(timer); resolve(); });
+    }).catch(() => {});
   }
 }
