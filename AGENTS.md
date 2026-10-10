@@ -16,6 +16,7 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `npm run acp` — start the ACP (Agent Client Protocol) v1 server on stdio, so ACP-compatible editors can use MohoBot as an AI agent backend. Implements `initialize`, `session/new`, `session/prompt`, `session/cancel`, `session/delete`, `session/list`, `session/load`, `session/resume`, `session/close` with streaming `session/update` notifications.
 - `opencode-cli` provider — drives the local `opencode run` CLI, reusing the signed-in OpenCode session (no API key needed). Set `AI_PROVIDER=opencode-cli` and `AI_MODEL=opencode/<model>` to use it. Defaults to the resident `opencode service` (one `--standalone` retry if that service is unusable).
 - `emotion` (`src/emotion/`) — 好感度/亲密度/8 维情绪/关系阶段移植自 upstream `mohobot/emotion/`。Pre-LLM 注入语气块，回复后由后台 `task: admin` 二次分析（熔断 + 关键词降级），配置 `emotion.enabled` 默认 false；管理命令 `?好感度` / `?关系阶段` / `?好感排行`。Group gating is `decideSocially` (`src/pipeline/social-decision.ts`): mention/reply/DM always, room questions yes, chatter observed unless `social.proactiveParticipation`.
+- `personaAb` (`src/pipeline/persona-ab.ts`) — 私聊单轮人设 A/B 评估移植自 upstream `mohobot/services/persona_ab*.py`（persona_ab_card 的图片卡片改为 Discord 文本卡片，其余规则保留：同输入同参数、每记录洗牌、仅确认送达计数、投票不切换、中断不发送）。配置 `personaAb` 默认关闭；用户命令 `?ab` / `?ab A` / `?ab switch <id> A`，管理员 `?ab stats`。
 
 ## Toolchain gotchas
 

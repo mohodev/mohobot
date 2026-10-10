@@ -10,8 +10,9 @@
  * The rules that make the numbers mean anything, all preserved from upstream:
  *  - both candidates see the *same* input and parameters; only the persona differs
  *  - A/B are shuffled per record, so position never correlates with the winner
- *  - only a confirmed delivery counts as an exposure; a failed card is a
- *    fallback text delivery, never a counted comparison
+ *  - only a confirmed delivery counts as an exposure; failures return the
+ *    context-side text for the caller to deliver once through the normal
+ *    path (never a double-send), or '' so the caller answers normally
  *  - the chat reply keeps the persona the user would normally have got, so an
  *    evaluation never disturbs the ongoing conversation
  *  - voting never switches the persona by itself
@@ -54,7 +55,7 @@ export interface PersonaAbRecord {
   switch: { choice: 'A' | 'B'; at: number; side: AbSide } | null;
   exposedAt: number | null;
   endedAt: number | null;
-  delivery: 'images' | 'text' | 'failed' | 'unknown' | null;
+  delivery: 'images' | 'text' | 'fallback' | 'failed' | 'unknown' | null;
 }
 
 interface StoreFile {
@@ -405,8 +406,11 @@ export class PersonaAbService {
       await this.#repo.update(record.botId, record.userId, record.id, { state: 'sending' });
     }
 
-    // Controlled fallback: one retry for the side the chat would have used, so a
-    // broken evaluation costs the user their normal answer at worst.
+    // Controlled fallback: one retry for the side the chat would have used.
+    // The text is RETURNED, never sent here: the caller delivers it exactly
+    // once through the normal path, so a fallback can never double-send.
+    // Total failure also returns '': the caller falls through to a normal
+    // single call, so the user still gets an answer (recorded as failed).
     const side = record.contextSide;
     if (aborted()) {
       const now = this.#now();
@@ -418,25 +422,23 @@ export class PersonaAbService {
         candidates[side] = await generate(record.personas[side]!.content);
       } catch (error) {
         errors[side] = error instanceof Error ? error.name : 'Error';
-        await this.#repo.update(record.botId, record.userId, record.id, { candidates, generationErrors: errors });
-        if (!aborted()) {
-          await send('本轮评估未能完成，未记录错误内容为聊天答案。请稍后继续聊天。');
-        }
         const now = this.#now();
-        await this.#repo.update(record.botId, record.userId, record.id, { state: aborted() ? 'aborted' : 'failed', endedAt: now, delivery: 'failed' });
+        await this.#repo.update(record.botId, record.userId, record.id, {
+          candidates, generationErrors: errors,
+          state: aborted() ? 'aborted' : 'failed', endedAt: now, delivery: 'failed',
+        });
         return { reply: '', exposed: false, aborted: aborted() };
       }
     }
-    const delivered = await send(candidates[side]!);
     const now = this.#now();
     const wasAborted = aborted();
     await this.#repo.update(record.botId, record.userId, record.id, {
       candidates, generationErrors: errors,
-      state: wasAborted ? 'aborted' : delivered ? 'fallback' : 'failed',
-      delivery: delivered ? 'text' : 'failed',
+      state: wasAborted ? 'aborted' : 'fallback',
+      delivery: 'fallback',
       endedAt: now,
     });
-    return { reply: wasAborted || !delivered ? '' : candidates[side]!, exposed: false, aborted: wasAborted };
+    return { reply: wasAborted ? '' : candidates[side]!, exposed: false, aborted: wasAborted };
   }
 
   async loadVotable(userId: string, identifier?: string): Promise<PersonaAbRecord | null> {

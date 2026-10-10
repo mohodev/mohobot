@@ -157,7 +157,7 @@ describe('PersonaAbService evaluation', () => {
     expect(stats.shown).toBe(1);
   });
 
-  it('falls back to the context side once when one side fails', async () => {
+  it('returns the context side for normal delivery when one side fails', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'moho-ab-'));
     const { svc, sent } = service();
     const record = await reserveOk(svc, 'u', 'baseline');
@@ -170,24 +170,23 @@ describe('PersonaAbService evaluation', () => {
       }
       return 'B正常';
     });
-    // No card (only one candidate): the single chat answer goes through, uncounted.
+    // No card (only one candidate): the context answer is returned for the
+    // caller to deliver exactly once - the service itself sends nothing here.
     expect(outcome.exposed).toBe(false);
     expect(outcome.reply).toBe('重试成功');
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toBe('重试成功');
+    expect(sent).toHaveLength(0);
     const stats = await svc.stats();
     expect(stats.shown).toBe(0);
     expect(stats.failed).toBe(1);
   });
 
-  it('sends the failure notice and no answer when both sides fail', async () => {
+  it('returns empty for the caller to answer normally when both sides fail', async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'moho-ab-'));
     const { svc, sent } = service();
     const record = await reserveOk(svc);
     const outcome = await svc.evaluate(record, async () => { throw new Error('down'); });
     expect(outcome).toEqual({ reply: '', exposed: false, aborted: false });
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain('未能完成');
+    expect(sent).toHaveLength(0);
   });
 
   it('sends nothing and flags aborted when superseded mid-flight', async () => {
@@ -209,7 +208,8 @@ describe('PersonaAbService evaluation', () => {
     });
     const record = await reserveOk(svc);
     const outcome = await svc.evaluate(record, async (persona) => `答[${persona}]`);
-    // Notice ok, card failed: controlled fallback sends the plain answer instead.
+    // Notice ok, card failed: the context answer is still returned for normal
+    // delivery, but the comparison is uncounted.
     expect(outcome.exposed).toBe(false);
     expect(outcome.reply).toBe('答[你是A]');
     const stats = await svc.stats();

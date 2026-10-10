@@ -210,6 +210,25 @@ emotion:
 
 数据落在 `<root>/data/emotion/<botId>/user_states.json` 与 `memory.json`（仅显著互动入库，每用户上限 50 条），由任务系统每分钟批量落盘，关闭时也会兜底 flush。
 
+## 人设 A/B 评估（prompt beta 测试）
+
+移植自上游 `mohobot/services/persona_ab{,_repository}.py`。私聊按概率触发：同一输入、同一模型参数，只换人设各生成一版，匿名展示 A / B 供投票，用于在生产环境对比测试版提示词：
+
+- baseline 缺省 = 当前线上人格；test = `testPromptFile` 指定的 beta
+- 只有确认送达的卡片才计一次曝光；失败降级为普通单回复，不计数
+- 投票不切换人设；`?ab switch <编号> A/B` 才绑定偏好（聊天记录保留）
+- 被新消息打断的评估不发送任何东西、不计入统计
+
+```yaml
+# data/config/bots/main.yaml
+personaAb:
+  enabled: true
+  testPromptFile: data/prompts/天依测试.txt
+  probability: 0.05
+```
+
+用户命令（私聊）：`?ab`（待投票状态）· `?ab A/B/平局/都不好/跳过`（投票）· `?ab switch <编号> A`（切换）。管理员：`?ab stats`（胜负统计）。数据落在 `<root>/data/persona-ab/<botId>/`（原子写，无需 flush 任务）。
+
 ### 群消息策略
 
 `social` 控制"没人叫它时说不说话"（默认只听不说）：
