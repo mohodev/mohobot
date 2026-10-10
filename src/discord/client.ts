@@ -7,21 +7,23 @@
  */
 
 import {
+  ActivityType,
   ChannelType,
   Client,
+  Events,
   GatewayIntentBits,
-  Partials,
-  ActivityType,
   MessageFlags,
-  type ClientEvents,
-  type ApplicationCommandDataResolvable,
-  type Interaction,
+  Partials,
   type APIEmbed,
+  type ApplicationCommandDataResolvable,
+  type ClientEvents,
+  type Interaction,
   type Message,
-  type ThreadChannel,
   type MessageCreateOptions,
-  type SendableChannels,
   type NonThreadGuildBasedChannel,
+  type SendableChannels,
+  type ThreadChannel,
+  version,
 } from 'discord.js';
 
 import type { ResolvedBotConfig } from '../config/schema.js';
@@ -45,6 +47,18 @@ export interface DiscordGatewayOptions {
 
 const LOGIN_TIMEOUT_MS = 30_000;
 const CHUNK_DELAY_MS = 250;
+
+/**
+ * discord.js split `ready` into `clientReady` in 14.16; the old name stayed as a
+ * deprecated alias and now only logs a deprecation warning when something
+ * listens to it. Pure so the version gate is testable without a live client.
+ */
+export function supportsClientReady(discordJsVersion: string): boolean {
+  const [major = 0, minor = 0] = discordJsVersion.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  return major > 14 || (major === 14 && minor >= 16);
+}
+
+const HAS_CLIENT_READY = supportsClientReady(version);
 
 // Discord Embed hard limits (see discord.js EmbedBuilder source).
 const EMBED_TITLE_LIMIT = 256;
@@ -203,7 +217,11 @@ export class DiscordGateway implements Gateway {
       }, LOGIN_TIMEOUT_MS);
       if (typeof timer.unref === 'function') timer.unref();
 
-      // v14.16+ renamed 'ready' to 'clientReady'; listen for both, fire once.
+      // v14.16+ renamed 'ready' to 'clientReady'. discord.js only emits its
+      // deprecation warning when something actually listens to the legacy
+      // 'ready' event, so attach exactly one listener for whichever name this
+      // installed version emits - never both.
+      const readyEvent = HAS_CLIENT_READY ? Events.ClientReady : 'ready';
       const onReady = (readyClient: Client<true>): void => {
         if (this.#ready) return;
         this.#ready = true;
@@ -220,8 +238,7 @@ export class DiscordGateway implements Gateway {
         resolve();
       };
 
-      client.once('clientReady', onReady);
-      client.once('ready', onReady);
+      client.once(readyEvent, onReady);
 
       client.login(token).catch((error: unknown) => {
         if (settled) return;
