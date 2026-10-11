@@ -387,8 +387,10 @@ export class MessagePipeline {
     // runs against a session holding both user turns, so the model naturally
     // folds the follow-up into one fresh answer.
     // Note: quoting some *other* user is NOT a summon - mentionsBot already
-    // encodes "@me or reply-to-me" from the adapter layer.
-    if (!message.author.bot && (message.mentionsBot || message.channel.dm)) {
+    // encodes "@me or reply-to-me" from the adapter layer. Peer-listed bots
+    // summon like humans; any other bot author never interrupts.
+    const peerSummon = message.author.bot && this.#deps.config.discord.peerBots.includes(message.author.id);
+    if ((message.mentionsBot || message.channel.dm) && (!message.author.bot || peerSummon)) {
       const running = this.#active.get(queueKey);
       if (running && !running.signal.aborted) {
         running.abort();
@@ -517,9 +519,12 @@ export class MessagePipeline {
     this.#stats.handled += 1;
     const cfg = this.#deps.config;
     const log = this.#logger.child({ channel: message.channel.id, user: message.author.id });
-
-    if (message.author.bot && cfg.discord.ignoreBots) {
+    // Peer-listed bots (`discord.peerBots`) are admitted past the bot filter;
+    // every other bot author is dropped before the pipeline, same as before.
+    const peerSummon = message.author.bot && cfg.discord.peerBots.includes(message.author.id);
+    if (message.author.bot && cfg.discord.ignoreBots && !peerSummon) {
       this.#stats.skipped += 1;
+      this.#trace(trace, 'ignored', { reason: 'non-peer bot' });
       return;
     }
 
@@ -600,6 +605,7 @@ export class MessagePipeline {
       { ...message, content: prompt },
       {
         recentReplies: this.#recentReplyCount(message.channel.id),
+        peerSummon,
         energy: world.mood.energy ?? 0.65,
         stress: world.mood.stress ?? 0.2,
         deviceDelay: this.#device.shouldDelay(device),
@@ -812,7 +818,9 @@ export class MessagePipeline {
     this.#trace(trace, 'plan_parsed', { action: plan.action, style: plan.style, quote: plan.quote, segments: plan.segments.length });
     // A direct @ / reply / DM is an explicit invitation: the model's own
     // "ignore" plan must never silently veto it. Degrade to a plain reply.
-    const directSummon = !message.author.bot && (message.mentionsBot || message.channel.dm);
+    // Peer-listed bots summon like humans; other bot authors keep the old
+    // behaviour (their ignore plan is honoured).
+    const directSummon = (message.mentionsBot || message.channel.dm) && (!message.author.bot || peerSummon);
     if (plan.action === 'ignore') {
       this.#stats.skipped += 1;
       this.#trace(trace, 'ignored', { reason: 'model_plan', directSummon });

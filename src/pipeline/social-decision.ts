@@ -18,6 +18,12 @@ export interface SocialInput {
   /** Odds for that opt-in path; deterministic when omitted. */
   proactiveRoll?: number;
   proactiveChance?: number;
+  /**
+   * The author is on the bot's peer-bot allowlist (`discord.peerBots`) and
+   * this message @s, replies-to, or DMs the bot. It counts as an explicit
+   * invitation, same as a human direct summon.
+   */
+  peerSummon?: boolean;
 }
 
 /** A question aimed at the room, not at a specific person. */
@@ -34,6 +40,12 @@ const QUESTION_COOLDOWN = 6;
 export function decideSocially(message: MohoMessage, input: SocialInput = { recentReplies: 0, energy: .65, stress: .2 }): SocialDecision {
   const text = message.content.trim();
   const urgent = /[?？]|救命|救|急/.test(text);
+  // A peer-listed bot that @s, replies-to, or DMs the bot is an explicit
+  // invitation, same as a human direct summon. Checked before the generic
+  // peer-banter branch below so it is never downgraded or cooled down.
+  if (message.author.bot && input.peerSummon && (message.channel.dm || message.mentionsBot)) {
+    return { action: 'reply', urgency: urgent ? 'high' : 'normal', reason: 'direct' };
+  }
   // A whitelisted fellow RP character cutting into the conversation is worth
   // engaging (quote-reply back), but never with "direct" privilege and never
   // endlessly: recentReplies >= 3 acts as the anti-loop cooldown.

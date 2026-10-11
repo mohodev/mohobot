@@ -180,6 +180,58 @@ describe('reply-plan ignore guard', () => {
   });
 });
 
+describe('peer bot admission', () => {
+  const replyPlan = '```reply-plan\n{"action":"reply","style":"chat","quote":true,"segments":[{"text":"在的。"}]}\n```';
+  const ignorePlan = '```reply-plan\n{"action":"ignore","segments":[]}\n```';
+  function peerSetup(modelReply: string) {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false }, discord: { ignoreBots: true, peerBots: ['peer1'] } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0, stream: false }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (()=>{const media=MediaConfigSchema.parse(base.media);return{...media,vision:{...media.vision,apiKey:''},ocr:{...media.ocr,apiKey:''}}})(),
+    };
+    const outgoing: Array<import('../core/types.js').OutboundMessage> = [];
+    const traces = new ChatTraceStore();
+    let calls = 0;
+    const pipeline = new MessagePipeline({
+      config,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: { name: 'test', model: 'test', async chat() { calls += 1; return { content: modelReply, model: 'test', ms: 0 }; }, async health() { return { ok: true }; } },
+      sessions: { async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; }, async append() {}, async buildContext(_k, s) { return [{ role: 'system', content: s }]; }, async clear() {}, async sweep() { return 0; }, size() { return 0; } } as SessionManagerLike,
+      events: new EventBus(), logger: createNullLogger(), traces, send: async (out) => { outgoing.push(out); },
+    });
+    return { pipeline, outgoing, traces, calls: () => calls };
+  }
+  const peerMention = (id: string, authorId: string): MohoMessage => ({
+    id, platform: 'discord', botId: 'main', channel: { id: 'c', dm: false },
+    author: { id: authorId, username: authorId, bot: true },
+    content: '<@bot> 在吗', mentionsBot: true, attachments: [], createdAt: 1,
+  });
+  it('admits a peer-listed bot @ past the bot filter and delivers the reply', async () => {
+    const h = peerSetup(replyPlan);
+    await h.pipeline.handle(peerMention('p1', 'peer1'));
+    expect(h.calls()).toBe(1);
+    expect(h.outgoing).toHaveLength(1);
+    expect(h.outgoing[0]!.content).toContain('在的');
+    expect(h.traces.list()[0]?.outcome).toBe('replied');
+  });
+  it('still drops a non-peer bot @ before any model call', async () => {
+    const h = peerSetup(replyPlan);
+    await h.pipeline.handle(peerMention('p2', 'stranger-bot'));
+    expect(h.calls()).toBe(0);
+    expect(h.outgoing).toHaveLength(0);
+    expect(h.traces.list()[0]?.events.some((e) => e.stage === 'ignored')).toBe(true);
+  });
+  it('overrides a model ignore plan for a peer summon', async () => {
+    const h = peerSetup(ignorePlan);
+    await h.pipeline.handle(peerMention('p3', 'peer1'));
+    expect(h.outgoing.length).toBeGreaterThan(0);
+    expect(h.outgoing[0]!.content).toContain('在呢');
+  });
+});
+
 describe('interrupt & merge (Hermes-style)', () => {
   it('aborts an in-flight answer when a newer direct message arrives, then answers the merged turn', async () => {
     const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false } });

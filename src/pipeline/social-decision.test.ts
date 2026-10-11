@@ -56,4 +56,16 @@ describe('social decision', () => {
     expect(decideSocially(msg('普通陈述'), { recentReplies: 0, energy: .05, stress: .1 }).action).toBe('ignore');
     expect(decideSocially(msg('这个怎么用'), { recentReplies: 0, energy: .7, stress: .95 }).action).toBe('ignore');
   });
+
+  it('treats a peer-listed bot @ as a direct summon', () => {
+    const summon = msg('在吗', { author: { id: 'qcfr', username: 'QCFR', bot: true }, mentionsBot: true });
+    expect(decideSocially(summon, { recentReplies: 0, energy: .7, stress: .1, peerSummon: true }))
+      .toMatchObject({ action: 'reply', reason: 'direct' });
+    // Direct privilege ignores the peer-bot cooldown.
+    expect(decideSocially(summon, { recentReplies: 5, energy: .7, stress: .1, peerSummon: true }).action).toBe('reply');
+    // Without the flag the same @ stays ordinary peer banter.
+    expect(decideSocially(summon, { recentReplies: 0, energy: .7, stress: .1 }))
+      .toMatchObject({ action: 'reply', reason: 'peer rp character interjected' });
+    expect(decideSocially(summon, { recentReplies: 3, energy: .7, stress: .1 }).action).toBe('ignore');
+  });
 });
