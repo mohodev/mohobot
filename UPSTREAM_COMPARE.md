@@ -1,4 +1,4 @@
-# 上游对比报告 — carefreesongs712/mohobot（2026-08-23）
+# 上游对比报告 — carefreesongs712/mohobot（2026-08-23 初版，2026-10-11 增补）
 
 ## 结论：同名不同种，无迁移必要
 
@@ -24,3 +24,18 @@
 ## 决定
 - **不迁移 Python**（RUNTIME_HARDEN_TODO 最后一项就此关闭）：上游平台(QQ)与本项目(Discord)不同，TS 版功能面已覆盖其通用架构思想。
 - ~~可选增强：session 满时 AI 总结压缩替代硬裁剪~~ → 已于 2026-10 实现（`session.contextSummary`）。
+
+## 2026-10-11 增补：上游功能跟随
+
+8-23 报告后，本项目又按上游数据源与规则跟随了一批功能（QQ 特有交互除外，全部按 Discord 原生重写）。结论不变：**仍不迁移 Python**。
+
+| 上游 | 本项目 | 状态 |
+|---|---|---|
+| `mohobot/emotion/`（好感/亲密/8维情绪/关系阶段） | `src/emotion/` + `?好感度` / `?关系阶段` / `?好感排行` | ✅ 已移植（默认关闭，分析失败熔断+关键词降级） |
+| `mohobot/services/persona_ab*.py`（人设 A/B） | `src/pipeline/persona-ab.ts` + `?ab` | ✅ 已移植（图片卡片改文本卡片，其余规则保留） |
+| `usage_stats`（用量统计） | `src/ai/usage.ts` + `?用量` / `?用量 会话` | ✅ 已跟随（按调用类型记账 + 会话 Top10 + 平均每次） |
+| `mohobot/music_knowledge/`（歌曲库） | `src/songs/` + `scripts/sync-songs.ts` + `?同步歌曲` | ✅ 已跟随（VCPedia 分类分页 + revisions 取 wikitext） |
+| 搜索（上游用 Anysearch MCP） | `plugins/search`（Anysearch + DuckDuckGo + Wikipedia 三后端链） | ✅ 数据源跟随，Discord 原生 |
+| 群互动/迎新/运营 | `plugins/fun`（占卜/66 梗）/ `plugins/welcome` / `plugins/bilibili` / `?广播`（`src/admin/broadcast.ts`） | ✅ Discord 原生重写（广播只覆盖服务器、不打扰私聊） |
+| 聊天治理 | `?ban` / `?unban` / `?banlist`、repeat-guard | ✅ 已有 |
+| 戳一戳反射 / TTS 唱歌规划 / 图片 phash 去重 / OneBot v11 | 无 | ➖ QQ 特有，Discord 不适用（维持不做） |
