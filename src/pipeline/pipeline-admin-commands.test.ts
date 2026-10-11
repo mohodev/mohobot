@@ -10,6 +10,7 @@ import { AIConfigSchema, BotConfigSchema, MediaConfigSchema, MemoryConfigSchema,
 import { EventBus } from '../core/event.js';
 import { createNullLogger } from '../core/logger.js';
 import type { MohoMessage } from '../core/types.js';
+import type { ChatMessage } from '../core/types.js';
 import type { SessionManagerLike } from '../session/types.js';
 import { AIError } from '../ai/types.js';
 import { ADMIN_COMMAND_ALIASES, MessagePipeline, type BroadcastBridge, type UsageBridge } from './pipeline.js';
@@ -247,8 +248,90 @@ describe('?用量', () => {
   });
 });
 
-describe('?广播', () => {
-  function broadcastHarness() {
+describe('songs injection and ?同步歌曲', () => {
+  function songsHarness(songs: import('./pipeline.js').SongBridge | undefined) {
+    const base = BotConfigSchema.parse({ id: 'main', rateLimit: { enabled: false }, admin: { enabled: true, userIds: ['admin1'] } });
+    const config = {
+      ...base,
+      ai: AIConfigSchema.parse({ ...base.ai, apiKey: 'test-key-123456', maxTokens: 0 }),
+      session: SessionConfigSchema.parse({ ...base.session, persist: false }),
+      memory: MemoryConfigSchema.parse(base.memory),
+      media: (() => { const media = MediaConfigSchema.parse(base.media); return { ...media, vision: { ...media.vision, apiKey: '' }, ocr: { ...media.ocr, apiKey: '' } }; })(),
+    };
+    const sessions: SessionManagerLike = {
+      async get() { return { key: 'k', botId: 'main', channelId: 'c', userId: 'u', messages: [], updatedAt: 0 }; },
+      async append() {},
+      async buildContext(_key, systemPrompt) { return [{ role: 'system', content: systemPrompt }]; },
+      async clear() {}, async sweep() { return 0; }, size() { return 1; },
+    };
+    const captured: ChatMessage[] = [];
+    const outgoing: string[] = [];
+    const pipeline = new MessagePipeline({
+      config, sessions, songs,
+      topicBuffer: new TopicBuffer({ quietMs: 5 }),
+      provider: {
+        name: 'test', model: 'test',
+        async chat(messages) { captured.push(...messages); return { content: '好听', model: 'test', ms: 0 }; },
+        async health() { return { ok: true }; },
+      },
+      events: new EventBus(), logger: createNullLogger(), send: async (out) => { outgoing.push(out.content); },
+    });
+    return {
+      captured,
+      outgoing,
+      run: (content: string) => pipeline.handle({
+        id: `m-${outgoing.length}`, platform: 'discord', botId: 'main', channel: { id: 'c', dm: false },
+        author: { id: 'admin1', username: 'admin', bot: false, isBotManager: true },
+        content, mentionsBot: true, attachments: [], createdAt: 1,
+      }),
+    };
+  }
+
+  it('injects the song block as its own system message on match', async () => {
+    const harness = songsHarness({
+      match: async (text: string) => text.includes('达拉崩吧') ? '【歌曲信息】\n达拉崩吧' : undefined,
+      status: async () => ({ songs: 10, updatedAt: 1, syncing: false }),
+      startSync: async () => ({ accepted: true, message: 'started' }),
+    });
+    await harness.run('循环达拉崩吧一整天');
+    const blocks = harness.captured.filter((m) => m.role === 'system').map((m) => m.content);
+    expect(blocks.some((b) => b.includes('【歌曲信息】'))).toBe(true);
+    expect(harness.outgoing).toEqual(['好听']);
+  });
+
+  it('skips injection without a match and without a bridge', async () => {
+    const harness = songsHarness({
+      match: async () => undefined,
+      status: async () => ({ songs: 0, updatedAt: 0, syncing: false }),
+      startSync: async () => ({ accepted: false, message: 'busy' }),
+    });
+    await harness.run('今天天气不错');
+    expect(harness.captured.filter((m) => m.role === 'system').some((m) => m.content.includes('歌曲信息'))).toBe(false);
+
+    const bare = songsHarness(undefined);
+    await bare.run('?同步歌曲');
+    expect(bare.outgoing[0]).toContain('未启用');
+  });
+
+  it('starts a sync and reports busy state', async () => {
+    let syncing = false;
+    const harness = songsHarness({
+      match: async () => undefined,
+      status: async () => ({ songs: 3, updatedAt: 1, syncing }),
+      startSync: async () => {
+        if (syncing) return { accepted: false, message: '已有同步任务在运行，请等待完成后再试。' };
+        syncing = true;
+        return { accepted: true, message: '🔄 歌曲库同步已开始' };
+      },
+    });
+    await harness.run('?同步歌曲');
+    expect(harness.outgoing[0]).toContain('同步已开始');
+    await harness.run('?同步歌曲');
+    expect(harness.outgoing[1]).toContain('已有同步任务');
+  });
+});
+
+describe('?广播', () => {  function broadcastHarness() {
     const calls: string[] = [];
     return {
       calls,

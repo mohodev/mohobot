@@ -236,8 +236,26 @@ personaAb:
 | 命令（管理员） | 说明 |
 |---|---|
 | `?用量 [天数]` | 近 N 天分通道统计（默认 1 天，最多 30 天）：次数 / 输入 / 输出 tokens + 总计 |
+| `?同步歌曲` | 后台同步 VCPedia 新歌（约十几分钟），完成后在当前频道通知 |
 
 `?广播 <内容>` 是两步走的服务器广播（Discord 没有 QQ 好友列表可枚举，只覆盖 bot 能看到的服务器，每个服发到首个文字频道；私聊不打扰）：先 `?广播 <内容>` 预告（预览发到管理日志频道），10 分钟内 `?广播确认` 才真正扇出，`?广播取消` 撤销。结果（含失败服）会汇总回管理频道。
+
+## 歌曲库（VCPedia）
+
+上游 `mohobot/music_knowledge/` 的数据源和字段原样跟随：VCPedia 分类全量分页 + 经典 `revisions` 接口取 wikitext（`rest.php` 在 Anubis 后面，不碰），解析 Songbox（演唱/UP主/词曲编混调/PV/曲绘/BV 号）+ `<poem>` 歌词，存 SQLite kv。聊天里提到歌名（`《》`最高置信）或歌词片段时，自动注入【歌曲信息】块（介绍 + 制作名单 + 全文歌词），只进本次请求不写上下文：
+
+```bash
+npx tsx scripts/sync-songs.ts --limit=50  # 先小批量冒烟
+npx tsx scripts/sync-songs.ts             # 全量（约 4000 首，十几分钟）
+```
+
+`?同步歌曲`（管理员）后台同步，完成后在当前频道通知。`?用量` 同理。配置：
+
+```yaml
+# data/config/bots/main.yaml
+songs:
+  enabled: true
+```
 
 ## 趣味与迎新插件
 

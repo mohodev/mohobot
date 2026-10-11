@@ -271,6 +271,19 @@ export const BotConfigSchema = z.object({
     })
     .default({}),
   /**
+   * Song knowledge: recognizes song titles and lyric fragments in chat and
+   * injects a 【歌曲信息】 block (intro + credits + full lyrics) for the
+   * model, request-scoped only. Library syncs from VCPedia; see
+   * scripts/sync-songs.ts and the `?同步歌曲` admin command.
+   */
+  songs: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Minimum bare song-name length for context-word matching. */
+      minNameLength: z.number().int().min(2).max(10).default(3),
+    })
+    .default({}),
+  /**
    * Silently ignore auto-replies and a sender repeating the same text
    * `maxRepeats` times within `windowMs` (spam, stuck clients, bot echo loops).
    */

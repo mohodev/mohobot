@@ -28,6 +28,9 @@ import { MessagePipeline, type PipelineStats } from '../pipeline/pipeline.js';
 import { PersonaAbService } from '../pipeline/persona-ab.js';
 import { BroadcastManager } from '../admin/broadcast.js';
 import { UsageRecorder, UsageRecordingProvider } from '../ai/usage.js';
+import { SongStore } from '../songs/database.js';
+import { formatSongBlock, matchSong } from '../songs/matcher.js';
+import { DEFAULT_VCPEDIA_CONFIG, syncVcpedia } from '../songs/vcpedia.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
 import { EmotionManager } from '../emotion/manager.js';
@@ -79,6 +82,8 @@ export class BotRuntime implements Managed {
   #emotion?: EmotionManager;
   #usage?: UsageRecorder;
   #broadcast?: BroadcastManager;
+  #songStore?: SongStore;
+  #songSyncing = false;
   #sessions?: SessionManager;
   #plugins?: PluginManager;
   #pipeline?: MessagePipeline;
@@ -270,6 +275,18 @@ export class BotRuntime implements Managed {
       })
       : undefined;
     this.#emotion = emotion;
+    // Song library (VCPedia). Index loads at boot when enabled; matching is
+    // pure CPU over the in-memory index, so per-turn cost is negligible.
+    let songStore: SongStore | undefined;
+    if (cfg.songs.enabled && this.#deps.storage) {
+      songStore = new SongStore({ storage: this.#deps.storage, logger: this.#logger });
+      const indexed = await songStore.reload().catch((error) => {
+        this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'song index load failed');
+        return 0;
+      });
+      this.#logger.info({ songs: indexed }, 'song library ready');
+    }
+    this.#songStore = songStore;
     // Guild broadcast (preview -> confirm). All gateway calls happen lazily
     // inside command handling, so construction order vs gateway start is free.
     const broadcast = new BroadcastManager({
@@ -367,6 +384,55 @@ export class BotRuntime implements Managed {
         confirm: () => broadcast.confirm(),
         cancel: () => broadcast.cancel(),
       },
+      songs: songStore ? {
+        match: async (text: string) => {
+          try {
+            const hit = matchSong(text, songStore!.index(), { minNameLength: cfg.songs.minNameLength });
+            if (!hit) return undefined;
+            const detail = await songStore!.get(hit.name);
+            return detail ? formatSongBlock(detail) : undefined;
+          } catch {
+            return undefined;
+          }
+        },
+        status: async () => {
+          const stats = await songStore!.stats().catch(() => ({ totalSongs: 0, updatedAt: 0 }));
+          return { songs: stats.totalSongs, updatedAt: stats.updatedAt, syncing: this.#songSyncing };
+        },
+        startSync: async (channelId: string) => {
+          if (this.#songSyncing) return { accepted: false, message: '已有同步任务在运行，请等待完成后再试。' };
+          if (!this.#gateway) return { accepted: false, message: '网关未就绪，稍后再试。' };
+          this.#songSyncing = true;
+          const gateway = this.#gateway;
+          this.#deps.tasks.spawn(async () => {
+            const started = Date.now();
+            try {
+              const result = await syncVcpedia(
+                { ...DEFAULT_VCPEDIA_CONFIG },
+                (detail) => songStore!.upsert(detail),
+              );
+              const indexed = await songStore!.reload().catch(() => 0);
+              const elapsed = Math.round((Date.now() - started) / 1000);
+              await gateway.send({
+                channelId,
+                content: `✅ 歌曲库同步完成（${elapsed}秒）：新增 ${result.added.length} 首，跳过 ${result.skipped}，失败 ${result.failed.length}，当前共 ${indexed} 首。`,
+                suppressMentions: true,
+              }).catch(() => {});
+              this.#logger.info({ added: result.added.length, indexed }, 'song sync completed');
+            } catch (error) {
+              await gateway.send({
+                channelId,
+                content: `❌ 歌曲库同步失败：${error instanceof Error ? error.message : String(error)}`,
+                suppressMentions: true,
+              }).catch(() => {});
+              this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'song sync failed');
+            } finally {
+              this.#songSyncing = false;
+            }
+          }, { name: `${this.name}:song-sync`, timeoutMs: 3_600_000 });
+          return { accepted: true, message: '🔄 歌曲库同步已开始（约需十几分钟），完成后会在这里通知。' };
+        },
+      } : undefined,
     });
 
     // Redacted operational summaries go to the configured private log channel.

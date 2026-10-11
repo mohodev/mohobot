@@ -1,0 +1,16 @@
+{
+  "name": "search",
+  "version": "1.0.0",
+  "description": "Web search (Anysearch MCP, then DuckDuckGo, then Wikipedia). Usage: 搜索 <关键词>. Silent on total outage.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": true,
+  "priority": 88,
+  "config": {
+    "backends": ["anysearch", "duckduckgo", "wikipedia"],
+    "maxResults": 3,
+    "timeoutMs": 12000,
+    "anysearchUrl": "https://api.anysearch.com/mcp",
+    "anysearchKey": ""
+  }
+}

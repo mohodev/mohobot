@@ -101,6 +101,7 @@ export const ADMIN_COMMAND_ALIASES: Record<string, string> = {
   '广播预告': 'broadcast',
   '广播确认': 'broadcast-confirm',
   '广播取消': 'broadcast-cancel',
+  '同步歌曲': 'songsync',
 };
 
 /** Normalizes a `?ab` vote token; returns null for anything that is not a vote. */
@@ -138,6 +139,8 @@ export interface PipelineDeps {
   usage?: UsageBridge;
   /** Two-step guild broadcast for `?广播*`. Omitted = feature off. */
   broadcast?: BroadcastBridge;
+  /** Song recognition + library sync for `?同步歌曲`. Omitted = feature off. */
+  songs?: SongBridge;
   /**
    * Relationship tracking. The block is injected before the model call and the
    * turn is scheduled after delivery; omitted (or disabled) = feature off.
@@ -153,6 +156,15 @@ export interface PipelineDeps {
 /** The slice of the usage recorder the pipeline needs. */
 export interface UsageBridge {
   report(days: number): Promise<string>;
+}
+
+/** The slice of the song library the pipeline needs. */
+export interface SongBridge {
+  /** Returns the 【歌曲信息】 block for chat text, or undefined. Never throws. */
+  match(text: string): Promise<string | undefined>;
+  status(): Promise<{ songs: number; updatedAt: number; syncing: boolean }>;
+  /** Starts a background sync; completion is reported to the channel. */
+  startSync(channelId: string): Promise<{ accepted: boolean; message: string }>;
 }
 
 /**
@@ -660,6 +672,16 @@ export class MessagePipeline {
         log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'emotion block build failed; continuing without it');
       }
     }
+    // Song recognition: titles and lyric fragments in the user's text resolve
+    // to a 【歌曲信息】 block (intro + credits + lyrics), request-scoped only.
+    let songBlock: string | undefined;
+    if (this.#deps.songs) {
+      try {
+        songBlock = await this.#deps.songs.match(prompt);
+      } catch (error) {
+        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'song match failed; continuing without it');
+      }
+    }
     // Older turns that were compacted out of the live window. Optional on the
     // session contract, and a lookup failure must never cost the reply.
     let historySummary: string | undefined;
@@ -689,6 +711,7 @@ export class MessagePipeline {
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
       ...(emotionBlock ? [{ role: 'system' as const, content: emotionBlock }] : []),
+      ...(songBlock ? [{ role: 'system' as const, content: songBlock }] : []),
       ...messages.filter((m) => m.role !== 'system'),
     ];
 
@@ -901,6 +924,10 @@ export class MessagePipeline {
       await this.#broadcastCommand(canonical, args, message);
       return true;
     }
+    if (canonical === 'songsync') {
+      await this.#songSyncCommand(message);
+      return true;
+    }
     if (canonical === 'status') {
       const stats = this.stats();
       await this.#reply(message, `管理状态：已处理 ${stats.handled}，已回复 ${stats.replied}，AI 失败 ${stats.aiFailures}，限流 ${stats.rateLimited}`);
@@ -943,6 +970,17 @@ export class MessagePipeline {
       return;
     }
     await this.#reply(message, await broadcast.preview(content, message.author.id).catch((error) => `预告失败：${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  /** `?同步歌曲` - starts a background VCPedia sync with completion notice. */
+  async #songSyncCommand(message: MohoMessage): Promise<void> {
+    const songs = this.#deps.songs;
+    if (!songs) {
+      await this.#reply(message, '歌曲库未启用（bot 配置 `songs.enabled` 为 false）。');
+      return;
+    }
+    const started = await songs.startSync(message.channel.id).catch(() => null);
+    await this.#reply(message, started ? started.message : '同步启动失败。');
   }
 
   /** `?好感度` / `?关系阶段` / `?好感排行` - read-only relationship state. */
