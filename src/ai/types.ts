@@ -18,6 +18,12 @@ export interface ChatOptions {
   stream?: boolean;
   /** Scheduler lane; defaults to reply. Kept out of provider HTTP payloads. */
   task?: 'reply' | 'vision' | 'planner' | 'reflection' | 'profile' | 'world' | 'admin' | 'summary' | 'ab';
+  /**
+   * Accounting hint only (never sent upstream): which chat session this call
+   * belongs to. Lets `?用量 会话` attribute reply tokens per group/DM while
+   * background lanes (summary, ab, vision) stay unattributed.
+   */
+  channelId?: string;
 }
 
 export interface AIUsage {

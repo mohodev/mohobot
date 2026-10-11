@@ -227,7 +227,7 @@ describe('model failure replies (user-facing)', () => {
 describe('?用量', () => {
   it('reports through the bridge and parses the day window', async () => {
     const seen: number[] = [];
-    const harness = build({ usage: { report: async (days: number) => { seen.push(days); return `report-${days}`; } } });
+    const harness = build({ usage: { report: async (days: number) => { seen.push(days); return `report-${days}`; }, sessionReport: async (days: number) => `session-${days}` } });
     await harness.run('?用量');
     await harness.run('?用量 7');
     await harness.run('?用量 nonsense');
@@ -235,15 +235,27 @@ describe('?用量', () => {
     expect(seen).toEqual([1, 7, 1]);
   });
 
+  it('routes 会话 to the session report with its own day window', async () => {
+    const seen: number[] = [];
+    const harness = build({ usage: { report: async () => 'should-not-fire', sessionReport: async (days: number) => { seen.push(days); return `session-${days}`; } } });
+    await harness.run('?用量 会话');
+    await harness.run('?用量 会话 7');
+    await harness.run('?用量 会话 nonsense');
+    expect(harness.outgoing).toEqual(['session-1', 'session-7', 'session-1']);
+    expect(seen).toEqual([1, 7, 1]);
+  });
+
   it('degrades gracefully without a bridge', async () => {
     const harness = build({});
     await harness.run('?用量');
+    await harness.run('?用量 会话');
     expect(harness.outgoing[0]).toContain('未启用');
   });
 
   it('stays silent for non-admins', async () => {
-    const harness = build({ usage: { report: async () => 'never' } }, );
+    const harness = build({ usage: { report: async () => 'never', sessionReport: async () => 'never' } }, );
     await harness.run('?用量', false);
+    await harness.run('?用量 会话', false);
     expect(harness.outgoing).toHaveLength(0);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createNullLogger } from '../core/logger.js';
-import type { Storage } from '../storage/types.js';
+import type { Storage, QueryFilter } from '../storage/types.js';
 import type { AIProvider } from './types.js';
 import { moduleForTask, UsageRecorder, UsageRecordingProvider } from './usage.js';
 
@@ -15,7 +15,12 @@ function memoryStorage(): Storage & { rows: Map<string, unknown> } {
     async save<T>(key: string, value: T) { rows.set(key, value); },
     async get<T>(key: string) { return rows.get(key) as T | undefined; },
     async delete(key: string) { rows.delete(key); },
-    async query() { return []; },
+    async query<T>(filter: QueryFilter) {
+      const prefix = typeof filter?.prefix === 'string' ? filter.prefix : '';
+      return [...rows.entries()]
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([key, value]) => ({ key, value: value as T, updatedAt: 0 }));
+    },
     async purgeExpired() { return 0; },
     async close() {},
   };
@@ -81,15 +86,40 @@ describe('UsageRecorder', () => {
     expect(two.find((row) => row.module === 'reply')).toMatchObject({ calls: 2, input: 30, output: 3 });
   });
 
-  it('renders an empty and a populated report', async () => {
+  it('renders averages per call and an empty and a populated report', async () => {
     const storage = memoryStorage();
     const recorder = new UsageRecorder({ storage, logger, now: () => 1_000_000 });
     expect(await recorder.report('main', 1)).toContain('暂无数据');
     await recorder.record('main', 'reply', { input: 100, output: 20 });
+    await recorder.record('main', 'reply', { input: 200, output: 60 });
     const report = await recorder.report('main', 7);
     expect(report).toContain('用量统计（近7天）');
     expect(report).toContain('主回复');
     expect(report).toContain('总计');
+    // 2 calls: 150 in / 40 out on average.
+    expect(report).toContain('均 150 / 40');
+  });
+
+  it('ranks sessions by spend and stays quiet without data', async () => {
+    const storage = memoryStorage();
+    const recorder = new UsageRecorder({ storage, logger, now: () => 1_000_000 });
+    expect(await recorder.sessionReport('main', 1)).toContain('暂无数据');
+
+    await recorder.record('main', 'reply', { input: 10, output: 1 }, 'chan-a');
+    await recorder.record('main', 'reply', { input: 10, output: 1 }, 'chan-a');
+    await recorder.record('main', 'summary', { input: 30, output: 3 }, 'chan-b');
+    await recorder.record('main', 'reply', { input: 5, output: 1 }); // no channel: not attributed
+
+    const rows = await recorder.sessionTotals('main', 1);
+    expect(rows).toHaveLength(2);
+    // chan-a first (2 calls), chan-b second (1 call, but 30 tokens).
+    expect(rows[0]).toMatchObject({ channelId: 'chan-a', calls: 2, input: 20, output: 2 });
+    expect(rows[1]).toMatchObject({ channelId: 'chan-b', calls: 1, input: 30, output: 3 });
+
+    const report = await recorder.sessionReport('main', 7);
+    expect(report).toContain('会话用量统计（近7天，Top 2）');
+    expect(report).toContain('chan-a');
+    expect(report).toContain('均 10 / 1');
   });
 
   it('never throws on storage failure', async () => {
@@ -110,10 +140,12 @@ describe('UsageRecordingProvider', () => {
     expect(provider.model).toBe('test-model');
     expect(await provider.health()).toEqual({ ok: true });
 
-    const response = await provider.chat([{ role: 'user', content: 'hi' }], { task: 'summary' });
+    const response = await provider.chat([{ role: 'user', content: 'hi' }], { task: 'summary', channelId: 'chan-x' });
     expect(response.content).toBe('ok');
     const rows = await recorder.totals('main', 1);
     expect(rows).toMatchObject([{ module: 'summary', calls: 1, input: 10, output: 2 }]);
+    // channelId rides through to the session bucket, not to the HTTP payload.
+    expect(await recorder.sessionTotals('main', 1)).toMatchObject([{ channelId: 'chan-x', calls: 1, input: 10, output: 2 }]);
   });
 
   it('records failures as calls without tokens', async () => {

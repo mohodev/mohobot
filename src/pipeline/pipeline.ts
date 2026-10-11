@@ -156,6 +156,8 @@ export interface PipelineDeps {
 /** The slice of the usage recorder the pipeline needs. */
 export interface UsageBridge {
   report(days: number): Promise<string>;
+  /** Per-session (group/DM) ranking, busiest first. */
+  sessionReport(days: number): Promise<string>;
 }
 
 /** The slice of the song library the pipeline needs. */
@@ -759,6 +761,8 @@ export class MessagePipeline {
         timeoutMs: cfg.ai.timeoutMs,
         stream: cfg.ai.stream,
         signal: controller.signal,
+        // Accounting hint only: lets `?用量 会话` rank rooms by real spend.
+        channelId: message.channel.id,
         onDelta: cfg.ai.stream ? (delta) => { protocolDeltas.push(delta); this.#trace(trace, 'delta', { length: delta.length }); } : undefined,
       });
       reply = response.content.trim() || protocolDeltas.join('').trim();
@@ -937,15 +941,24 @@ export class MessagePipeline {
     return true;
   }
 
-  /** `?用量 [天数]` - token accounting. */
+  /**
+   * `?用量 [天数]` per-module totals, `?用量 会话 [天数]` per-session ranking.
+   * Mirrors upstream's usage_stats plugin (module view + session Top 10).
+   */
   async #usageCommand(args: string[], message: MohoMessage): Promise<void> {
     const usage = this.#deps.usage;
     if (!usage) {
       await this.#reply(message, '用量统计未启用（需要持久化存储）。');
       return;
     }
-    const days = Number.parseInt(args[0] ?? '', 10);
-    const report = await usage.report(Number.isFinite(days) && days > 0 ? days : 1).catch(() => null);
+    const [first, second] = args;
+    const wantsSession = (first ?? '').trim() === '会话';
+    const rawDays = wantsSession ? second : first;
+    const days = Number.parseInt(rawDays ?? '', 10);
+    const window = Number.isFinite(days) && days > 0 ? days : 1;
+    const report = wantsSession
+      ? await usage.sessionReport(window).catch(() => null)
+      : await usage.report(window).catch(() => null);
     await this.#reply(message, report ?? '用量统计读取失败。');
   }
 

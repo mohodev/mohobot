@@ -378,7 +378,10 @@ export class BotRuntime implements Managed {
       },
       emotion,
       personaAb,
-      usage: this.#usage ? { report: (days: number) => this.#usage!.report(cfg.id, days) } : undefined,
+      usage: this.#usage ? {
+        report: (days: number) => this.#usage!.report(cfg.id, days),
+        sessionReport: (days: number) => this.#usage!.sessionReport(cfg.id, days),
+      } : undefined,
       broadcast: {
         preview: (content: string, authorId: string) => broadcast.preview(content, authorId),
         confirm: () => broadcast.confirm(),

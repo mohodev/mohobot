@@ -59,6 +59,16 @@ export interface UsageTotals {
 }
 
 const KEY_PREFIX = 'usage:';
+const CHANNEL_PREFIX = 'usage-chan:';
+
+/** Averages are per call: tokens are only comparable across calls that way. */
+function averages(totals: UsageTotals): { avgInput: number; avgOutput: number } {
+  if (totals.calls === 0) return { avgInput: 0, avgOutput: 0 };
+  return {
+    avgInput: Math.round((totals.input / totals.calls) * 10) / 10,
+    avgOutput: Math.round((totals.output / totals.calls) * 10) / 10,
+  };
+}
 
 function dayKey(now: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat('zh-CN', {
@@ -79,7 +89,7 @@ export class UsageRecorder {
     this.#now = deps.now ?? Date.now;
   }
 
-  async record(botId: string, module: UsageModule, usage: UsageNumbers | undefined): Promise<void> {
+  async record(botId: string, module: UsageModule, usage: UsageNumbers | undefined, channelId?: string): Promise<void> {
     try {
       const input = usage?.input ?? usage?.promptTokens ?? 0;
       const output = usage?.output ?? usage?.completionTokens ?? 0;
@@ -90,6 +100,17 @@ export class UsageRecorder {
         input: current.input + input,
         output: current.output + output,
       });
+      // Per-session bucket: grouped across modules so `?用量 会话` can rank
+      // rooms by where the quota actually goes.
+      if (channelId) {
+        const channelKey = `${CHANNEL_PREFIX}${botId}:${dayKey(new Date(this.#now()))}:${channelId}`;
+        const currentChannel = (await this.#storage.get<UsageTotals>(channelKey)) ?? { calls: 0, input: 0, output: 0 };
+        await this.#storage.save(channelKey, {
+          calls: currentChannel.calls + 1,
+          input: currentChannel.input + input,
+          output: currentChannel.output + output,
+        });
+      }
     } catch (error) {
       this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'usage record failed');
     }
@@ -122,13 +143,55 @@ export class UsageRecorder {
   async report(botId: string, days: number): Promise<string> {
     const rows = await this.totals(botId, days);
     if (rows.length === 0) return `用量统计（近${days}天）：暂无数据。`;
-    const lines = rows.map((row) => `${row.name}：${row.calls} 次 / 输入 ${row.input} / 输出 ${row.output} tokens`);
+    const lines = rows.map((row) => {
+      const avg = averages(row);
+      return `${row.name}：${row.calls} 次 / 输入 ${row.input} / 输出 ${row.output} tokens（均 ${avg.avgInput} / ${avg.avgOutput}）`;
+    });
     const total = rows.reduce(
       (sum, row) => ({ calls: sum.calls + row.calls, input: sum.input + row.input, output: sum.output + row.output }),
       { calls: 0, input: 0, output: 0 },
     );
-    lines.push(`总计：${total.calls} 次 / 输入 ${total.input} / 输出 ${total.output} tokens`);
+    const totalAvg = averages(total);
+    lines.push(`总计：${total.calls} 次 / 输入 ${total.input} / 输出 ${total.output} tokens（均 ${totalAvg.avgInput} / ${totalAvg.avgOutput}）`);
     return [`用量统计（近${days}天）`, ...lines].join('\n');
+  }
+
+  /** Per-session (channel) totals over the window, busiest first. */
+  async sessionTotals(botId: string, days: number, limit = 10): Promise<Array<{ channelId: string } & UsageTotals>> {
+    const window = Math.max(1, Math.min(30, Math.trunc(days) || 1));
+    const out = new Map<string, UsageTotals>();
+    for (let back = 0; back < window; back += 1) {
+      const day = dayKey(new Date(this.#now() - back * 86_400_000));
+      try {
+        const rows = await this.#storage.query<UsageTotals>({ prefix: `${CHANNEL_PREFIX}${botId}:${day}:`, limit: 2000 });
+        for (const row of rows) {
+          const channelId = row.key.slice(`${CHANNEL_PREFIX}${botId}:${day}:`.length);
+          if (!channelId) continue;
+          const total = out.get(channelId) ?? { calls: 0, input: 0, output: 0 };
+          total.calls += row.value.calls ?? 0;
+          total.input += row.value.input ?? 0;
+          total.output += row.value.output ?? 0;
+          out.set(channelId, total);
+        }
+      } catch (error) {
+        this.#logger.warn({ err: error instanceof Error ? error.message : String(error) }, 'session usage read failed');
+      }
+    }
+    return [...out.entries()]
+      .map(([channelId, totals]) => ({ channelId, ...totals }))
+      .sort((a, b) => b.calls - a.calls || b.input - a.input)
+      .slice(0, Math.max(1, Math.min(50, limit)));
+  }
+
+  /** `?用量 会话` text: busiest sessions, DM/group agnostic (ids are opaque). */
+  async sessionReport(botId: string, days: number): Promise<string> {
+    const rows = await this.sessionTotals(botId, days);
+    if (rows.length === 0) return `会话用量统计（近${days}天）：暂无数据。`;
+    const lines = rows.map((row, index) => {
+      const avg = averages(row);
+      return `${index + 1}. ${row.channelId}：${row.calls} 次 / 输入 ${row.input} / 输出 ${row.output} tokens（均 ${avg.avgInput} / ${avg.avgOutput}）`;
+    });
+    return [`会话用量统计（近${days}天，Top ${rows.length}）`, ...lines].join('\n');
   }
 }
 
@@ -152,7 +215,7 @@ export class UsageRecordingProvider implements AIProvider {
 
   async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<AIResponse> {
     const response = await this.#inner.chat(messages, options);
-    void this.#recorder.record(this.#botId, moduleForTask(options.task), response.usage as UsageNumbers | undefined);
+    void this.#recorder.record(this.#botId, moduleForTask(options.task), response.usage as UsageNumbers | undefined, options.channelId);
     return response;
   }
 
