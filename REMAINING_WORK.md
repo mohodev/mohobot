@@ -16,22 +16,21 @@
 - [x] Phase 5 部分：审计 API（`GET /api/ops/operator-audit`）
 - [x] 已知 bug 修复：`<@id>` mention 残留；好感度数字滞后（cooldown/interval 默认调优）
 
-## Operator Agent 剩余（Phase 5）
+## Operator Agent Phase 5 ✅（2026-10-17 全部收口）
 
-Phase 0–4 已全部完成；Phase 5 按目录并行推进。
-
-### 可并行（互不冲突）
-各占一个独立目录，可由多个子 agent 同时开工：
-- [x] ACP server 接入 operator（外部编辑器可驱动）— `src/acp/**`：`tools/list` + `tools/call`，经 `src/acp/operator-tools.ts` 适配（read 工具直跑，write/danger 拒绝并说明），`agentCapabilities.tools: true`，测试 `src/acp/operator-tools.test.ts`
-- [ ] opencode-cli provider 接入（用 agent 当 model）— `src/ai/**`
-- [ ] WebUI 审计视图（目前仅有 API `GET /api/ops/operator-audit`）— `webui/**`
+### 可并行（互不冲突）— 均已完成
+- [x] ACP server 接入 operator — `src/acp/**`：`tools/list` + `tools/call`，经 `src/acp/operator-tools.ts` 适配（read 直跑，write/danger 拒绝并说明），`agentCapabilities.tools: true`
+- [x] opencode-cli provider 接入（用 agent 当 model）— `src/ai/opencode-cli.ts`：`options.agent` 生效时以 `opencode run --agent <name>` 取代 `-m <model>`（agent 自带模型/工具配置），standalone 回退保留 `--agent`，构造期校验 agent 名（防 flag 注入）
+- [x] WebUI 审计视图 — `webui/`：新增「运维审计」页（可用工具表 + 调用记录表），数据来自 `GET /api/ops/operator-tools` 与 `GET /api/ops/operator-audit`，`audit.read` 权限门控
 - [x] 端到端测试：agent 诊断真实流程 — `plugins/operator/agent.e2e.test.ts`（3 例：多步诊断 / 写操作暂存待确认 / 未知工具恢复）
 
-### 需顺序/集成
-需要核心接线（runtime provider / plugin-context），必须等上面的并行件落地后再串行做：
-- [ ] operator 工具句柄注入 plugin-context/provider 通道（ACP 与 WebUI 共用同一套工具）
-- [ ] `?op agent` 写操作暂存的跨进程确认（restart 后 pending 令牌失效策略）
-- [ ] 集成收尾：端到端测试通过后再考虑默认打开 `plugins/operator/plugin.json` 的 `enabled`
+### 顺序/集成 — 均已完成
+- [x] operator 工具句柄注入 plugin-context/provider 通道：registry + tools 上移为 `src/operator/` 单一事实来源（插件 `plugins/operator/*.ts` 仅 re-export），ACP server（`src/acp/index.ts`）与 admin WebUI（`GET /api/ops/operator-tools`）共用同一套工具；共享 `createSpawnExec()`（`src/operator/exec.ts`）
+- [x] `?op agent` 写操作暂存的跨进程确认：`stage()` 落盘时打上进程 bootId，`consume()` 校验——进程重启（或旧版本遗留的 pending）一律失效并清除，提示重新发起；模块态 bootId 只随真实重启轮换，插件热重载不受影响
+- [x] 集成收尾：根套件 120 文件/787 测试、插件套件 6 测试、双 typecheck、`scan-secrets` 全部通过后，`plugins/operator/plugin.json` 默认启用（`?op` 仍双重门控：pipeline `?` 管理路由 + registry `isAdmin` 校验）
 
-## 需人动手
-- [ ] 安全收尾（见 `docs/AUDIT.md`）：在 Kilo 后台吊销并轮换泄露过的凭据；如需清历史再做 `git filter-repo` + 强制推送
+## 决策记录
+- ~~需人动手：Kilo 凭据吊销~~ → **2026-10-17：Kilo 账号不可用、凭据无法吊销，按失效凭据接受残留风险，不再跟进**（详见 `docs/AUDIT.md` 决策记录；可选加固 `git filter-repo` 清史属非必须）。
+
+## 当前无遗留计划项
+README「路线图」六阶段为长期方向，非待办清单。

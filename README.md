@@ -162,6 +162,8 @@ npx tsx src/acp/index.ts
 
 支持的方法：`initialize`、`session/new`、`session/prompt`、`session/cancel`、`session/delete`、`session/list`、`session/load`、`session/resume`、`session/close`。流式响应通过 `session/update` 通知推送。
 
+ACP server 同时把 operator 运维工具暴露给编辑器（`tools/list` / `tools/call`，与聊天插件 `?op`、管理 WebUI 共用 `src/operator/` 同一套工具表）：`read` 工具（如 `git`、`diag`）直接执行，`write`/`danger` 工具在 ACP 通道一律拒绝并提示改用聊天通道二次确认。设 `ACP_OPERATOR_TOOLS=0` 可完全关闭。
+
 ## OpenCode CLI Provider
 
 MohoBot 内置 `opencode-cli` provider，通过子进程调用 `opencode run`，复用当前 OpenCode 登录态，无需 API key。
@@ -181,6 +183,13 @@ options:
 ```yaml
 options:
   standalone: true
+```
+
+也可以用 OpenCode 里配置的具名 agent 代替裸模型（`opencode run --agent <name>`，agent 自带的模型与工具配置生效，命令行不再传 `-m`）：
+
+```yaml
+options:
+  agent: moho-maintainer
 ```
 
 ## 好感度与关系阶段
@@ -312,9 +321,9 @@ export default plugin;
 
 ## 安全提示
 
-仓库曾提交过疑似真实 Kilo Token。当前工作树已移除，但 Git 历史中的值不会因普通删除而消失：必须在 Kilo 后台撤销并轮换，然后按团队策略清理 Git 历史与缓存副本。
+仓库早期历史曾提交过疑似真实 Kilo Token（工作树早已移除，历史中的值不会因普通删除而消失）。Kilo 侧账号不可用，该凭据无法吊销，项目决策为**将其视为失效凭据、接受残留风险，不再跟进轮换**；如未来需要彻底清除历史，可用 `git filter-repo`（破坏性操作，需全员重新克隆）。
 
-可用 `npm run scan-secrets`（加 `-- --history` 扫描历史）本地检查凭据泄漏，输出已脱敏；`npm test` 也会拦截被跟踪文件中的凭据形状值。2026-10 复查的具体发现与待办见 [`docs/AUDIT.md`](docs/AUDIT.md)。
+`npm run scan-secrets`（加 `-- --history` 扫描历史）可持续检查凭据泄漏，输出已脱敏；`npm test` 内含守卫测试，拦截被跟踪文件中的凭据形状值。2026-10 复查的具体发现与决策记录见 [`docs/AUDIT.md`](docs/AUDIT.md)。
 
 ## 路线图
 
