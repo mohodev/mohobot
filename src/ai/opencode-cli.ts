@@ -23,6 +23,12 @@
  * opts back into per-call isolation, and a service-transport failure retries
  * once with `--standalone` so a broken service can never take chat down.
  *
+ * `options.agent` swaps the model for a named OpenCode agent
+ * (`opencode run --agent <name>`): the agent's own model/tools config applies
+ * and the configured `model` is no longer passed on the command line. This is
+ * how MohoBot can run an agent persona (e.g. a maintenance agent) "as the
+ * model" while keeping the provider contract.
+ *
  * Hard rules honoured here (same contract as every provider):
  *  - only AIError escapes chat();
  *  - the child process is always killed on timeout/abort;
@@ -59,6 +65,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_PROMPT_CHARS = 100_000;
 /** Best-effort `session delete` budget: never slow a turn for housekeeping. */
 const SESSION_CLEANUP_TIMEOUT_MS = 10_000;
+/** OpenCode agent names are single-token identifiers; keep flag injection impossible. */
+const AGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -142,6 +150,8 @@ function extractUsage(stdout: string): { input?: number; output?: number } | und
 export class OpenCodeCliProvider implements AIProvider {
   readonly name = 'opencode-cli';
   readonly model: string;
+  /** Named OpenCode agent, when options.agent is set (agent replaces -m). */
+  readonly agent?: string;
 
   readonly #logger: Logger;
   readonly #bin: string;
@@ -149,6 +159,7 @@ export class OpenCodeCliProvider implements AIProvider {
   readonly #timeoutMs: number;
   readonly #standalone: boolean;
   readonly #sessionCleanup: boolean;
+  readonly #agent?: string;
 
   constructor(cfg: AIConfig, deps: OpenCodeCliDeps) {
     this.#logger = deps.logger;
@@ -158,6 +169,14 @@ export class OpenCodeCliProvider implements AIProvider {
     // Default: reuse the resident `opencode service` (faster). Opt out with
     // `options.standalone: true` for a private server per call.
     this.#standalone = cfg.options['standalone'] === true;
+    const agent = cfg.options['agent'];
+    if (agent !== undefined && agent !== null) {
+      if (typeof agent !== 'string' || !AGENT_NAME.test(agent)) {
+        throw new Error(`opencode-cli options.agent must be an agent name (1-64 chars of A-Za-z0-9_.-), got ${JSON.stringify(agent)}`);
+      }
+      this.#agent = agent;
+      this.agent = agent;
+    }
     // Every one-shot `run` leaves a server-side session behind; delete it so
     // the operator's session list is not flooded. Opt out with
     // `options.sessionCleanup: false` when debugging the provider.
@@ -208,9 +227,14 @@ export class OpenCodeCliProvider implements AIProvider {
     }
   }
 
-  /** One-shot invocation args; `standalone` swaps the shared service for a private server. */
+  /**
+   * One-shot invocation args; `standalone` swaps the shared service for a
+   * private server. A configured agent replaces `-m <model>` with
+   * `--agent <name>` so the agent's own model/tooling applies.
+   */
   #args(model: string, prompt: string, standalone: boolean): string[] {
-    return ['run', ...(standalone ? ['--standalone'] : []), '-m', model, '--format', 'json', '--', prompt];
+    const selector = this.#agent ? ['--agent', this.#agent] : ['-m', model];
+    return ['run', ...(standalone ? ['--standalone'] : []), ...selector, '--format', 'json', '--', prompt];
   }
 
   /** Spawn one CLI invocation; resolve with stdout, reject with AIError. */

@@ -12,6 +12,7 @@
 
 import type { Plugin, PluginCommand, CommandContext } from '../../src/plugins/types.js';
 import type { ScopedStorage } from '../../src/storage/types.js';
+import { createSpawnExec } from '../../src/operator/exec.js';
 
 import {
   audit as writeAudit,
@@ -25,8 +26,8 @@ import {
   type AuditEntry,
   type OperatorEnv,
   type OperatorTool,
-} from './registry.js';
-import { operatorTools } from './tools.js';
+} from '../../src/operator/registry.js';
+import { operatorTools } from '../../src/operator/tools.js';
 
 interface OperatorSettings {
   rootDir: string;
@@ -46,7 +47,6 @@ function settings(config: Record<string, unknown>): OperatorSettings {
 }
 
 function envFor(command: CommandContext, storage: ScopedStorage, logger: OperatorEnv['logger'], rootDir: string, traces?: OperatorEnv['traces'], sessions?: OperatorEnv['sessions']): OperatorEnv {
-  const { exec } = spawnAdapter();
   return {
     callerId: command.message.author.id,
     isAdmin: command.message.author.isBotManager === true,
@@ -55,41 +55,7 @@ function envFor(command: CommandContext, storage: ScopedStorage, logger: Operato
     rootDir,
     traces,
     sessions,
-    exec,
-  };
-}
-
-/** Default exec: child_process with a hard kill after the deadline. */
-function spawnAdapter(): {
-  exec: OperatorEnv['exec'];
-} {
-  return {
-    async exec(command, args, options) {
-      const { spawn } = await import('node:child_process');
-      const timeoutMs = options?.timeoutMs ?? 30_000;
-      return new Promise((resolve) => {
-        const child = spawn(command, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
-        let stdout = '';
-        let stderr = '';
-        const timer = setTimeout(() => {
-          child.kill('SIGKILL');
-        }, timeoutMs);
-        child.stdout.on('data', (chunk: Buffer) => {
-          stdout += chunk.toString();
-        });
-        child.stderr.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString();
-        });
-        child.on('error', (error: Error) => {
-          clearTimeout(timer);
-          resolve({ code: 127, stdout, stderr: String(error.message) });
-        });
-        child.on('close', (code: number | null) => {
-          clearTimeout(timer);
-          resolve({ code: code ?? -1, stdout, stderr });
-        });
-      });
-    },
+    exec: createSpawnExec(),
   };
 }
 

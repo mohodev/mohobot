@@ -23,6 +23,7 @@ import { can, permissionsFor, type AdminPrincipal, type AdminRole } from './rbac
 import { BotControlError, type BotControlFacade } from './bot-control.js';
 import { routePolicy, type RoutePolicy } from './route-policy.js';
 import { OpsControlError, type OpsControlFacade } from './ops-control.js';
+import { listOperatorToolDescriptors } from '../operator/tools.js';
 import {TaskControlError,type TaskControlFacade}from'./task-control.js';
 import { ProviderControlError,type ProviderControl } from './provider-control.js';
 import type { ExtensionsControl } from './extensions-control.js';
@@ -336,6 +337,9 @@ export class AdminServer {
         .sort((a:any,b:any)=>(b?.ts??0)-(a?.ts??0))
         .slice(0,limit);
       return this.#ok({entries});
+    }
+    if(method==='GET'&&pathname==='/api/ops/operator-tools'){
+      return this.#ok({tools:listOperatorToolDescriptors()});
     }
     const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
     if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:this.#opts.taskControl?{items:this.#opts.taskControl.list()} : requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});

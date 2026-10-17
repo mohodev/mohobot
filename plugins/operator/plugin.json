@@ -4,7 +4,7 @@
   "description": "Operator agent framework: scoped, audited tools for diagnosing and maintaining the runtime.",
   "author": "mohobot",
   "main": "index.ts",
-  "enabled": false,
+  "enabled": true,
   "priority": 50,
   "config": {
     "rootDir": ".",

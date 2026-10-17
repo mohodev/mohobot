@@ -295,3 +295,50 @@ describe('opencode-cli registration', () => {
     expect(provider.model).toBe('opencode/ling-3.1-flash-free');
   });
 });
+
+describe('opencode-cli agent mode', () => {
+  it('replaces -m with --agent when options.agent is set', async () => {
+    const child = fakeChild();
+    const spawn = spawnSequence([child]);
+    const provider = new OpenCodeCliProvider(config({ options: { agent: 'moho-maintainer' } }), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: '巡检' }]);
+    emitJson(child, sampleEvents);
+    child.emit('close', 0);
+    await promise;
+
+    const args = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string[];
+    expect(args.slice(0, 3)).toEqual(['run', '--agent', 'moho-maintainer']);
+    expect(args).not.toContain('-m');
+    expect(args).not.toContain('opencode/ling-3.1-flash-free');
+    expect(provider.agent).toBe('moho-maintainer');
+  });
+
+  it('keeps --agent through the standalone fallback', async () => {
+    const broken = fakeChild();
+    const isolated = fakeChild();
+    const spawn = spawnSequence([broken, isolated]);
+    const provider = new OpenCodeCliProvider(config({ options: { agent: 'ops' } }), { logger, spawnImpl: spawn });
+
+    const promise = provider.chat([{ role: 'user', content: 'x' }]);
+    broken.stderr.emit('data', Buffer.from('Error: Managed service port 49374 is already in use'));
+    broken.emit('close', 1);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    emitJson(isolated, sampleEvents);
+    isolated.emit('close', 0);
+    await promise;
+
+    const calls = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+    for (const call of calls) {
+      expect(call[1]).toEqual(expect.arrayContaining(['--agent', 'ops']));
+      expect(call[1]).not.toContain('-m');
+    }
+    expect(calls[1]?.[1]).toContain('--standalone');
+  });
+
+  it('rejects invalid agent names at construction', () => {
+    for (const bad of ['', 'a;b', '--help', 'a b', 'a'.repeat(65), '-x']) {
+      expect(() => new OpenCodeCliProvider(config({ options: { agent: bad } }), { logger, spawnImpl: spawnSequence([]) })).toThrow(/agent/);
+    }
+  });
+});

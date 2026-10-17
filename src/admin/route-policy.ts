@@ -30,6 +30,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/ops\/chat-log$/,permission:'sessions.chat.read',action:'ops.chat-log.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/ops\/discord-chat-log$/,permission:'chats.log.read',action:'ops.discord-chat-log.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/ops\/operator-audit$/,permission:'audit.read',action:'ops.operator-audit.read',risk:'read',confirmation:false},
+{method:'GET',pattern:/^\/api\/ops\/operator-tools$/,permission:'audit.read',action:'ops.operator-tools.read',risk:'read',confirmation:false},
 {method:'DELETE',pattern:/^\/api\/ops\/sessions\/[^/]+$/,permission:'sessions.chat.delete',action:'ops.sessions.delete',risk:'impact',confirmation:true},
 {method:'GET',pattern:/^\/api\/tasks$/,permission:'tasks.read',action:'tasks.read',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/tasks\/[^/]+\/(pause|resume|run)$/,permission:'tasks.control',action:'tasks.control',risk:'impact',confirmation:true},
