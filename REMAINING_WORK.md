@@ -40,9 +40,10 @@
 - [ ] 交互：`?op agent <goal>` → agent 自主执行多步，每步回报告
 
 ### Phase 5 — 集成与硬化
+- [x] 审计 API（WebUI 可读 operator audit trail：GET /api/ops/operator-audit）
 - [ ] ACP server 接入 operator（外部编辑器可驱动）
 - [ ] opencode-cli provider 接入（用 agent 当 model）
-- [ ] 审计 UI（WebUI 展示 audit trail）
+- [ ] WebUI 审计视图
 - [ ] 端到端测试：agent 诊断一个真实 bug 并修复
 
 ## 剩余（需人动手）

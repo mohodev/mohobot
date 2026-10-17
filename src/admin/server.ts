@@ -327,6 +327,16 @@ export class AdminServer {
       const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>200))throw new HttpError(400,'invalid limit');
       return this.#ok({messages:chatLog.query({limit,direction:direction as DiscordChatDirection|undefined,channelId:stringParam(url,'channelId'),botId:stringParam(url,'botId')})});
     }
+    if(method==='GET'&&pathname==='/api/ops/operator-audit'){
+      const limit=intParam(url,'limit')??50;if(!Number.isSafeInteger(limit)||limit<1||limit>200)throw new HttpError(400,'invalid limit');
+      const records=await this.#opts.storage.query<any>({prefix:'plugin:',limit:500});
+      const entries=records
+        .filter((r:any)=>typeof r.key==='string'&&(r.key.endsWith(':operator:audit')||r.key.endsWith('operator:audit')))
+        .flatMap((r:any)=>Array.isArray(r.value)?r.value:[])
+        .sort((a:any,b:any)=>(b?.ts??0)-(a?.ts??0))
+        .slice(0,limit);
+      return this.#ok({entries});
+    }
     const opsSession=pathname.match(/^\/api\/ops\/sessions\/(.+)$/);if(method==='DELETE'&&opsSession){await requireOps(this.#opts.ops).deleteSession(decodeURIComponent(opsSession[1]!));return this.#ok({deleted:true});}
     if(method==='GET'&&pathname==='/api/tasks')return this.#ok({tasks:this.#opts.taskControl?{items:this.#opts.taskControl.list()} : requireOps(this.#opts.ops).listTasks({limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
     const taskAction=pathname.match(/^\/api\/tasks\/([^/]+)\/(pause|resume|run)$/);if(method==='POST'&&taskAction){const control=this.#opts.taskControl;if(!control)throw new HttpError(409,'task control unavailable');const id=decodeURIComponent(taskAction[1]!);const action=taskAction[2]!;const task=action==='pause'?control.pause(id):action==='resume'?control.resume(id):await control.runNow(id);return this.#ok({task});}
