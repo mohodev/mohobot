@@ -32,5 +32,15 @@
 ## 决策记录
 - ~~需人动手：Kilo 凭据吊销~~ → **2026-10-17：Kilo 账号不可用、凭据无法吊销，按失效凭据接受残留风险，不再跟进**（详见 `docs/AUDIT.md` 决策记录；可选加固 `git filter-repo` 清史属非必须）。
 
+## README 路线图收口（2026-10-17）
+原 6 阶段长期方向，本轮补齐缺口：
+- [x] 角色互聊 — `src/characters/cross-chat.ts` + `POST /api/characters/cross-chat`（轮转调度、硬回合上限、重复检测、超时熔断、沙箱 system prompt），权限 `characters.crosschat`
+- [x] 角色批量导入 — `src/characters/import.ts` + `POST /api/characters/import`（逐项校验/批内去重/dryRun/冲突 skip|overwrite/单项失败隔离），权限 `characters.import`
+- [x] MCP 工具权限与审计（权限+审计层）— `src/mcp/`（client/permissions/audit：默认拒绝、角色门控、参数脱敏、环形审计）+ `GET /api/mcp/policy`，权限 `mcp.read`
+- [x] 文档卫生 — `webui/index.md` 按代码实况重写（早前版本严重过时）
+
+剩余（非阻塞、属配置/部署后续）：
+- [ ] MCP 连接实际 server 的 transport（配置驱动的 stdio/HTTP 接入；权限+审计层已就绪，接上 transport 即可用）
+
 ## 当前无遗留计划项
 README「路线图」六阶段为长期方向，非待办清单。

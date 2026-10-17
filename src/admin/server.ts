@@ -4,6 +4,9 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import type { BotSnapshot } from '../bot/runtime.js';
 import { CharacterCatalog } from '../characters/catalog.js';
+import { importCharacters, type CharacterImportItem } from '../characters/import.js';
+import { CrossChatError, type CrossChatInput, type CrossChatResult } from '../characters/cross-chat.js';
+import { defaultPolicy as mcpDefaultPolicy } from '../mcp/permissions.js';
 import type { Logger, LogLevel } from '../core/logger.js';
 import type { LogBuffer } from '../core/log-buffer.js';
 import type { DiscordChatLogBuffer, DiscordChatDirection } from '../core/discord-chat-log.js';
@@ -57,6 +60,8 @@ export interface AdminServerOptions {
   extensions?: ExtensionsControl;
   debugChat?: DebugChatFacade;
   taskControl?: TaskControlFacade;
+  /** Cross-character chat runner (resolved provider injected by the host). */
+  crossChat?: (input: CrossChatInput & { botId?: string }) => Promise<CrossChatResult>;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -394,6 +399,41 @@ export class AdminServer {
       const saved = await this.#characters.save({ id: typeof input.id === 'string' ? input.id : undefined, name: String(input.name ?? '').trim(), prompt: String(input.prompt ?? ''), source: typeof input.source === 'string' ? input.source : undefined });
       return { status: 201, body: { ok: true, character: { ...saved, promptLength: saved.prompt.length } } };
     }
+    if (method === 'POST' && pathname === '/api/characters/import') {
+      const rawItems = input.items;
+      if (!Array.isArray(rawItems)) throw new HttpError(400, 'items must be an array');
+      const items: CharacterImportItem[] = rawItems.map((it) => {
+        const o = (it ?? {}) as Record<string, unknown>;
+        return {
+          id: typeof o.id === 'string' ? o.id : undefined,
+          name: String(o.name ?? '').trim(),
+          prompt: String(o.prompt ?? ''),
+          source: typeof o.source === 'string' ? o.source : undefined,
+          expectedRevision: typeof o.expectedRevision === 'string' ? o.expectedRevision : undefined,
+        };
+      });
+      const dryRun = input.dryRun === true;
+      const onConflict = input.onConflict === 'overwrite' ? 'overwrite' : 'skip';
+      const report = await importCharacters(this.#characters, items, { dryRun, onConflict });
+      return this.#ok({ report });
+    }
+    if (method === 'POST' && pathname === '/api/characters/cross-chat') {
+      if (!this.#opts.crossChat) throw new HttpError(409, 'cross-chat unavailable');
+      const characterIds = input.characterIds;
+      if (!Array.isArray(characterIds) || characterIds.length < 2) throw new HttpError(400, 'characterIds requires >= 2 entries');
+      const topic = String(input.topic ?? '').trim();
+      if (!topic) throw new HttpError(400, 'topic required');
+      const result = await this.#opts.crossChat({
+        characterIds: characterIds.map((x) => String(x)),
+        topic,
+        startWith: typeof input.startWith === 'string' ? input.startWith : undefined,
+        botId: typeof input.botId === 'string' ? input.botId : undefined,
+      });
+      return this.#ok({ result });
+    }
+    if (method === 'GET' && pathname === '/api/mcp/policy') {
+      return this.#ok({ rules: mcpDefaultPolicy.rules });
+    }
     if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
     const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
     if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#worldFor(this.#stateBotId(dry.botId)).get(),this.#deviceFor(this.#stateBotId(dry.botId)).get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
@@ -483,6 +523,8 @@ export class AdminServer {
       if (error.code === 'disabled') return new HttpError(403, error.code);
       return new HttpError(400, error.code);
     }
+    if(error instanceof CrossChatError){if(error.code==='character_not_found')return new HttpError(404,error.code);return new HttpError(400,error.code);}
+    if(error instanceof Error&&error.message==='provider_unavailable')return new HttpError(409,error.message);
     if(error instanceof Error&&error.message==='character revision conflict')return new HttpError(409,error.message);
     if(error instanceof Error&&error.message==='character not found')return new HttpError(404,error.message);
     return new HttpError(400, error instanceof Error ? error.message : 'bad request');

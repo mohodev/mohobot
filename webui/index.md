@@ -1,44 +1,36 @@
 # MohoBot WebUI 状态与交付范围
 
-原文件声称“所有功能已一次性写入完成”，但内容只是 Markdown 清单，没有前端应用、后端 API、鉴权、状态管理或测试，因此不能运行。本文件改为真实状态说明。
+> 本文件于 2026-10-17 按代码实况重写；早前版本严重过时。
 
-## 当前可复用的后端能力
-
-- Bot 状态快照：`BotRuntime.snapshot()`
-- 插件列表/加载/卸载：`PluginManager`
-- 会话读取与清空：`SessionManager`
-- 配置加载与热重载：`ConfigLoader` + `HotReloader`
-- SQLite 会话与聊天日志
-- Provider 健康检查
-- 四类扩展注册表：Provider / Gateway / Storage / Memory
-
-这些能力还没有通过受保护的管理 HTTP API 暴露，不能直接被浏览器调用。
+本文件最初是对一份“所有功能已一次性写入完成”的 Markdown 清单的纠偏——那份清单没有前端应用、后端 API、鉴权或测试。此后项目在 `src/admin/` + `webui/` 真实落地了绝大部分能力，但本文件长期未更新，反而成了误导源。现状：`webui/index.html` + `assets/app.js` 是可运行的单页应用，含登录面板与 21 个按权限门控的标签页；后端是 `src/admin/server.ts`（路由/权限/风险/二次确认全部登记在 `src/admin/route-policy.ts`，角色矩阵在 `src/admin/rbac.ts`：viewer/operator/admin/developer），默认绑定 `127.0.0.1:3210`，所有请求写审计日志。
 
 ## 功能矩阵
 
-| 功能 | 状态 | 缺口 |
+| 功能 | 状态 | 备注 |
 |---|---|---|
-| 登录/配置面板 | 未实现 | 管理 API、Token/Session 鉴权、密钥只写环境变量 |
-| 角色管理 | 未实现 | 角色 Schema、CRUD、导入校验、角色与 Bot 绑定 |
-| 短期记忆 | 后端已有 | 缺管理 API/UI 与删除审计 |
-| 中长期记忆 | 接口已有 | 缺真实 MemoryAdapter、索引、压缩和权限隔离 |
-| 世界模拟器 | 未实现 | 世界状态、时钟、事件模型、持久化 |
-| 行为引擎 | 未实现 | 主动发言策略、冷却、打断/延迟、调度器 |
-| 日志查看器 | 部分后端已有 | 缺查询 API、脱敏、分页、保留策略 |
-| 插件管理器 | 后端已有 | 缺鉴权 API/UI；安装卸载涉及供应链安全 |
-| MCP 工具管理 | 未实现 | MCP 客户端、权限、调用审计、超时/沙箱 |
-| 测试聊天 | Console 可测试 | 缺浏览器会话与流式 API |
-| 角色互聊 | 未实现 | 多角色 Runtime、回合调度、防无限循环 |
-| Bot 操作面板 | 部分后端已有 | 缺管理 API、RBAC、危险操作确认 |
-| 系统状态监控 | 快照能力已有 | 缺聚合 API/UI、指标历史和告警 |
+| 登录/配置面板 | 已实现 | `src/admin/auth-service.ts`（账号/scrypt 口令/会话/临时令牌）+ WebUI 登录面板（含本地初始化令牌模式）；密钥仍只走 env |
+| 角色管理 | 已实现 | CRUD：`GET/POST /api/characters`、`GET/PUT /api/characters/:id` + `CharacterCatalog`；批量导入：`POST /api/characters/import`（`src/characters/import.ts`，校验/去重/dryRun/冲突策略） |
+| 短期记忆 | 已实现 | `GET/DELETE /api/ops/sessions`、`GET /api/ops/chat-log`、`/api/ops/discord-chat-log`；删除需二次确认并审计 |
+| 中长期记忆 | 已实现 | `SemanticMemoryAdapter`（`src/memory/semantic-memory.ts`）+ `/api/memory`（列表/读取/删除，scope 隔离，删除为 dangerous 需确认） |
+| 世界模拟器 | 已实现 | `WorldStore`（`src/admin/world.ts`）+ `/api/world`（状态/schedule/trust 确认/tick/events/day-plan） |
+| 行为引擎 | 已实现 | `POST /api/behavior/dry-run` + `src/admin/behavior-dry-run.ts`、`day-planner.ts`、`event-intelligence.ts` |
+| 日志查看器 | 已实现 | `GET /api/logs`（level/component/after/limit 分页）+ `LogBuffer`（`src/core/log-buffer.ts`） |
+| 插件管理器 | 已实现 | `GET /api/bots/:id/plugins` + `POST .../plugins/:id/reload`（`plugin.reload` 权限 + 二次确认）；WebUI「插件管理」页 |
+| MCP 工具管理 | 部分实现 | 权限+审计层已落地：`src/mcp/`（client/permissions/audit，默认拒绝、角色门控、参数脱敏、环形审计），管理面 `GET /api/mcp/policy`；连接实际 MCP server 的 transport 属配置后续 |
+| 测试聊天 | 已实现 | `POST /api/debug/chat`（+ capabilities）经 `DebugChatFacade`（`src/admin/debug-chat.ts`）；WebUI「调试聊天」页，`debug.chat` 权限 |
+| 角色互聊 | 已实现 | `src/characters/cross-chat.ts` + `POST /api/characters/cross-chat`（轮转调度、硬回合上限、重复检测、超时熔断、沙箱 system prompt） |
+| Bot 操作面板 | 已实现 | RBAC（`src/admin/rbac.ts`）+ 二次确认（`POST /api/confirmations`）+ 审计（`GET /api/admin/audit`）；重启 `POST /api/bots/:id/restart`（dangerous） |
+| 系统状态监控 | 已实现 | `GET /api/status`（Bot 快照）、`GET /api/metrics`、`GET /api/admin/health`（healthSnapshot）；WebUI「仪表盘/服务健康/性能指标」页 |
+
+矩阵之外已落地的门控功能（见 `webui/index.html` 导航与 `route-policy.ts`）：知识库（`/api/knowledge-bases` 全套 CRUD/搜索/绑定）、配置发布（publish/ack/rollback）、用户管理（`/api/admin/users`）、临时令牌、供应商探测、模型阵列、任务控制（`/api/tasks`）、运维审计（`/api/ops/operator-audit` + `operator-tools`）、设备与好感度（`/api/device`、`/api/affinity`）。
 
 ## 推荐交付顺序
 
-1. **管理 API 基座**：仅绑定 localhost；强制管理 Token；状态、Provider 健康、插件只读列表。
-2. **只读仪表盘**：Bot、网关、会话、AI 失败率、插件状态。
-3. **受控操作**：重启 Bot、启停插件、清会话；RBAC + CSRF + 审计日志。
-4. **角色域模型**：先完成 Schema/存储/API，再做 UI 与导入。
-5. **长期记忆与测试聊天**：验证隔离、删除、上下文预算。
-6. **MCP/行为/世界模拟**：最后接入，默认最小权限。
+1. **管理 API 基座** ✅ — `src/admin/server.ts`，仅绑定 localhost，强制账号/令牌鉴权，状态、Provider 健康、插件列表齐备。
+2. **只读仪表盘** ✅ — 仪表盘/机器人与平台/性能指标/服务健康/模型阵列页。
+3. **受控操作** ✅ — 重启 Bot、重载插件、删会话、任务暂停/恢复；RBAC + 二次确认 + 审计日志。
+4. **角色域模型** ✅ — Schema/存储/API/UI + 批量导入（`POST /api/characters/import`）+ 角色互聊（`POST /api/characters/cross-chat`）均已落地。
+5. **长期记忆与测试聊天** ✅ — `/api/memory` 隔离与删除审计、`/api/debug/chat` 均已交付。
+6. **MCP/行为/世界模拟** — 行为 ✅、世界模拟 ✅；MCP 权限+审计层 ✅（`src/mcp/` + `GET /api/mcp/policy`，默认拒绝/最小权限），连接实际 MCP server 的 transport 属配置后续。
 
 验收标准：每个功能必须同时具备后端实现、前端交互、权限边界、错误处理和自动化测试；只有页面文字不算完成。

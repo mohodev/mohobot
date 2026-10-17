@@ -32,6 +32,8 @@ import { AdminServer } from './admin/server.js';
 import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 import{DebugChatFacade}from'./admin/debug-chat.js';
+import{CrossChatRunner}from'./characters/cross-chat.js';
+import{CharacterCatalog}from'./characters/catalog.js';
 import{ProviderControlFacade}from'./admin/provider-control.js';
 import{ExtensionsControlFacade}from'./admin/extensions-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
@@ -167,6 +169,14 @@ export class Runtime {
         reloadPlugin: async (botId, pluginId) => this.#bots.get(botId)?.reloadPlugin(pluginId) ?? false,
       });
       const debugChat=new DebugChatFacade({providers:()=>[...this.#bots.entries()].map(([id,bot])=>({id,provider:bot.debugProvider()})),logger:this.#logger});
+      const crossChatCatalog=new CharacterCatalog(ROOT_DIR);
+      const crossChat=async(input:{characterIds:string[];topic:string;startWith?:string;botId?:string})=>{
+        const botId=input.botId??[...this.#bots.keys()][0];
+        const provider=botId?this.#bots.get(botId)?.debugProvider():undefined;
+        if(!provider)throw new Error('provider_unavailable');
+        const runner=new CrossChatRunner({catalog:crossChatCatalog,provider,logger:this.#logger});
+        return runner.run({characterIds:input.characterIds,topic:input.topic,startWith:input.startWith});
+      };
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,
@@ -185,6 +195,7 @@ export class Runtime {
         providers:new ProviderControlFacade({bots:()=>this.#config.bots,logger:this.#logger}),
         extensions:new ExtensionsControlFacade(registries),
         debugChat,
+        crossChat,
       });
       await this.#admin.start();
     } else {
