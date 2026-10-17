@@ -8,6 +8,8 @@
  */
 
 import type { OperatorTool, RunOutcome, ToolContext } from './registry.js';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 
 const GIT_SUBCOMMANDS = ['status', 'log', 'diff', 'show'] as const;
 export type GitSubcommand = (typeof GIT_SUBCOMMANDS)[number];
@@ -179,6 +181,153 @@ function runDiag(args: readonly string[], ctx: ToolContext): RunOutcome {
   return { ok: false, output: 'diag 子命令：health | tail [n] | why <messageId>' };
 }
 
+
+const ALLOWED_PATCH_ROOTS = ['src', 'plugins', 'extensions'] as const;
+
+function isAllowedPatchPath(rootDir: string, candidate: string): { ok: boolean; resolved?: string; error?: string } {
+  if (!candidate || candidate.length > 500) return { ok: false, error: '路径过长或为空' };
+  if (candidate.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(candidate)) return { ok: false, error: '仅允许仓库内相对路径' };
+  const segments = candidate.split(/[\\/]+/);
+  if (segments.some((seg) => seg === '..' || seg === '' )) return { ok: false, error: '路径非法' };
+  if (segments.some((seg) => seg === '.' || seg === '~')) return { ok: false, error: '路径非法' };
+  const top = segments[0]!;
+  if (!(ALLOWED_PATCH_ROOTS as readonly string[]).includes(top)) {
+    return { ok: false, error: `patch 仅允许修改：${ALLOWED_PATCH_ROOTS.join(' / ')}` };
+  }
+  const base = path.basename(candidate).toLowerCase();
+  if (base.startsWith('.env') || base.endsWith('.db') || base.endsWith('.sqlite')) {
+    return { ok: false, error: '禁止修改密钥或数据库文件' };
+  }
+  const resolved = path.resolve(rootDir, candidate);
+  const rootResolved = path.resolve(rootDir);
+  if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
+    return { ok: false, error: '路径穿越' };
+  }
+  return { ok: true, resolved };
+}
+
+export type PatchParsed =
+  | { ok: true; action: 'read' | 'write'; path: string; content?: string }
+  | { ok: false; error: string };
+
+export function parsePatchArgs(args: readonly string[]): PatchParsed {
+  const action = args[0] ?? '';
+  if (action === 'read') {
+    const p = args[1] ?? '';
+    if (!p) return { ok: false, error: '用法：?op patch read <路径>' };
+    return { ok: true, action: 'read', path: p };
+  }
+  if (action === 'write') {
+    const p = args[1] ?? '';
+    const b64 = args[2] ?? '';
+    if (!p || !b64) return { ok: false, error: '用法：?op patch write <路径> <base64 内容>' };
+    let content: string;
+    try {
+      content = Buffer.from(b64, 'base64').toString('utf8');
+    } catch {
+      return { ok: false, error: 'base64 解码失败' };
+    }
+    if (content.length === 0) return { ok: false, error: '内容为空' };
+    return { ok: true, action: 'write', path: p, content };
+  }
+  return { ok: false, error: 'patch 子命令仅支持：read / write' };
+}
+
+async function runPatch(args: readonly string[], ctx: ToolContext): Promise<RunOutcome> {
+  const parsed = parsePatchArgs(args);
+  if (!parsed.ok) return { ok: false, output: parsed.error };
+  const check = isAllowedPatchPath(ctx.rootDir, parsed.path);
+  if (!check.ok) return { ok: false, output: check.error! };
+  const resolved = check.resolved!;
+  if (parsed.action === 'read') {
+    try {
+      const body = await fs.readFile(resolved, 'utf8');
+      return { ok: true, output: body.length > OUTPUT_CAP ? body.slice(0, OUTPUT_CAP) + '\n…（已截断）' : body };
+    } catch (error) {
+      return { ok: false, output: `读取失败：${String(error)}` };
+    }
+  }
+  // write
+  try {
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+    await fs.writeFile(resolved, parsed.content!, 'utf8');
+    return { ok: true, output: `已写入 ${parsed.path}（${parsed.content!.length} 字符）` };
+  } catch (error) {
+    return { ok: false, output: `写入失败：${String(error)}` };
+  }
+}
+
+const CONFIG_DIR = 'data/config';
+
+function isAllowedConfigPath(rootDir: string, candidate: string): { ok: boolean; resolved?: string; error?: string } {
+  if (!candidate || candidate.length > 300) return { ok: false, error: '路径过长或为空' };
+  const segments = candidate.split(/[\\/]+/);
+  if (segments.some((seg) => seg === '..' || seg === '' || seg === '.' || seg === '~')) return { ok: false, error: '路径非法' };
+  if (candidate.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(candidate)) return { ok: false, error: '仅允许相对路径' };
+  // normalize to data/config/...
+  const normalized = candidate.replace(/\\/g, '/');
+  if (!normalized.startsWith('data/config/') && normalized !== 'data/config') return { ok: false, error: 'config 仅允许 data/config/ 下的文件' };
+  const base = path.basename(normalized).toLowerCase();
+  if (base.startsWith('.env') || base.endsWith('.db') || base.endsWith('.sqlite') || base.endsWith('.yaml.local') === false && false) {
+    // allow yaml/yml/json
+  }
+  if (!/\.(ya?ml|json)$/i.test(base)) return { ok: false, error: 'config 仅允许 .yaml/.yml/.json' };
+  const resolved = path.resolve(rootDir, normalized);
+  const rootResolved = path.resolve(rootDir);
+  if (!resolved.startsWith(rootResolved + path.sep)) return { ok: false, error: '路径穿越' };
+  return { ok: true, resolved };
+}
+
+export type ConfigParsed =
+  | { ok: true; action: 'read' | 'write'; path: string; content?: string }
+  | { ok: false; error: string };
+
+export function parseConfigArgs(args: readonly string[]): ConfigParsed {
+  const action = args[0] ?? '';
+  if (action === 'read') {
+    const p = args[1] ?? '';
+    if (!p) return { ok: false, error: '用法：?op config read <路径>' };
+    return { ok: true, action: 'read', path: p };
+  }
+  if (action === 'write') {
+    const p = args[1] ?? '';
+    const b64 = args[2] ?? '';
+    if (!p || !b64) return { ok: false, error: '用法：?op config write <路径> <base64 内容>' };
+    let content: string;
+    try {
+      content = Buffer.from(b64, 'base64').toString('utf8');
+    } catch {
+      return { ok: false, error: 'base64 解码失败' };
+    }
+    if (content.length === 0) return { ok: false, error: '内容为空' };
+    return { ok: true, action: 'write', path: p, content };
+  }
+  return { ok: false, error: 'config 子命令仅支持：read / write' };
+}
+
+async function runConfig(args: readonly string[], ctx: ToolContext): Promise<RunOutcome> {
+  const parsed = parseConfigArgs(args);
+  if (!parsed.ok) return { ok: false, output: parsed.error };
+  const check = isAllowedConfigPath(ctx.rootDir, parsed.path);
+  if (!check.ok) return { ok: false, output: check.error! };
+  const resolved = check.resolved!;
+  if (parsed.action === 'read') {
+    try {
+      const body = await fs.readFile(resolved, 'utf8');
+      return { ok: true, output: body.length > OUTPUT_CAP ? body.slice(0, OUTPUT_CAP) + '\n…（已截断）' : body };
+    } catch (error) {
+      return { ok: false, output: `读取失败：${String(error)}` };
+    }
+  }
+  try {
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+    await fs.writeFile(resolved, parsed.content!, 'utf8');
+    return { ok: true, output: `已写入 ${parsed.path}（${parsed.content!.length} 字符），热重载将自动生效（如已开启）` };
+  } catch (error) {
+    return { ok: false, output: `写入失败：${String(error)}` };
+  }
+}
+
 export const operatorTools: readonly OperatorTool[] = [
   {
     name: 'diag',
@@ -186,6 +335,22 @@ export const operatorTools: readonly OperatorTool[] = [
     usage: '?op diag health|tail [n]|why <messageId>',
     description: '诊断：trace 链 / 会话 / 健康检查',
     run: async (args, ctx) => runDiag(args, ctx),
+  },
+  {
+    name: 'patch',
+    risk: 'write',
+    confirm: true,
+    usage: '?op patch read <路径> | ?op patch write <路径> <base64 内容>',
+    description: '受控文件补丁（仅 src/plugins/extensions，禁止 data/.env*/DB）',
+    run: runPatch,
+  },
+  {
+    name: 'config',
+    risk: 'write',
+    confirm: true,
+    usage: '?op config read <路径> | ?op config write <路径> <base64 内容>',
+    description: '读写 data/config/*.yaml（走热重载，禁止 .env*/DB）',
+    run: runConfig,
   },
   {
     name: 'git',

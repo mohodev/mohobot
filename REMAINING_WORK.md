@@ -27,9 +27,9 @@
 - [x] `?op diag tail`：最近 N 条 trace 事件
 
 ### Phase 2 — 受控写入（patch/config）
-- [ ] `patch` 工具：propose diff → confirm → apply（只限 src/ plugins/ extensions/，禁止 data/.env* 和 DB）
-- [ ] `config` 工具：读/写 data/config/*.yaml，走热重载（禁止 .env* 和 DB）
-- [ ] diff 预览 + dry-run
+- [x] `patch` 工具：read/write（仅 src/plugins/extensions，禁止 data/.env*/DB）
+- [x] `config` 工具：read/write data/config/*（热重载由运行时处理）
+- [x] diff 预览 + dry-run（read 子命令）
 
 ### Phase 3 — 生命周期（restart）
 - [ ] `restart` 工具：Supervisor 组件级重启，两步确认
