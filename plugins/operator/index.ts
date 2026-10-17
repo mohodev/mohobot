@@ -104,6 +104,7 @@ const operator: Plugin = {
     const logger = context.logger;
     const traces = context.pipeline?.traces;
     const sessions = context.sessions;
+    const getProvider = context.getProvider;
 
     const toolHelp = (): string => [
       '运维工具（仅管理员）',
@@ -140,6 +141,12 @@ const operator: Plugin = {
             if (!tool) return '该操作对应的工具已不存在，请重新发起。';
             const outcome = await runTool(tool, claimed.request.args, env);
             return outcome;
+          }
+
+          if (args[0] === 'agent') {
+            const goal = args.slice(1).join(' ').trim();
+            if (!goal) return '用法：?op agent <目标>';
+            return runAgent(goal, env, getProvider, operatorTools, storage, logger, config);
           }
 
           const tool = lookupTool(operatorTools, args[0]!);
@@ -204,6 +211,100 @@ function formatAudit(entry: AuditEntry): string {
   const time = new Date(entry.ts).toISOString().slice(11, 19);
   const args = entry.args.length > 60 ? `${entry.args.slice(0, 60)}…` : entry.args;
   return `${time} ${entry.outcome.padEnd(7)} ${entry.tool}${args ? ` ${args}` : ''}${entry.detail ? ` - ${entry.detail}` : ''}`;
+}
+
+
+async function runAgent(
+  goal: string,
+  env: OperatorEnv,
+  getProvider: OperatorEnv extends { getProvider?: infer G } ? G : any,
+  tools: typeof operatorTools,
+  storage: ScopedStorage,
+  logger: OperatorEnv['logger'],
+  config: { pendingTtlSeconds: number },
+): Promise<string> {
+  const provider = typeof getProvider === 'function' ? getProvider() : undefined;
+  if (!provider) return 'AI provider 不可用，无法启动 agent。';
+
+  const toolLines = tools.map((t) => `- ${t.name} [${t.risk}] ${t.usage} — ${t.description}`).join('\n');
+  const system = [
+    '你是 MohoBot 的运维 agent。你只能通过调用已列出的工具完成目标。',
+    '可用工具：',
+    toolLines,
+    '每一轮你必须只输出一个 JSON 对象，不要输出其它文本：',
+    '{"tool":"工具名","args":["参数..."]}  或  {"final":"给用户的最终回复"}',
+    '写操作（risk=write）工具会被暂存并要求人工确认，你只能提议一次然后停止等待。',
+    '不要编造工具或参数；不要把密钥写入任何内容。',
+  ].join('\n');
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: system },
+    { role: 'user', content: goal },
+  ];
+
+  const steps: string[] = [];
+  const MAX_STEPS = 8;
+  for (let i = 0; i < MAX_STEPS; i += 1) {
+    let reply;
+    try {
+      reply = await provider.chat(messages as any, { task: 'admin', temperature: 0.2 });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return `agent 模型调用失败：${detail}\n步骤：\n${steps.join('\n')}`;
+    }
+    const text = (reply.content ?? '').trim();
+    messages.push({ role: 'assistant', content: text });
+
+    // extract JSON
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) {
+      return `agent 输出无法解析为 JSON：${text}\n步骤：\n${steps.join('\n')}`;
+    }
+    let action: any;
+    try {
+      action = JSON.parse(match[0]);
+    } catch {
+      return `agent JSON 解析失败：${match[0]}\n步骤：\n${steps.join('\n')}`;
+    }
+
+    if (action && typeof action.final === 'string') {
+      await writeAudit(env, { ts: Date.now(), tool: 'agent', args: goal, caller: env.callerId, outcome: 'ok', detail: `steps=${steps.length}` });
+      return `${action.final}\n\n—— agent 步骤 ——\n${steps.join('\n') || '（无）'}`;
+    }
+
+    const toolName = String(action?.tool ?? '');
+    const toolArgs: string[] = Array.isArray(action?.args) ? action.args.map((x: unknown) => String(x)) : [];
+    const tool = tools.find((t) => t.name === toolName);
+    if (!tool) {
+      const obs = `工具不存在：${toolName}`;
+      steps.push(`[${i + 1}] ${toolName} -> ${obs}`);
+      messages.push({ role: 'user', content: `工具执行结果：${obs}` });
+      continue;
+    }
+
+    const decision = authorize(tool, env);
+    if (decision.kind === 'deny') {
+      const obs = `拒绝：${decision.reason}`;
+      steps.push(`[${i + 1}] ${toolName} -> ${obs}`);
+      messages.push({ role: 'user', content: `工具执行结果：${obs}` });
+      continue;
+    }
+
+    if (decision.stagingRequired) {
+      const code = await stage({ storage }, tool.name, toolArgs, env.callerId);
+      await writeAudit(env, { ts: Date.now(), tool: tool.name, args: redactArgs(toolArgs), caller: env.callerId, outcome: 'staged', detail: 'agent' });
+      return `agent 提议执行 ${tool.name}，已暂存。请在 ${Math.round(config.pendingTtlSeconds / 1000)} 秒内用「?op confirm ${code}」确认。\n步骤：\n${steps.join('\n') || '（无）'}`;
+    }
+
+    const outcome = await tool.run(toolArgs, env as any);
+    const obs = outcome.output;
+    steps.push(`[${i + 1}] ${toolName}(${toolArgs.join(' ')}) -> ${outcome.ok ? 'ok' : 'failed'}`);
+    await writeAudit(env, { ts: Date.now(), tool: tool.name, args: redactArgs(toolArgs), caller: env.callerId, outcome: outcome.ok ? 'ok' : 'failed', detail: 'agent' });
+    messages.push({ role: 'user', content: `工具执行结果：${obs}` });
+  }
+
+  await writeAudit(env, { ts: Date.now(), tool: 'agent', args: goal, caller: env.callerId, outcome: 'failed', detail: 'max steps' });
+  return `agent 达到最大步数（${MAX_STEPS}），停止。\n步骤：\n${steps.join('\n')}`;
 }
 
 export default operator;

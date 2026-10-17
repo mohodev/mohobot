@@ -56,6 +56,8 @@ export interface PluginManagerOptions {
     | { handle(message: MohoMessage): Promise<void>; traces?(): import('../pipeline/chat-trace.js').ChatTrace[] };
   /** Optional session store, exposed read-only so plugins can inspect context (e.g. !记忆). */
   sessions?: SessionManagerLike;
+  /** Lazy provider accessor. */
+  getProvider?: () => import('../ai/types.js').AIProvider | undefined;
 }
 
 interface LoadedPlugin {
@@ -434,6 +436,7 @@ export class PluginManager {
                 traces: (this.#opts.pipelineHandle as { traces?(): import('../pipeline/chat-trace.js').ChatTrace[] }).traces })
         : undefined,
       sessions: this.#opts.sessions,
+      getProvider: this.#opts.getProvider,
     };
   }
 

@@ -11,6 +11,7 @@ import type { Logger } from '../core/logger.js';
 import type { Registries } from '../core/registries.js';
 import type { EmbedCard, MohoMessage, OutboundMessage } from '../core/types.js';
 import type { SessionManagerLike } from '../session/types.js';
+import type { AIProvider } from '../ai/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import type { ScopedStorage } from '../storage/types.js';
 
@@ -90,6 +91,8 @@ export interface PluginContext {
    * pipeline's own clear path. Plugins must not bypass session semantics.
    */
   readonly sessions?: SessionManagerLike;
+  /** Lazy access to the live AI provider (available after boot). */
+  readonly getProvider?: () => AIProvider | undefined;
 }
 
 /**

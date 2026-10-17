@@ -35,7 +35,7 @@
 - [x] `restart` 工具：进程重启（两步确认），重启前自动 typecheck + test 门禁
 
 ### Phase 4 — LLM 调度层（真正的 agent）
-- [ ] agent loop：LLM + tool-calling，把 diag/git/verify/patch/config/restart 作为 tools
+- [x] agent loop：ReAct 风格 LLM + 工具调用（`?op agent <goal>`，最多 8 步，写操作暂存待确认）
 - [ ] 安全：所有写操作 confirm token、所有操作 audit、secrets 永不入 context
 - [ ] 交互：`?op agent <goal>` → agent 自主执行多步，每步回报告
 

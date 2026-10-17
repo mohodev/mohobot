@@ -189,6 +189,7 @@ export class BotRuntime implements Managed {
           traces: () => this.#pipeline?.traces() ?? [],
         },
         sessions: this.#sessions,
+        getProvider: () => this.#provider,
       });
       // A broken plugin directory must not stop the bot from booting.
       // Plugins register their AI providers / gateways here, so this MUST run
