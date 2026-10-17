@@ -36,11 +36,15 @@
 原 6 阶段长期方向，本轮补齐缺口：
 - [x] 角色互聊 — `src/characters/cross-chat.ts` + `POST /api/characters/cross-chat`（轮转调度、硬回合上限、重复检测、超时熔断、沙箱 system prompt），权限 `characters.crosschat`
 - [x] 角色批量导入 — `src/characters/import.ts` + `POST /api/characters/import`（逐项校验/批内去重/dryRun/冲突 skip|overwrite/单项失败隔离），权限 `characters.import`
-- [x] MCP 工具权限与审计（权限+审计层）— `src/mcp/`（client/permissions/audit：默认拒绝、角色门控、参数脱敏、环形审计）+ `GET /api/mcp/policy`，权限 `mcp.read`
-- [x] 文档卫生 — `webui/index.md` 按代码实况重写（早前版本严重过时）
+- [x] MCP 工具权限与审计 — `src/mcp/`：client/permissions/audit + **真实 transport**（`StdioTransport`/`HttpTransport`）+ `McpManager`（多 server、共享审计、单 server 失败隔离），config 驱动（`mcp.enabled` 默认关闭，见 `docs/MCP.md`）；管理面 `GET /api/mcp/policy|tools|audit` + `POST /api/mcp/call`（二次确认），权限 `mcp.read`/`mcp.call`
+- [x] 前端补齐 — WebUI 角色页新增「新建 / 批量导入 / 角色互聊」，新增「MCP 工具」页（`webui/`，按权限门控）
+- [x] 服务端集成测试 — `src/admin/server.test.ts` 覆盖 import / cross-chat / mcp tools·audit·call（含拒绝与未知 server）
+- [x] 文档卫生 — `webui/index.md` 按代码实况重写；修正 `docs/AUDIT.md`「未实现」过期断言与 `docs/EXTENDING.md`「HTTP API/WebUI 不在范围」过期边界；新增 `docs/MCP.md`
 
-剩余（非阻塞、属配置/部署后续）：
-- [ ] MCP 连接实际 server 的 transport（配置驱动的 stdio/HTTP 接入；权限+审计层已就绪，接上 transport 即可用）
+剩余（非阻塞，已评估、按需再做）：
+- [ ] 把 MCP 工具作为**模型可调用工具**接入回复 pipeline（现在仅管理员经 WebUI/API 显式调用；需要新的 pipeline 阶段）
+- [ ] `docs/IMMERSION.md` 规定的「角色互询」（好感≥70 + `shared` 标签 + opt-in + 内部私有通道 + 只回抽象答案）——有规格、无实现；现有 cross-chat 是管理员驱动的公开多角色对聊，不等同
+- [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 Promise 超时强制终止（AbortSignal + 副作用生命周期令牌）、`chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot、全局配置变更后动态重建组件
 
 ## 当前无遗留计划项
-README「路线图」六阶段为长期方向，非待办清单。
+README「路线图」六阶段均已落地（对应实现见上）。以上「剩余」为明确评估过的可选增强，不是待办阻塞项。

@@ -151,8 +151,16 @@ Honest boundaries - these are *not* covered by the four registries:
 - **New pipeline stages.** Plugins hook `onMessage` / `onBeforeAI` / `onAfterAI`.
   A genuinely new stage means editing `src/pipeline/pipeline.ts`.
 - **New event types.** Adding a Moho event kind touches `src/core/types.ts`.
-- **Non-chat surfaces** (HTTP API, WebUI) - deliberately out of MVP scope.
+- **HTTP API / WebUI routes.** *Not* a plugin surface: the admin API, its
+  permission matrix (`src/admin/rbac.ts`), route policy
+  (`src/admin/route-policy.ts`) and the SPA (`webui/`) are core. (Earlier
+  versions of this doc called them "out of MVP scope" - that is no longer true;
+  they are the primary operator surface now.)
 
 Everything on the stated roadmap - Memory Layer, Agent Layer, MCP, new
 platforms, new databases - fits the existing extension points. Future provider
 credentials no longer need core changes.
+
+For MCP specifically, a config-driven client (`src/mcp/`) with stdio/HTTP
+transports, a fail-closed per-tool permission policy and a bounded call audit
+log is wired behind `mcp.enabled` (default off). See `docs/MCP.md`.

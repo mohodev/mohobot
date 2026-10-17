@@ -340,6 +340,39 @@ export const HotReloadConfigSchema = z.object({
 });
 export type HotReloadConfig = z.infer<typeof HotReloadConfigSchema>;
 
+/**
+ * MCP (Model Context Protocol) client integration. Disabled by default and
+ * config-driven: each entry names one server to connect to. Secrets belong in
+ * process env (inherited by stdio children); `env` here is for non-secret
+ * settings only.
+ */
+const McpServerConfigSchema = z
+  .object({
+    id: z.string().min(1),
+    enabled: z.boolean().default(true),
+    transport: z.enum(['stdio', 'http']),
+    /** stdio: executable to spawn. */
+    command: z.string().optional(),
+    args: z.array(z.string()).default([]),
+    env: z.record(z.string()).default({}),
+    cwd: z.string().optional(),
+    /** http: JSON-RPC endpoint. */
+    url: z.string().optional(),
+    headers: z.record(z.string()).default({}),
+    /** Per-server tool policy; empty = the built-in fail-closed default. */
+    policy: z
+      .array(z.object({ pattern: z.string().min(1), minRole: z.enum(['viewer', 'operator', 'admin', 'developer']) }))
+      .default([]),
+  })
+  .strict();
+
+const McpConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    servers: z.array(McpServerConfigSchema).default([]),
+  })
+  .default({});
+
 export const GlobalConfigSchema = z.object({
   /** Optional format marker for forward-compatible tooling; not required at runtime. */
   version: ConfigVersionSchema,
@@ -366,6 +399,7 @@ export const GlobalConfigSchema = z.object({
   session: SessionConfigSchema.default({}),
   memory: MemoryConfigSchema.default({}),
   media: MediaConfigSchema.default({}),
+  mcp: McpConfigSchema.default({}),
 });
 export type GlobalConfig = z.infer<typeof GlobalConfigSchema>;
 

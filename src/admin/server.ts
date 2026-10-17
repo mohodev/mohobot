@@ -7,6 +7,8 @@ import { CharacterCatalog } from '../characters/catalog.js';
 import { importCharacters, type CharacterImportItem } from '../characters/import.js';
 import { CrossChatError, type CrossChatInput, type CrossChatResult } from '../characters/cross-chat.js';
 import { defaultPolicy as mcpDefaultPolicy } from '../mcp/permissions.js';
+import { McpError } from '../mcp/types.js';
+import type { McpManager } from '../mcp/manager.js';
 import type { Logger, LogLevel } from '../core/logger.js';
 import type { LogBuffer } from '../core/log-buffer.js';
 import type { DiscordChatLogBuffer, DiscordChatDirection } from '../core/discord-chat-log.js';
@@ -62,6 +64,8 @@ export interface AdminServerOptions {
   taskControl?: TaskControlFacade;
   /** Cross-character chat runner (resolved provider injected by the host). */
   crossChat?: (input: CrossChatInput & { botId?: string }) => Promise<CrossChatResult>;
+  /** MCP client manager; absent when `mcp.enabled` is false. */
+  mcp?: McpManager;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -434,6 +438,29 @@ export class AdminServer {
     if (method === 'GET' && pathname === '/api/mcp/policy') {
       return this.#ok({ rules: mcpDefaultPolicy.rules });
     }
+    if (method === 'GET' && pathname === '/api/mcp/tools') {
+      if (!this.#opts.mcp) throw new HttpError(409, 'mcp unavailable');
+      return this.#ok({ servers: this.#opts.mcp.status(), tools: this.#opts.mcp.tools() });
+    }
+    if (method === 'GET' && pathname === '/api/mcp/audit') {
+      if (!this.#opts.mcp) throw new HttpError(409, 'mcp unavailable');
+      return this.#ok({ entries: this.#opts.mcp.audit() });
+    }
+    if (method === 'POST' && pathname === '/api/mcp/call') {
+      if (!this.#opts.mcp) throw new HttpError(409, 'mcp unavailable');
+      const server = typeof input.server === 'string' ? input.server : '';
+      const tool = typeof input.tool === 'string' ? input.tool.trim() : '';
+      if (!server || !tool) throw new HttpError(400, 'server and tool required');
+      const rawArgs = input.arguments;
+      if (rawArgs !== undefined && (typeof rawArgs !== 'object' || rawArgs === null || Array.isArray(rawArgs))) {
+        throw new HttpError(400, 'arguments must be an object');
+      }
+      const result = await this.#opts.mcp.callTool(server, tool, rawArgs as Record<string, unknown> | undefined, {
+        id: auth.principal.id,
+        role: auth.principal.role,
+      });
+      return this.#ok({ result });
+    }
     if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
     const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
     if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#worldFor(this.#stateBotId(dry.botId)).get(),this.#deviceFor(this.#stateBotId(dry.botId)).get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
@@ -525,6 +552,7 @@ export class AdminServer {
     }
     if(error instanceof CrossChatError){if(error.code==='character_not_found')return new HttpError(404,error.code);return new HttpError(400,error.code);}
     if(error instanceof Error&&error.message==='provider_unavailable')return new HttpError(409,error.message);
+    if(error instanceof McpError){if(error.code==='denied')return new HttpError(403,error.message);if(error.code==='tool')return new HttpError(404,error.message);return new HttpError(502,error.message);}
     if(error instanceof Error&&error.message==='character revision conflict')return new HttpError(409,error.message);
     if(error instanceof Error&&error.message==='character not found')return new HttpError(404,error.message);
     return new HttpError(400, error instanceof Error ? error.message : 'bad request');

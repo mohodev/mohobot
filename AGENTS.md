@@ -22,6 +22,8 @@ MohoBot: a long-running, multi-character Discord AI runtime. TypeScript ESM, no 
 - `?op agent <goal>` 是 ReAct 循环（最多 8 步），写操作先暂存成 pending 令牌再执行；工具实现与状态台账见 `plugins/operator/tools.ts`（`PLANNED_TOOLS` 里 `ready:true` 的项已落地）。
 - Phase 5 剩余项按目录并行推进（`src/acp/**` / `webui/**` / `plugins/operator/*.test.ts` / `src/ai/**` 各占一目录），核心接线项须等并行件落地——清单见 `REMAINING_WORK.md`。
 - 数据源跟着上游：搜索走 Anysearch MCP（`https://api.anysearch.com/mcp`，免 key 直通；配 `anysearchKey` 以备收紧）+ DuckDuckGo + Wikipedia 三后端链（`plugins/search`）；歌曲库走 VCPedia（分类分页 + 经典 revisions 取 wikitext，`rest.php` 在 Anubis 后面不碰），`src/songs/`（解析/匹配/同步）+ `scripts/sync-songs.ts` + `?同步歌曲`。
+- `src/characters/` 除 CRUD（`catalog.ts`）外：角色互聊 `cross-chat.ts`（管理员驱动，轮转调度 + 硬回合上限 + 重复/超时熔断 + 沙箱 system prompt）与批量导入 `import.ts`（逐项校验/批内去重/dryRun/冲突 skip|overwrite/单项失败隔离），管理面 `POST /api/characters/cross-chat`、`POST /api/characters/import`。
+- `src/mcp/`：MCP 工具权限 + 审计 + 真实 transport（stdio/http）+ `McpManager`（多 server、共享审计、失败隔离）。**默认关闭**，config `mcp.enabled` 驱动（`docs/MCP.md`）；管理面 `GET /api/mcp/policy|tools|audit` + `POST /api/mcp/call`（二次确认）。被拒绝的调用到不了 transport，全部调用先脱敏写审计。尚未把 MCP 工具喂给对话 pipeline。
 
 ## Toolchain gotchas
 

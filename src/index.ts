@@ -35,6 +35,7 @@ import{DebugChatFacade}from'./admin/debug-chat.js';
 import{CrossChatRunner}from'./characters/cross-chat.js';
 import{CharacterCatalog}from'./characters/catalog.js';
 import{ProviderControlFacade}from'./admin/provider-control.js';
+import{McpManager}from'./mcp/manager.js';
 import{ExtensionsControlFacade}from'./admin/extensions-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
@@ -58,6 +59,7 @@ export class Runtime {
   #loader!: ConfigLoader;
   #config!: ResolvedConfig;
   #bots = new Map<string, BotRuntime>();
+  #mcp: McpManager | undefined;
   #hotReload?: HotReloader;
   #admin?: AdminServer;
   #shuttingDown = false;
@@ -177,6 +179,12 @@ export class Runtime {
         const runner=new CrossChatRunner({catalog:crossChatCatalog,provider,logger:this.#logger});
         return runner.run({characterIds:input.characterIds,topic:input.topic,startWith:input.startWith});
       };
+      const mcpConfig = this.#config.global.mcp;
+      if (mcpConfig.enabled && mcpConfig.servers.length > 0) {
+        this.#mcp = new McpManager({ servers: mcpConfig.servers, logger: this.#logger });
+        await this.#mcp.start();
+        this.#logger.info({ servers: this.#mcp.status().length, tools: this.#mcp.tools().length }, 'mcp servers ready');
+      }
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,
@@ -196,6 +204,7 @@ export class Runtime {
         extensions:new ExtensionsControlFacade(registries),
         debugChat,
         crossChat,
+        mcp: this.#mcp,
       });
       await this.#admin.start();
     } else {
@@ -328,6 +337,7 @@ export class Runtime {
     timeout.unref?.();
 
     try {
+      await this.#mcp?.stop();
       await this.#admin?.stop();
       await this.#hotReload?.stop();
       await this.#tasks?.stopAll(3000);

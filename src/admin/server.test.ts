@@ -9,6 +9,7 @@ import { AdminServer } from './server.js';
 import { OpsControlFacade } from './ops-control.js';
 import { DebugChatFacade } from './debug-chat.js';
 import {TaskManager}from'../core/task-manager.js';import{TaskControlFacade}from'./task-control.js';
+import { McpManager } from '../mcp/manager.js';
 
 interface Reply { status: number; headers: Headers; data: Record<string, any> }
 
@@ -33,6 +34,24 @@ describe('AdminServer production authorization chain', () => {
       configPublication: { get: async () => ({ version: 1 }), publish: async (input, principal) => ({ ...input, actor: principal.id }) },
       ops:new OpsControlFacade({storage,listTasks:()=>taskManager.list()}),taskControl:new TaskControlFacade({tasks:taskManager}),logs,
       debugChat:new DebugChatFacade({providers:()=>[{id:'main',provider:{name:'mock',model:'mock-model',health:async()=>({ok:true}),chat:async()=>({content:'debug response',model:'mock-model',ms:1})}}],logger:createNullLogger(),requestsPerMinute:1,maxInputChars:8}),
+      crossChat: async (input) => ({ turns: input.characterIds.map((id, i) => ({ speakerId: id, speakerName: id, content: `turn ${i + 1}`, at: i })), stopReason: 'completed', totalMs: 1 }),
+      mcp: await (async () => {
+        const manager = new McpManager({
+          servers: [{ id: 'demo', transport: 'http', url: 'http://127.0.0.1:9/mcp' }],
+          logger: createNullLogger(),
+          transportFactory: () => ({
+            send: async (method: string, params?: Record<string, unknown>) => {
+              if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-mcp', version: '0.0.1' } };
+              if (method === 'notifications/initialized') return undefined;
+              if (method === 'tools/list') return { tools: [{ name: 'search.web', description: 'web search' }, { name: 'config.set', description: 'set config' }] };
+              if (method === 'tools/call') return { content: [{ type: 'text', text: `called ${String(params?.name)}` }] };
+              throw new Error(`unexpected method ${method}`);
+            },
+          }),
+        });
+        await manager.start();
+        return manager;
+      })(),
     });
     await server.start();
     base = `http://127.0.0.1:${server.port}`;
@@ -175,5 +194,73 @@ describe('AdminServer production authorization chain', () => {
     expect(rows.length).toBeGreaterThanOrEqual(3);
     expect(rows.some(({ value }) => value.outcome === 'denied' && value.status === 401)).toBe(true);
     expect(rows.some(({ value }) => value.outcome === 'allowed' && value.action === 'runtime.status')).toBe(true);
+  });
+
+  it('imports characters in batch with per-item reporting and dry-run', async () => {
+    const admin = await bootstrap();
+    const items = [
+      { name: 'ALICE BATCH', prompt: 'A sufficiently long character prompt for batch import tests.' },
+      { name: 'BOB BATCH', prompt: 'Another sufficiently long prompt that passes validation rules.' },
+      { name: '', prompt: 'bad' },
+    ];
+    const dryPayload = { items, dryRun: true };
+    const dryNonce = await confirmation(admin, 'POST', '/api/characters/import', dryPayload);
+    const dry = await request('POST', '/api/characters/import', { token: admin, confirmation: dryNonce, body: dryPayload });
+    expect(dry.status).toBe(200);
+    expect(dry.data.report.total).toBe(3);
+    expect(dry.data.report.imported.length).toBe(2);
+    expect(dry.data.report.skipped.length).toBe(1);
+    expect((await request('GET', '/api/characters', { token: admin })).data.characters.length).toBe(0);
+
+    const runPayload = { items, onConflict: 'skip' };
+    const runNonce = await confirmation(admin, 'POST', '/api/characters/import', runPayload);
+    const run = await request('POST', '/api/characters/import', { token: admin, confirmation: runNonce, body: runPayload });
+    expect(run.status).toBe(200);
+    expect(run.data.report.imported.length).toBe(2);
+    expect((await request('GET', '/api/characters', { token: admin })).data.characters.length).toBe(2);
+    const badPayload = { items: 'nope' };
+    const badNonce = await confirmation(admin, 'POST', '/api/characters/import', badPayload);
+    expect((await request('POST', '/api/characters/import', { token: admin, confirmation: badNonce, body: badPayload })).status).toBe(400);
+  });
+
+  it('runs character cross-chat through the injected provider facade', async () => {
+    const admin = await bootstrap();
+    const res = await request('POST', '/api/characters/cross-chat', { token: admin, body: { characterIds: ['alice', 'bob'], topic: '今天聊什么' } });
+    expect(res.status).toBe(200);
+    expect(res.data.result.turns.length).toBe(2);
+    expect(res.data.result.stopReason).toBe('completed');
+    expect((await request('POST', '/api/characters/cross-chat', { token: admin, body: { characterIds: ['alice'], topic: 'x' } })).status).toBe(400);
+    expect((await request('POST', '/api/characters/cross-chat', { token: admin, body: { characterIds: ['a', 'b'], topic: '' } })).status).toBe(400);
+  });
+
+  it('exposes MCP policy, tools, audited calls, denial and unknown-server handling', async () => {
+    const admin = await bootstrap();
+    const policy = await request('GET', '/api/mcp/policy', { token: admin });
+    expect(policy.status).toBe(200);
+    expect(policy.data.rules.some((r: any) => r.pattern === 'search.web')).toBe(true);
+
+    const tools = await request('GET', '/api/mcp/tools', { token: admin });
+    expect(tools.status).toBe(200);
+    expect(tools.data.servers[0]).toMatchObject({ id: 'demo', initialized: true, toolCount: 2 });
+    expect(tools.data.tools.map((t: any) => t.name)).toContain('search.web');
+
+    const callBody = { server: 'demo', tool: 'search.web', arguments: { q: 'hello' } };
+    const callNonce = await confirmation(admin, 'POST', '/api/mcp/call', callBody);
+    const call = await request('POST', '/api/mcp/call', { token: admin, confirmation: callNonce, body: callBody });
+    expect(call.status).toBe(200);
+    expect(call.data.result.content[0].text).toContain('search.web');
+
+    const deniedBody = { server: 'demo', tool: 'not.in.policy', arguments: {} };
+    const deniedNonce = await confirmation(admin, 'POST', '/api/mcp/call', deniedBody);
+    expect((await request('POST', '/api/mcp/call', { token: admin, confirmation: deniedNonce, body: deniedBody })).status).toBe(403);
+
+    const unknownBody = { server: 'nope', tool: 'search.web', arguments: {} };
+    const unknownNonce = await confirmation(admin, 'POST', '/api/mcp/call', unknownBody);
+    expect((await request('POST', '/api/mcp/call', { token: admin, confirmation: unknownNonce, body: unknownBody })).status).toBe(404);
+
+    const audit = await request('GET', '/api/mcp/audit', { token: admin });
+    expect(audit.status).toBe(200);
+    expect(audit.data.entries.some((e: any) => e.outcome === 'allowed')).toBe(true);
+    expect(audit.data.entries.some((e: any) => e.outcome === 'denied')).toBe(true);
   });
 });

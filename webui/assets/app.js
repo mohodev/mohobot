@@ -217,7 +217,81 @@ async function config() {
   } catch (error) { app.innerHTML = unavailable(error); }
 }
 
-async function characters() {const data=await request('/characters'),rows=Array.isArray(data.characters)?data.characters:[];app.innerHTML=`<div class="section-head"><div><h2>角色目录</h2><p class="muted">提示词更新使用版本号防止并发覆盖。</p></div></div><div class="summary-grid">${rows.map(c=>`<article class="card"><h3>${esc(c.name)}</h3><div class="muted">${esc(c.id)} · ${esc(c.promptLength)} 字符</div><button data-character="${esc(c.id)}">查看 / 编辑</button></article>`).join('')||emptyState('暂无角色','角色目录为空。')}</div><section id="character-editor"></section>`;app.querySelectorAll('[data-character]').forEach(b=>b.onclick=async()=>{const c=(await request(`/characters/${encodeURIComponent(b.dataset.character)}`)).character;document.querySelector('#character-editor').innerHTML=`<form id="character-form" class="tool-section"><h3>${esc(c.name)}</h3><label>名称<input name="name" value="${esc(c.name)}"></label><label>提示词<textarea name="prompt" rows="14">${esc(c.prompt)}</textarea></label><button type="submit" ${has('characters.write')?'':'disabled'}>保存新版本</button></form>`;document.querySelector('#character-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={name:String(f.get('name')),prompt:String(f.get('prompt')),expectedRevision:c.revision};await confirmedRequest(`/characters/${encodeURIComponent(c.id)}`,{method:'PUT',body:body(payload)},{payload,description:`更新角色 ${c.name}`});await characters();};});}
+function crossChatStopReason(reason) {
+  return { max_turns: '达到最大轮数', repetition: '检测到重复', error: '出错中断', completed: '正常结束' }[reason] || reason || '未知';
+}
+
+function characterImportReport(report) {
+  const imported = Array.isArray(report.imported) ? report.imported : [];
+  const skipped = Array.isArray(report.skipped) ? report.skipped : [];
+  const failed = Array.isArray(report.failed) ? report.failed : [];
+  const rows = [
+    ...imported.map((item) => `<tr><td>${esc(item.id)}</td><td>${esc(item.name)}</td><td>${item.revision ? '已写入' : '预演通过'}</td></tr>`),
+    ...skipped.map((item) => `<tr><td>#${esc(item.index)}</td><td>${esc(item.name || '—')}</td><td>跳过：${esc(item.reason)}</td></tr>`),
+    ...failed.map((item) => `<tr><td>#${esc(item.index)}</td><td>${esc(item.name || '—')}</td><td>失败：${esc(item.error)}</td></tr>`),
+  ];
+  return `<section class="tool-section"><h3>导入结果</h3><div class="summary-grid"><article class="card"><h3>总计</h3><div class="metric">${esc(report.total ?? rows.length)}</div></article><article class="card"><h3>成功</h3><div class="metric">${esc(imported.length)}</div></article><article class="card"><h3>跳过</h3><div class="metric">${esc(skipped.length)}</div></article><article class="card"><h3>失败</h3><div class="metric">${esc(failed.length)}</div></article></div><div class="table-wrap"><table><thead><tr><th>条目</th><th>名称</th><th>结果</th></tr></thead><tbody>${rows.join('') || '<tr><td colspan="3">没有条目</td></tr>'}</tbody></table></div></section>`;
+}
+
+async function characters() {
+  const data = await request('/characters'), rows = Array.isArray(data.characters) ? data.characters : [];
+  app.innerHTML = `<div class="section-head"><div><h2>角色目录</h2><p class="muted">提示词更新使用版本号防止并发覆盖。</p></div><div class="tabs-strip">${has('characters.write') ? '<button id="character-create">新建角色</button>' : ''}${has('characters.import') ? '<button id="character-import">批量导入</button>' : ''}${has('characters.crosschat') ? '<button id="character-crosschat">角色互聊</button>' : ''}</div></div><section id="character-panel"></section><div class="summary-grid">${rows.map((c) => `<article class="card"><h3>${esc(c.name)}</h3><div class="muted">${esc(c.id)} · ${esc(c.promptLength)} 字符</div><button data-character="${esc(c.id)}">查看 / 编辑</button></article>`).join('') || emptyState('暂无角色', '角色目录为空。')}</div><section id="character-editor"></section>`;
+  app.querySelectorAll('[data-character]').forEach((b) => b.onclick = async () => {
+    const c = (await request(`/characters/${encodeURIComponent(b.dataset.character)}`)).character;
+    document.querySelector('#character-editor').innerHTML = `<form id="character-form" class="tool-section"><h3>${esc(c.name)}</h3><label>名称<input name="name" value="${esc(c.name)}"></label><label>提示词<textarea name="prompt" rows="14">${esc(c.prompt)}</textarea></label><button type="submit" ${has('characters.write') ? '' : 'disabled'}>保存新版本</button></form>`;
+    document.querySelector('#character-form').onsubmit = async (e) => { e.preventDefault(); const f = new FormData(e.currentTarget), payload = { name: String(f.get('name')), prompt: String(f.get('prompt')), expectedRevision: c.revision }; await confirmedRequest(`/characters/${encodeURIComponent(c.id)}`, { method: 'PUT', body: body(payload) }, { payload, description: `更新角色 ${c.name}` }); await characters(); };
+  });
+  document.querySelector('#character-create')?.addEventListener('click', () => {
+    document.querySelector('#character-panel').innerHTML = `<form id="character-create-form" class="tool-section"><h3>新建角色</h3><label>名称<input name="name" required maxlength="100"></label><label>提示词<textarea name="prompt" rows="14" required></textarea></label><button type="submit">创建角色</button></form>`;
+    document.querySelector('#character-create-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const payload = { name: String(form.get('name')).trim(), prompt: String(form.get('prompt')) };
+      await confirmedRequest('/characters', { method: 'POST', body: body(payload) }, { permission: 'characters.write', action: 'characters.create', payload, description: `创建角色 ${payload.name}` });
+      await characters();
+    };
+  });
+  document.querySelector('#character-import')?.addEventListener('click', () => {
+    document.querySelector('#character-panel').innerHTML = `<form id="character-import-form" class="tool-section"><h3>批量导入角色</h3><p class="muted">粘贴 JSON 数组，每项形如 { "name", "prompt", "id?", "source?" }。预演只做校验，不写入磁盘。</p><label>角色 JSON<textarea name="items" rows="12" spellcheck="false" placeholder='[{"name":"新角色","prompt":"一段不少于 20 字的提示词"}]'></textarea></label><div class="form-grid"><label><input name="dryRun" type="checkbox" checked> 预演 (dryRun)</label><label>冲突处理<select name="onConflict"><option value="skip">跳过已有（skip）</option><option value="overwrite">覆盖已有（overwrite）</option></select></label></div><div id="character-import-error" class="notice error" hidden></div><button type="submit">导入</button></form><section id="character-import-result"></section>`;
+    document.querySelector('#character-import-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const errorBox = document.querySelector('#character-import-error');
+      let items;
+      try { items = JSON.parse(String(form.get('items') || '')); } catch { errorBox.textContent = 'JSON 解析失败：请检查括号、引号与逗号。'; errorBox.hidden = false; return; }
+      if (!Array.isArray(items)) { errorBox.textContent = '内容必须是 JSON 数组（以 [ 开头、以 ] 结尾）。'; errorBox.hidden = false; return; }
+      errorBox.hidden = true;
+      const payload = { items, dryRun: form.get('dryRun') === 'on', onConflict: String(form.get('onConflict')) };
+      const response = await confirmedRequest('/characters/import', { method: 'POST', body: body(payload) }, { permission: 'characters.import', action: 'characters.import', payload, description: `批量导入角色（${items.length} 项 · ${payload.dryRun ? '预演' : '写入'}）` });
+      document.querySelector('#character-import-result').innerHTML = characterImportReport(response.report || {});
+    };
+  });
+  document.querySelector('#character-crosschat')?.addEventListener('click', () => {
+    document.querySelector('#character-panel').innerHTML = `<form id="character-cross-chat-form" class="tool-section"><h3>角色互聊</h3><p class="muted">至少选择 2 个角色。对话在离线沙箱中生成，不会访问 Discord 或真实会话。</p><label>参与角色</label><div class="form-grid">${rows.map((c) => `<label><input type="checkbox" name="characterIds" value="${esc(c.id)}"> ${esc(c.name)}</label>`).join('') || '<span class="muted">没有可选角色</span>'}</div><label>话题<input name="topic" maxlength="500" required placeholder="例如：雨天的街角咖啡店"></label><label>起始角色<select name="startWith"><option value="">自动（按选择顺序）</option>${rows.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></label><div id="character-cross-chat-error" class="notice error" hidden></div><button type="submit">开始互聊</button></form><section id="character-cross-chat-result"></section>`;
+    document.querySelector('#character-cross-chat-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const errorBox = document.querySelector('#character-cross-chat-error');
+      const characterIds = form.getAll('characterIds').map(String);
+      if (characterIds.length < 2) { errorBox.textContent = '请至少选择 2 个角色。'; errorBox.hidden = false; return; }
+      const topic = String(form.get('topic') || '').trim();
+      if (!topic) { errorBox.textContent = '请填写话题。'; errorBox.hidden = false; return; }
+      errorBox.hidden = true;
+      const startWith = String(form.get('startWith') || '');
+      const payload = { characterIds, topic, ...(startWith ? { startWith } : {}) };
+      try {
+        // cross-chat is a reversible, non-confirmable route (route-policy: confirmation:false), so call it directly.
+        const response = await request('/characters/cross-chat', { method: 'POST', body: body(payload) });
+        const transcript = response.result || {};
+        const turns = Array.isArray(transcript.turns) ? transcript.turns : [];
+        document.querySelector('#character-cross-chat-result').innerHTML = `<section class="tool-section"><h3>对话记录</h3>${transcript.error ? `<div class="notice error">${esc(transcript.error)}</div>` : ''}<div class="timeline">${turns.map((turn) => `<div class="timeline-item"><time>${esc(turn.speakerName || turn.speakerId || '角色')}</time><div><span>${esc(turn.content)}</span></div></div>`).join('') || emptyState('没有对话内容', '模型没有返回任何回合。')}</div><p class="muted">停止原因：${esc(crossChatStopReason(transcript.stopReason))} · 用时 ${esc(transcript.totalMs ?? 0)} ms</p></section>`;
+      } catch (error) {
+        errorBox.textContent = error.statusCode === 409 ? '角色互聊服务未启用（缺少模型配置）。' : error.message;
+        errorBox.hidden = false;
+      }
+    };
+  });
+}
 
 async function device(){const [deviceData,affinityData]=await Promise.all([request('/device'),request('/affinity')]);const deviceState=deviceData.device||{},rows=affinityData.affinity||[];app.innerHTML=`<div class="summary-grid"><article class="card"><h3>电量</h3><div class="metric">${esc(deviceState.battery??'-')}%</div><div class="muted">${deviceState.charging?'充电中':'未充电'} · ${esc(deviceState.network||'-')}</div></article><article class="card"><h3>状态</h3><div class="metric compact">${esc(deviceState.activity||'-')}</div><div class="muted">${deviceState.doNotDisturb?'勿扰':'可用'} · 通知 ${esc(deviceState.notificationCount??0)}</div></article></div>${has('device.write')?`<form id="device-form" class="tool-section"><h3>更新设备状态</h3><div class="form-grid"><label>电量<input name="battery" type="number" min="0" max="100" value="${esc(deviceState.battery??50)}"></label><label>网络<select name="network"><option value="wifi" ${deviceState.network==='wifi'?'selected':''}>Wi‑Fi</option><option value="cellular" ${deviceState.network==='cellular'?'selected':''}>蜂窝网络</option><option value="weak" ${deviceState.network==='weak'?'selected':''}>信号较弱</option><option value="offline" ${deviceState.network==='offline'?'selected':''}>离线</option></select></label><label>活动<input name="activity" value="${esc(deviceState.activity||'')}"></label><label><input name="charging" type="checkbox" ${deviceState.charging?'checked':''}> 充电中</label><label><input name="doNotDisturb" type="checkbox" ${deviceState.doNotDisturb?'checked':''}> 勿扰</label></div><button>保存设备状态</button></form>`:''}<section class="tool-section"><h3>关系与好感</h3><div class="table-wrap"><table><thead><tr><th>机器人</th><th>用户</th><th>分数</th><th>说明</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.botId)}</td><td>${esc(x.userId)}</td><td>${esc(x.value)}</td><td>${esc(x.reason||'')}</td></tr>`).join('')||'<tr><td colspan="4">暂无关系记录</td></tr>'}</tbody></table></div></section>${has('memory.write')?`<form id="affinity-form" class="tool-section"><h3>调整好感</h3><div class="form-grid"><label>机器人 ID<input name="botId" value="main" required></label><label>用户 ID<input name="userId" required></label><label>变化（-10..10）<input name="delta" type="number" min="-10" max="10" required></label></div><p class="muted">此操作会记录为手动调整。</p><label>备注<input name="note"></label><button>提交调整</button></form>`:''}`;app.querySelector('#device-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={battery:Number(f.get('battery')),network:String(f.get('network')),activity:String(f.get('activity')),charging:f.get('charging')==='on',doNotDisturb:f.get('doNotDisturb')==='on'};await request('/device/transition',{method:'POST',body:body(payload)});await device();});app.querySelector('#affinity-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={botId:String(f.get('botId')),userId:String(f.get('userId')),delta:Number(f.get('delta')),note:String(f.get('note'))};await confirmedRequest('/affinity/adjust',{method:'POST',body:body(payload)},{payload,description:'调整用户关系好感度'});await device();});}
 
@@ -252,7 +326,54 @@ async function debugchat() {
 async function knowledge(){const data=await request('/knowledge-bases?limit=100'),bases=Array.isArray(data.bases)?data.bases:(data.bases?.items||[]);app.innerHTML=`<div class="section-head"><div><h2>本地知识库</h2><p class="muted">纯文本、确定性分块、关键词检索。文档正文不会作为 HTML 渲染。</p></div>${has('knowledge.write')?'<button id="new-kb">新建知识库</button>':''}</div><section id="knowledge-create"></section><div class="table-wrap"><table><thead><tr><th>名称</th><th>描述</th><th>文档</th><th>操作</th></tr></thead><tbody>${bases.map(b=>`<tr><td>${esc(b.name)}</td><td>${esc(b.description||'')}</td><td>${esc(b.documentCount??0)}</td><td><button data-kb="${esc(b.id)}">管理</button></td></tr>`).join('')}</tbody></table></div><section id="knowledge-detail"></section>`;document.querySelector('#new-kb')?.addEventListener('click',()=>{document.querySelector('#knowledge-create').innerHTML=`<form id="kb-form" class="tool-section"><label>名称<input name="name" required maxlength="120"></label><label>描述<textarea name="description" rows="3" maxlength="2000"></textarea></label><button>创建</button></form>`;document.querySelector('#kb-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={name:String(f.get('name')),description:String(f.get('description'))};await confirmedRequest('/knowledge-bases',{method:'POST',body:body(payload)},{payload,description:'创建本地知识库'});await knowledge();};});app.querySelectorAll('[data-kb]').forEach(b=>b.onclick=async()=>{const id=b.dataset.kb,[baseResult,documentsResult]=await Promise.all([request(`/knowledge-bases/${encodeURIComponent(id)}`),request(`/knowledge-bases/${encodeURIComponent(id)}/documents?limit=100`)]),base=baseResult.base,documentValue=documentsResult.documents,docs=Array.isArray(documentValue)?documentValue:(documentValue?.items||[]);document.querySelector('#knowledge-detail').innerHTML=`<section class="tool-section"><h3>${esc(base.name)}</h3><form id="kb-doc"><label>文档标题<input name="title" required></label><label>纯文本正文<textarea name="content" rows="9" maxlength="524288" required></textarea></label><button ${has('knowledge.write')?'':'disabled'}>写入文档</button></form><div class="table-wrap"><table><thead><tr><th>标题</th><th>长度</th><th>分块</th></tr></thead><tbody>${docs.map(d=>`<tr><td>${esc(d.name || d.title || '')}</td><td>${esc(d.textLength ?? d.contentLength ?? 0)}</td><td>${esc(d.chunkCount)}</td></tr>`).join('')}</tbody></table></div></section>`;document.querySelector('#kb-doc').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={name:String(f.get('title')),text:String(f.get('content'))};await confirmedRequest(`/knowledge-bases/${encodeURIComponent(id)}/documents`,{method:'POST',body:body(payload)},{payload,description:'写入知识库文档'});await knowledge();};});}
 async function behavior(){app.innerHTML=`<form id="behavior-form" class="tool-section"><h2>行为模拟运行</h2><p class="muted">只执行本地规则，不调用模型、不写状态。</p><div class="form-grid"><label>机器人 ID<input name="botId" value="main" required></label><label>用户 ID<input name="userId" value="debug-user" required></label><label>频道 ID<input name="channelId" value="dm:debug-user" required></label><label><input name="dm" type="checkbox" checked> 私聊</label></div><label>消息<textarea name="content" rows="4" required>你好</textarea></label><button type="submit">评估</button></form><section id="behavior-result"></section>`;app.querySelector('#behavior-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.currentTarget),payload={botId:String(f.get('botId')),userId:String(f.get('userId')),channelId:String(f.get('channelId')),dm:f.get('dm')==='on',content:String(f.get('content')),mentionsBot:false,recentReplies:0};const result=await request('/behavior/dry-run',{method:'POST',body:body(payload)});document.querySelector('#behavior-result').innerHTML=`<pre>${esc(JSON.stringify(result.result,null,2))}</pre>`;};}
 async function opaudit(){const[toolsResult,auditResult]=await Promise.all([request('/ops/operator-tools').catch(()=>({tools:[]})),request('/ops/operator-audit?limit=100')]);const tools=toolsResult.tools||[],entries=auditResult.entries||[];const riskLabel={read:'只读',write:'需确认',danger:'拒绝'};app.innerHTML=`<div class="section-head"><div><h2>运维审计</h2><p class="muted">Operator 工具清单与调用记录（已脱敏）。写入类操作只能在聊天通道用 ?op confirm 二次确认。</p></div><button id="refresh-opaudit">刷新</button></div><section class="tool-section"><h3>可用工具 ${tools.length}</h3><div class="table-wrap"><table><thead><tr><th>工具</th><th>风险</th><th>用法</th><th>说明</th></tr></thead><tbody>${tools.map(t=>`<tr><td><strong>${esc(t.name)}</strong></td><td>${esc(riskLabel[t.risk]||t.risk)}${t.confirm?'（确认）':''}</td><td><code>${esc(t.usage)}</code></td><td>${esc(t.description)}</td></tr>`).join('')||'<tr><td colspan="4">暂无工具（operator 插件未启用或 API 未就绪）</td></tr>'}</tbody></table></div></section><section class="tool-section"><h3>调用记录 ${entries.length}</h3><div class="table-wrap"><table><thead><tr><th>时间</th><th>工具</th><th>参数</th><th>调用者</th><th>结果</th><th>详情</th></tr></thead><tbody>${entries.map(e=>`<tr><td>${esc(new Date(e.ts).toLocaleString())}</td><td>${esc(e.tool)}</td><td><code>${esc(e.args||'')}</code></td><td>${esc(e.caller)}</td><td>${esc(e.outcome)}</td><td>${esc(e.detail||'')}</td></tr>`).join('')||'<tr><td colspan="6">暂无调用记录</td></tr>'}</tbody></table></div></section>`;document.querySelector('#refresh-opaudit').onclick=opaudit;}
-const tabs = { overview,bots,plugins,extensions,operations,opaudit,logs,memory,behavior,debugchat,knowledge, users,tokens, health, models,providers, config, characters, world,device, metrics };
+function mcpNotice(label, reason) {
+  const code = reason?.statusCode;
+  if (code === 404) return `<div class="notice">${esc(label)}：API 尚未启用，等待服务端接入。</div>`;
+  if (code === 409) return `<div class="notice warn">${esc(label)}：MCP 未配置或未启用。</div>`;
+  if (code === 403) return `<div class="notice warn">${esc(label)}：当前账号权限不足。</div>`;
+  return `<div class="notice error">${esc(label)} 加载失败：${esc(reason?.message || '未知错误')}</div>`;
+}
+
+function mcpText(part) {
+  if (part && typeof part === 'object' && typeof part.text === 'string') return part.text;
+  try { return JSON.stringify(part); } catch { return String(part); }
+}
+
+async function mcp() {
+  const results = await Promise.allSettled([request('/mcp/policy'), request('/mcp/tools'), request('/mcp/audit')]);
+  const policy = results[0].status === 'fulfilled' ? results[0].value : {};
+  const catalog = results[1].status === 'fulfilled' ? results[1].value : {};
+  const audit = results[2].status === 'fulfilled' ? results[2].value : {};
+  const rules = Array.isArray(policy.rules) ? policy.rules : [];
+  const servers = Array.isArray(catalog.servers) ? catalog.servers : [];
+  const tools = Array.isArray(catalog.tools) ? catalog.tools : [];
+  const entries = Array.isArray(audit.entries) ? audit.entries : [];
+  const labels = ['工具策略', '工具清单', '调用审计'];
+  const notice = results.map((result, index) => result.status === 'rejected' ? mcpNotice(labels[index], result.reason) : '').join('');
+  const outcomeLabel = { allowed: '允许', denied: '拒绝', error: '错误' };
+  app.innerHTML = `<div class="section-head"><div><h2>MCP 工具</h2><p class="muted">工具级权限策略、服务器状态与调用审计。审计中的参数均已脱敏。</p></div><button id="refresh-mcp">刷新</button></div>${notice}<section class="tool-section"><h3>工具策略 ${rules.length}</h3><div class="table-wrap"><table><thead><tr><th>匹配模式</th><th>最低角色</th></tr></thead><tbody>${rules.map((rule) => `<tr><td><code>${esc(rule.pattern)}</code></td><td>${esc(rule.minRole)}</td></tr>`).join('') || '<tr><td colspan="2">暂无策略规则（默认拒绝所有工具）</td></tr>'}</tbody></table></div></section><section class="tool-section"><h3>服务器状态 ${servers.length}</h3><div class="table-wrap"><table><thead><tr><th>服务器</th><th>传输</th><th>初始化</th><th>工具数</th><th>错误</th></tr></thead><tbody>${servers.map((server) => `<tr><td><strong>${esc(server.id)}</strong></td><td>${esc(server.transport)}</td><td>${server.initialized ? '已就绪' : '未就绪'}</td><td>${esc(server.toolCount ?? 0)}</td><td>${esc(server.error || '')}</td></tr>`).join('') || '<tr><td colspan="5">暂无已配置的 MCP 服务器</td></tr>'}</tbody></table></div></section><section class="tool-section"><h3>可用工具 ${tools.length}</h3><div class="table-wrap"><table><thead><tr><th>服务器</th><th>工具</th><th>说明</th></tr></thead><tbody>${tools.map((tool) => `<tr><td>${esc(tool.server)}</td><td><strong>${esc(tool.name)}</strong></td><td>${esc(tool.description || '')}</td></tr>`).join('') || '<tr><td colspan="3">暂无可用工具</td></tr>'}</tbody></table></div></section>${has('mcp.call') ? `<form id="mcp-call-form" class="tool-section"><h3>调用工具</h3><div class="form-grid"><label>服务器<input name="server" list="mcp-servers" required placeholder="server id"></label><label>工具<input name="tool" list="mcp-tools" required placeholder="tool name"></label></div><datalist id="mcp-servers">${servers.map((server) => `<option value="${esc(server.id)}"></option>`).join('')}</datalist><datalist id="mcp-tools">${tools.map((tool) => `<option value="${esc(tool.name)}"></option>`).join('')}</datalist><label>参数 (JSON 对象)<textarea name="arguments" rows="6" spellcheck="false">{}</textarea></label><div id="mcp-call-error" class="notice error" hidden></div><button class="danger" type="submit">调用（需二次确认）</button></form><section id="mcp-call-result"></section>` : ''}<section class="tool-section"><h3>调用审计 ${entries.length}</h3><div class="table-wrap"><table><thead><tr><th>时间</th><th>工具</th><th>调用者</th><th>结果</th><th>参数</th><th>详情</th></tr></thead><tbody>${entries.map((entry) => `<tr><td>${esc(entry.at ? new Date(entry.at).toLocaleString() : '')}</td><td>${esc(entry.tool)}</td><td>${esc(entry.caller)}</td><td>${esc(outcomeLabel[entry.outcome] || entry.outcome)}</td><td><code>${esc(entry.argsRedacted || '')}</code></td><td>${esc(entry.detail || '')}</td></tr>`).join('') || '<tr><td colspan="6">暂无调用记录</td></tr>'}</tbody></table></div></section>`;
+  document.querySelector('#refresh-mcp').onclick = mcp;
+  document.querySelector('#mcp-call-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const errorBox = document.querySelector('#mcp-call-error');
+    let args;
+    try { args = JSON.parse(String(form.get('arguments') || '{}') || '{}'); } catch { errorBox.textContent = '参数必须是有效 JSON。'; errorBox.hidden = false; return; }
+    if (!args || typeof args !== 'object' || Array.isArray(args)) { errorBox.textContent = '参数必须是 JSON 对象（{ ... }）。'; errorBox.hidden = false; return; }
+    const server = String(form.get('server') || '').trim();
+    const tool = String(form.get('tool') || '').trim();
+    if (!server || !tool) { errorBox.textContent = '请填写服务器与工具名称。'; errorBox.hidden = false; return; }
+    errorBox.hidden = true;
+    const payload = { server, tool, arguments: args };
+    const response = await confirmedRequest('/mcp/call', { method: 'POST', body: body(payload) }, { permission: 'mcp.call', action: 'mcp.call', payload, description: `调用 MCP 工具 ${server}/${tool}` });
+    const result = response.result ?? response;
+    const content = Array.isArray(result.content) ? result.content : [];
+    const text = content.map((part) => mcpText(part)).join('\n');
+    document.querySelector('#mcp-call-result').innerHTML = `<section class="tool-section"><h3>调用结果</h3>${result.isError ? '<div class="notice error">工具返回错误（isError）。</div>' : ''}<pre>${esc(text || JSON.stringify(result, null, 2))}</pre></section>`;
+  });
+}
+
+const tabs = { overview,bots,plugins,extensions,mcp,operations,opaudit,logs,memory,behavior,debugchat,knowledge, users,tokens, health, models,providers, config, characters, world,device, metrics };
 async function activate(button) {
   if (!button || button.hidden) return;
   document.querySelectorAll('#navigation button').forEach((item) => item.classList.toggle('active', item === button));
