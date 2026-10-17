@@ -32,6 +32,7 @@ import { SongStore } from '../songs/database.js';
 import { formatSongBlock, matchSong } from '../songs/matcher.js';
 import { DEFAULT_VCPEDIA_CONFIG, syncVcpedia } from '../songs/vcpedia.js';
 import { ChatToolRegistry } from '../ai/tools.js';
+import { registerMcpTools } from '../ai/mcp-tools.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
 import { EmotionManager } from '../emotion/manager.js';
@@ -56,6 +57,8 @@ export interface BotRuntimeDeps {
   storage?: Storage;
   /** Extension registries. Defaults to the process-wide ones. */
   registries: Registries;
+  /** Shared MCP manager; when present its tools are bridged into the reply path. */
+  mcp?: import('../mcp/manager.js').McpManager;
 }
 
 export interface BotSnapshot {
@@ -390,6 +393,13 @@ export class BotRuntime implements Managed {
           return detail ? { found: true, info: formatSongBlock(detail) } : { found: false };
         },
       });
+    }
+    // Bridge configured MCP servers' tools into the same registry; each call is
+    // attributed to a low-privilege role and still passes the MCP permission
+    // gate + audit (src/ai/mcp-tools.ts).
+    if (this.#deps.mcp) {
+      const bridged = registerMcpTools(chatTools, this.#deps.mcp, { logger: this.#logger });
+      if (bridged > 0) this.#logger.info({ bridged }, 'mcp tools bridged into reply path');
     }
     this.#pipeline = new MessagePipeline({
       config: cfg,

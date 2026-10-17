@@ -122,6 +122,16 @@ export class Runtime {
 
     await this.#loadExtensions();
 
+    // MCP client manager: started BEFORE bots so the reply path can offer MCP
+    // tools to the model (ai.tools.enabled) and the admin API can list/audit/
+    // call them. Default off; a broken server never blocks startup.
+    const mcpConfig = this.#config.global.mcp;
+    if (mcpConfig.enabled && mcpConfig.servers.length > 0) {
+      this.#mcp = new McpManager({ servers: mcpConfig.servers, logger: this.#logger });
+      await this.#mcp.start();
+      this.#logger.info({ servers: this.#mcp.status().length, tools: this.#mcp.tools().length }, 'mcp servers ready');
+    }
+
     for (const botConfig of this.#config.bots) {
       if (!botConfig.enabled) {
         this.#logger.info({ bot: botConfig.id }, 'bot disabled by config; skipping');
@@ -136,6 +146,7 @@ export class Runtime {
         tasks: this.#tasks,
         storage: this.#storage,
         registries,
+        mcp: this.#mcp,
       });
       this.#bots.set(botConfig.id, bot);
       // Not critical: one dead bot must never take the runtime with it.
@@ -179,12 +190,6 @@ export class Runtime {
         const runner=new CrossChatRunner({catalog:crossChatCatalog,provider,logger:this.#logger});
         return runner.run({characterIds:input.characterIds,topic:input.topic,startWith:input.startWith});
       };
-      const mcpConfig = this.#config.global.mcp;
-      if (mcpConfig.enabled && mcpConfig.servers.length > 0) {
-        this.#mcp = new McpManager({ servers: mcpConfig.servers, logger: this.#logger });
-        await this.#mcp.start();
-        this.#logger.info({ servers: this.#mcp.status().length, tools: this.#mcp.tools().length }, 'mcp servers ready');
-      }
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,

@@ -54,6 +54,8 @@ export interface McpToolRef {
   server: string;
   name: string;
   description?: string;
+  /** JSON schema for the tool arguments, as advertised by the server. */
+  inputSchema?: Record<string, unknown>;
 }
 
 /** Builds the transport for one server; overridable for tests. */
@@ -157,6 +159,7 @@ export class McpManager {
         seen.add(key);
         const ref: McpToolRef = { server: entry.config.id, name: tool.name };
         if (tool.description !== undefined) ref.description = tool.description;
+        if (tool.inputSchema !== undefined) ref.inputSchema = tool.inputSchema;
         refs.push(ref);
       }
     }
