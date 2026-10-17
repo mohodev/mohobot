@@ -42,7 +42,9 @@
 - [x] 文档卫生 — `webui/index.md` 按代码实况重写；修正 `docs/AUDIT.md`「未实现」过期断言与 `docs/EXTENDING.md`「HTTP API/WebUI 不在范围」过期边界；新增 `docs/MCP.md`
 
 剩余（非阻塞，已评估、按需再做）：
-- [ ] 把 MCP 工具作为**模型可调用工具**接入回复 pipeline（现在仅管理员经 WebUI/API 显式调用；需要新的 pipeline 阶段）
+- [x] LLM 工具调用进回复 pipeline（通用路径）— `src/ai/tools.ts`（`ChatToolRegistry` + `executeToolCall`）+ provider tools 支持（非流式）+ pipeline 有界工具循环（`ai.tools.enabled` 默认关，allowlist + maxRounds）+ 内置 `search_song`；移植自 upstream `llm_tools.py`
+- [x] 回复产物过滤器 — `src/pipeline/reply-filter.ts`，移植自 upstream `reply_filter.py`（FORMAT/DROP/VOICE 三类，流式安全、比较式不误伤、嵌套 drop、超长救援），`ai.replyFilter` 默认开
+- [ ] 把 **MCP 工具**桥接进 `ChatToolRegistry`（让 MCP server 的工具可被模型调用）：通用 LLM 工具调用路径已就绪，仅缺 MCP→registry 桥（含权限/审计映射）
 - [ ] `docs/IMMERSION.md` 规定的「角色互询」（好感≥70 + `shared` 标签 + opt-in + 内部私有通道 + 只回抽象答案）——有规格、无实现；现有 cross-chat 是管理员驱动的公开多角色对聊，不等同
 - [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 Promise 超时强制终止（AbortSignal + 副作用生命周期令牌）、`chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot、全局配置变更后动态重建组件
 

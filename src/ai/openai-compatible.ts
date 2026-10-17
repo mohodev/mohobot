@@ -13,7 +13,7 @@
 import type { AIConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, ChatToolCall, ToolChatMessage } from '../core/types.js';
 import {
   AIError,
   type AIErrorKind,
@@ -69,6 +69,29 @@ function toUsage(raw: unknown): AIUsage | undefined {
   if (typeof u.completion_tokens === 'number') usage.completionTokens = u.completion_tokens;
   if (typeof u.total_tokens === 'number') usage.totalTokens = u.total_tokens;
   return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+/** Serialize a ChatMessage into the OpenAI wire shape (incl. tool messages). */
+function toWireMessage(m: ChatMessage | ToolChatMessage): Record<string, unknown> {
+  if (m.role === 'tool') {
+    return {
+      role: 'tool',
+      content: m.content,
+      ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
+      ...(m.name ? { name: m.name } : {}),
+    };
+  }
+  const wire: Record<string, unknown> = m.name
+    ? { role: m.role, content: m.content, name: m.name }
+    : { role: m.role, content: m.content };
+  if (m.role === 'assistant' && m.toolCalls?.length) {
+    wire.tool_calls = m.toolCalls.map((c) => ({
+      id: c.id,
+      type: 'function',
+      function: { name: c.name, arguments: c.arguments },
+    }));
+  }
+  return wire;
 }
 
 /** HTTP status -> error kind + whether another attempt could help. */
@@ -137,7 +160,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     return this.#cfg.model;
   }
 
-  async chat(messages: ChatMessage[], options: ChatOptions = {}): Promise<AIResponse> {
+  async chat(messages: Array<ChatMessage | ToolChatMessage>, options: ChatOptions = {}): Promise<AIResponse> {
     const model = options.model ?? this.#cfg.model;
     const maxAttempts = Math.max(1, this.#cfg.retries + 1);
 
@@ -208,10 +231,13 @@ export class OpenAICompatibleProvider implements AIProvider {
     return headers;
   }
 
-  async #attempt(messages: ChatMessage[], options: ChatOptions, model: string): Promise<AIResponse> {
+  async #attempt(messages: Array<ChatMessage | ToolChatMessage>, options: ChatOptions, model: string): Promise<AIResponse> {
     const started = Date.now();
     const timeoutMs = options.timeoutMs ?? this.#cfg.timeoutMs;
-    const stream = Boolean((options.stream ?? this.#cfg.stream) && options.onDelta);
+    const hasTools = Boolean(options.tools?.length);
+    // Tool-calling is only supported in non-streaming mode: streaming
+    // tool-call deltas are not accumulated, so tools force the stream off.
+    const stream = !hasTools && Boolean((options.stream ?? this.#cfg.stream) && options.onDelta);
 
     const controller = new AbortController();
     let timedOut = false;
@@ -235,9 +261,10 @@ export class OpenAICompatibleProvider implements AIProvider {
         // options entry can never hijack model/messages/auth-critical fields.
         ...this.#cfg.options,
         model,
-        messages: messages.map((m) => (m.name ? { role: m.role, content: m.content, name: m.name } : { role: m.role, content: m.content })),
+        messages: messages.map(toWireMessage),
         temperature: options.temperature ?? this.#cfg.temperature,
         stream,
+        ...(hasTools ? { tools: options.tools } : {}),
       });
 
       let res: Response;
@@ -320,16 +347,35 @@ export class OpenAICompatibleProvider implements AIProvider {
     const payload = (json ?? {}) as {
       model?: string;
       usage?: unknown;
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+      choices?: Array<{
+        message?: {
+          content?: string | null;
+          tool_calls?: Array<{ id?: unknown; function?: { name?: unknown; arguments?: unknown } }>;
+        };
+        finish_reason?: string;
+      }>;
     };
     const choice = payload.choices?.[0];
-    const content=choice?.message?.content;
-    if(typeof content!=='string'||content.trim().length===0)throw new AIError('provider returned an empty completion',{kind:'server',status:res.status,retryable:true});
+    const toolCalls: ChatToolCall[] = (choice?.message?.tool_calls ?? [])
+      .filter(
+        (c): c is { id: string; function: { name: string; arguments: string } } =>
+          typeof c?.id === 'string' &&
+          typeof c?.function?.name === 'string' &&
+          typeof c?.function?.arguments === 'string',
+      )
+      .map((c) => ({ id: c.id, name: c.function.name, arguments: c.function.arguments }));
+    const content = choice?.message?.content;
+    // A tool-call response legitimately has empty/null content; only a
+    // completion with neither content nor tool calls counts as empty.
+    if (toolCalls.length === 0 && (typeof content !== 'string' || content.trim().length === 0)) {
+      throw new AIError('provider returned an empty completion', { kind: 'server', status: res.status, retryable: true });
+    }
     return {
-      content,
+      content: typeof content === 'string' ? content : '',
       model: payload.model ?? model,
       usage: toUsage(payload.usage),
       finishReason: choice?.finish_reason,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
       ms: Date.now() - started,
     };
   }

@@ -19,8 +19,10 @@ import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
 import type { ChatMessage, EmbedCard, EmbedField, MohoMessage, OutboundMessage } from '../core/types.js';
-import type { AIProvider } from '../ai/types.js';
+import type { AIProvider, AIResponse } from '../ai/types.js';
 import { AIError } from '../ai/types.js';
+import { executeToolCall, type ChatToolRegistry } from '../ai/tools.js';
+import { stripReplyArtifacts } from './reply-filter.js';
 import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
 import { decodeReplyPlan, deliverySegments, planText, type ReplyPlan } from './reply-plan.js';
@@ -151,6 +153,11 @@ export interface PipelineDeps {
    * disabled) = feature off.
    */
   personaAb?: PersonaAbBridge;
+  /**
+   * LLM function/tool-calling registry (src/ai/tools.ts). Used only when
+   * `config.ai.tools.enabled`; omitted or empty = reply path unchanged.
+   */
+  chatTools?: ChatToolRegistry;
 }
 
 /** The slice of the usage recorder the pipeline needs. */
@@ -762,15 +769,7 @@ export class MessagePipeline {
     const protocolDeltas: string[] = [];
     this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream, protocol: 'reply-plan' });
     try {
-      const response = await this.#deps.provider.chat(messages, {
-        temperature: cfg.ai.temperature,
-        timeoutMs: cfg.ai.timeoutMs,
-        stream: cfg.ai.stream,
-        signal: controller.signal,
-        // Accounting hint only: lets `?用量 会话` rank rooms by real spend.
-        channelId: message.channel.id,
-        onDelta: cfg.ai.stream ? (delta) => { protocolDeltas.push(delta); this.#trace(trace, 'delta', { length: delta.length }); } : undefined,
-      });
+      const response = await this.#chatMaybeWithTools(messages, cfg, controller.signal, message, trace, protocolDeltas);
       reply = response.content.trim() || protocolDeltas.join('').trim();
       stopThinkingTyping();
       runtimeMetrics.ai.record(Date.now() - aiStarted, true);
@@ -1319,9 +1318,84 @@ export class MessagePipeline {
     await this.#reply(message, '用法：`?ab`（查看待投票）· `?ab A/B/平局/都不好/跳过`（投票）· `?ab switch <编号> A`（切换人设）· `?ab stats`（管理员统计）。');
   }
 
+  /**
+   * Model call for a reply. When LLM tool-calling is enabled and at least one
+   * tool survives the allowlist, runs a bounded non-streaming tool loop;
+   * otherwise the single (optionally streaming) call is byte-identical to before.
+   */
+  async #chatMaybeWithTools(
+    messages: ChatMessage[],
+    cfg: ResolvedBotConfig,
+    signal: AbortSignal,
+    message: MohoMessage,
+    trace: ChatTrace,
+    protocolDeltas: string[],
+  ): Promise<AIResponse> {
+    const toolDefs = this.#toolDefs(cfg);
+    if (toolDefs.length === 0) {
+      return this.#deps.provider.chat(messages, {
+        temperature: cfg.ai.temperature,
+        timeoutMs: cfg.ai.timeoutMs,
+        stream: cfg.ai.stream,
+        signal,
+        // Accounting hint only: lets `?用量 会话` rank rooms by real spend.
+        channelId: message.channel.id,
+        onDelta: cfg.ai.stream ? (delta) => { protocolDeltas.push(delta); this.#trace(trace, 'delta', { length: delta.length }); } : undefined,
+      });
+    }
+    // Tool-calling forces non-streaming (see openai-compatible); the final text
+    // answer is returned whole, so reply-plan buffering is unaffected.
+    const registry = this.#deps.chatTools!;
+    const ctx = { botId: cfg.id, channelId: message.channel.id, userId: message.author.id };
+    const thread: ChatMessage[] = [...messages];
+    let last: AIResponse | undefined;
+    for (let round = 0; round < cfg.ai.tools.maxRounds; round += 1) {
+      const response = await this.#deps.provider.chat(thread, {
+        temperature: cfg.ai.temperature,
+        timeoutMs: cfg.ai.timeoutMs,
+        stream: false,
+        signal,
+        channelId: message.channel.id,
+        tools: toolDefs,
+      });
+      last = response;
+      if (!response.toolCalls || response.toolCalls.length === 0) return response;
+      this.#trace(trace, 'model_tool_calls', { round, count: response.toolCalls.length });
+      thread.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
+      for (const call of response.toolCalls) {
+        const output = await executeToolCall(registry, call, ctx);
+        this.#logger.info({ tool: call.name, traceId: trace.id }, 'llm tool executed');
+        // The concrete provider accepts tool messages; the AIProvider interface
+        // stays narrow, so the tool turn is cast at this seam only.
+        thread.push({ role: 'tool', toolCallId: call.id, name: call.name, content: output } as unknown as ChatMessage);
+      }
+    }
+    // Rounds exhausted: return the last response; an empty content falls back
+    // to the configured fallback reply downstream.
+    return last!;
+  }
+
+  /** Tool definitions honoured by the allowlist; empty = feature off. */
+  #toolDefs(cfg: ResolvedBotConfig): ReturnType<ChatToolRegistry['definitions']> {
+    const registry = this.#deps.chatTools;
+    if (!cfg.ai.tools.enabled || !registry || registry.size === 0) return [];
+    const allow = cfg.ai.tools.allow;
+    const defs = registry.definitions();
+    return allow.length === 0 ? defs : defs.filter((d) => allow.includes(d.function.name));
+  }
+
   async #replyPlan(message: MohoMessage, plan: ReplyPlan, traceId?: string): Promise<boolean> {
     let delivered = 0;
-    const segments = deliverySegments(plan, message.channel.dm);
+    let segments = deliverySegments(plan, message.channel.dm);
+    if (this.#deps.config.ai.replyFilter) {
+      // Strip model-invented artifact tags (think/tool_call/format/voice) from
+      // delivered text; drop segments that become empty. The TTS half of a
+      // voice tag has no consumer on Discord, so it is discarded.
+      segments = segments
+        .map((s) => ({ ...s, text: stripReplyArtifacts(s.text).display }))
+        .filter((s) => s.text.trim().length > 0);
+      if (segments.length === 0) return false;
+    }
     for (let i = 0; i < segments.length; i += 1) {
       const segment = segments[i]!;
       if (this.#deps.config.discord.typingIndicator && this.#deps.typing && segment.typingMs > 0) {

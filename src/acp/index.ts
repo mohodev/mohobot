@@ -40,6 +40,8 @@ async function main(): Promise<void> {
     retries: 2,
     retryBaseDelayMs: 500,
     stream: true,
+    replyFilter: true,
+    tools: { enabled: false, maxRounds: 3, allow: [] },
     fallbackReply: '',
     options: {},
   };

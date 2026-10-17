@@ -5,7 +5,13 @@
  * terminate the process. Callers get either an AIResponse or a thrown AIError.
  */
 
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, ChatToolCall } from '../core/types.js';
+
+/** A function/tool definition offered to the model (OpenAI `tools` schema). */
+export interface ChatToolDefinition {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
 
 export interface ChatOptions {
   model?: string;
@@ -24,6 +30,8 @@ export interface ChatOptions {
    * background lanes (summary, ab, vision) stay unattributed.
    */
   channelId?: string;
+  /** Tools the model may call. Forces non-streaming mode when non-empty. */
+  tools?: ChatToolDefinition[];
 }
 
 export interface AIUsage {
@@ -37,6 +45,8 @@ export interface AIResponse {
   model: string;
   usage?: AIUsage;
   finishReason?: string;
+  /** Tool calls requested by the model (implies `content` may be empty). */
+  toolCalls?: ChatToolCall[];
   /** Wall-clock duration of the successful attempt. */
   ms: number;
 }

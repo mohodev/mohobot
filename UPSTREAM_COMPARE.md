@@ -38,4 +38,8 @@
 | 搜索（上游用 Anysearch MCP） | `plugins/search`（Anysearch + DuckDuckGo + Wikipedia 三后端链） | ✅ 数据源跟随，Discord 原生 |
 | 群互动/迎新/运营 | `plugins/fun`（占卜/66 梗）/ `plugins/welcome` / `plugins/bilibili` / `?广播`（`src/admin/broadcast.ts`） | ✅ Discord 原生重写（广播只覆盖服务器、不打扰私聊） |
 | 聊天治理 | `?ban` / `?unban` / `?banlist`、repeat-guard | ✅ 已有 |
+| `services/llm_tools.py`（插件声明的 LLM 工具注册表 + function calling） | `src/ai/tools.ts`（ChatToolRegistry + executeToolCall）+ provider tools 支持（`src/ai/openai-compatible.ts`，非流式）+ pipeline 工具循环（`ai.tools.enabled` 默认关，allowlist + maxRounds）+ 内置 `search_song` 工具 | ✅ 已移植（opt-in，默认关） |
+| `utils/reply_filter.py`（回复产物过滤器 FORMAT/DROP/VOICE） | `src/pipeline/reply-filter.ts`（流式安全、比较式不误伤、嵌套 drop、超长救援；`ai.replyFilter` 默认开） | ✅ 已移植（VOICE 的朗读文本在 Discord 无消费方，仅剥标签保内容） |
 | 戳一戳反射 / TTS 唱歌规划 / 图片 phash 去重 / OneBot v11 | 无 | ➖ QQ 特有，Discord 不适用（维持不做） |
+
+> 2026-10-17 复核：对上游 `mohobot/` 全模块（services/interceptors/utils/顶层）重新核对后，发现 10-11 版漏了两项通用能力——`llm_tools.py`（LLM 工具调用进回复路径）与 `reply_filter.py`（回复产物清洗）——本轮已补（见表内对应行）。至此，**排除 QQ 特有项后，通用功能面与上游对齐**。

@@ -27,6 +27,25 @@ export const AIConfigSchema = z.object({
   retries: z.number().int().min(0).max(10).default(2),
   retryBaseDelayMs: z.number().int().positive().default(500),
   stream: z.boolean().default(false),
+  /**
+   * Strip model-invented artifact tags (think/tool_call/format/voice) from
+   * delivered reply text (src/pipeline/reply-filter.ts). Comparison-safe.
+   */
+  replyFilter: z.boolean().default(true),
+  /**
+   * LLM function/tool-calling in the reply path (src/ai/tools.ts). Default off:
+   * when disabled (or no tools are registered) the reply path is unchanged.
+   * Enabling forces non-streaming replies for that bot.
+   */
+  tools: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Max tool-call rounds per reply before forcing a final text answer. */
+      maxRounds: z.number().int().min(1).max(8).default(3),
+      /** Empty = every registered tool is offered; otherwise a tool-name allowlist. */
+      allow: z.array(z.string()).default([]),
+    })
+    .default({}),
   /** Message shown to users when the AI call ultimately fails. */
   fallbackReply: z.string().default('（刚才没连上，想说的话再发一次吧）'),
   /** Free-form provider-specific options, passed through untouched. */

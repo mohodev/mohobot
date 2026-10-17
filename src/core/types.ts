@@ -160,18 +160,42 @@ export interface OutboundMessage {
   embed?: EmbedCard;
 }
 
+/** A single tool (function) call requested by the model. */
+export interface ChatToolCall {
+  id: string;
+  /** Tool (function) name. */
+  name: string;
+  /** JSON-encoded arguments string, exactly as the model produced it. */
+  arguments: string;
+}
+
 /** Chat turn as stored in a session and sent to the AI provider. */
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
   /** Optional display name, forwarded to providers that support it. */
   name?: string;
+  /** Present on an assistant message that requested tool calls. */
+  toolCalls?: ChatToolCall[];
+  /** Present on a tool message: which tool call this result answers. */
+  toolCallId?: string;
   /** Platform message identity for lifecycle corrections. */
   sourceMessageId?: string;
   sourcePlatform?: Platform;
   createdAt?: number;
   /** Tombstones remain persisted but are excluded from model context. */
   deleted?: boolean;
+}
+
+/**
+ * A tool-result turn: the output of executing one ChatToolCall, sent back to
+ * the model with role 'tool'. Kept distinct from ChatMessage so existing
+ * narrowing on ChatMessage['role'] (e.g. `role !== 'system'` implying
+ * 'user' | 'assistant') keeps compiling; providers accept it alongside
+ * ChatMessage.
+ */
+export interface ToolChatMessage extends Omit<ChatMessage, 'role'> {
+  role: 'tool';
 }
 
 export type ComponentState =

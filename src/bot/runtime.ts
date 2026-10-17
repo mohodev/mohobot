@@ -31,6 +31,7 @@ import { UsageRecorder, UsageRecordingProvider } from '../ai/usage.js';
 import { SongStore } from '../songs/database.js';
 import { formatSongBlock, matchSong } from '../songs/matcher.js';
 import { DEFAULT_VCPEDIA_CONFIG, syncVcpedia } from '../songs/vcpedia.js';
+import { ChatToolRegistry } from '../ai/tools.js';
 import { PublicRelationshipStore } from '../pipeline/public-relationships.js';
 import { BanStore } from '../pipeline/ban-store.js';
 import { EmotionManager } from '../emotion/manager.js';
@@ -364,6 +365,32 @@ export class BotRuntime implements Managed {
       archiveAgeHours: 24,
       compressArchived: true,
     });
+    // LLM function/tool-calling registry. Tools are offered to the model in the
+    // reply path only when cfg.ai.tools.enabled (default off); the registry is
+    // otherwise inert. Built-in: song-library lookup (port of upstream
+    // song_tools), backed by the existing song store.
+    const chatTools = new ChatToolRegistry();
+    if (songStore) {
+      const store = songStore;
+      chatTools.register({
+        definition: {
+          type: 'function',
+          function: {
+            name: 'search_song',
+            description: '查询虚拟歌手歌曲库，按歌名或关键词返回歌曲信息（歌名/P主/歌词片段等）。当用户问起某首歌、想点歌或要歌词时使用。',
+            parameters: { type: 'object', properties: { query: { type: 'string', description: '歌名或搜索关键词' } }, required: ['query'] },
+          },
+        },
+        handler: async (args) => {
+          const query = String(args.query ?? '').trim();
+          if (!query) return { found: false };
+          const hit = matchSong(query, store.index(), { minNameLength: 1 });
+          if (!hit) return { found: false };
+          const detail = await store.get(hit.name);
+          return detail ? { found: true, info: formatSongBlock(detail) } : { found: false };
+        },
+      });
+    }
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -382,6 +409,7 @@ export class BotRuntime implements Managed {
       },
       emotion,
       personaAb,
+      chatTools,
       usage: this.#usage ? {
         report: (days: number) => this.#usage!.report(cfg.id, days),
         sessionReport: (days: number) => this.#usage!.sessionReport(cfg.id, days),
