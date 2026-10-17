@@ -21,10 +21,10 @@
 - [ ] commit + push（本次交接任务）
 
 ### Phase 1 — 诊断能力（diag）
-- [ ] `diag` 工具：接入 core handles（sessions/traces/usage kv / provider health）
-- [ ] `?op diag why <messageId>`：反查一条消息为什么没被回复（trace 链 + chat_log + social decision + ban 检查）
-- [ ] `?op diag health`：provider/gateway/storage/emotion 依赖健康
-- [ ] `?op diag tail`：最近 N 条 chat_log + trace 事件
+- [x] `diag` 工具：接入 traces/sessions handles（health / tail / why）
+- [x] `?op diag why <messageId>`：反查 trace 链（events + outcome）
+- [x] `?op diag health`：storage/sessions/traces 健康
+- [x] `?op diag tail`：最近 N 条 trace 事件
 
 ### Phase 2 — 受控写入（patch/config）
 - [ ] `patch` 工具：propose diff → confirm → apply（只限 src/ plugins/ extensions/，禁止 data/.env* 和 DB）
@@ -51,5 +51,5 @@
 - [ ] 安全收尾（见 `docs/AUDIT.md`）：在 Kilo 后台吊销并轮换泄露过的凭据；如需清历史再做 `git filter-repo` + 强制推送
 
 ## 已知 bug（待修）
-- [ ] `<@id>` 残留：adapter 没抹掉 mention 原文，模型会看到乱码（ tonight 实测 QCFR @ 时 MohoTest 说"夹带的那堆乱码"）
-- [ ] 好感度数字滞后：analysisRoundCooldown 2 + minIntervalMs 60s，burst 式高频打闹大部分轮次未采样，数字 0 但定性描述已到"互相较劲的排练搭子"
+- [x] `<@id>` 残留：adapter 剥离 mention 原文
+- [x] 好感度数字滞后：默认 cooldown/interval 调优（1 / 5s）

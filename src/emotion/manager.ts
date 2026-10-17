@@ -150,8 +150,8 @@ export interface EmotionRuntimeConfig {
 
 export const DEFAULT_EMOTION_CONFIG: EmotionRuntimeConfig = {
   enabled: true,
-  analysisRoundCooldown: 2,
-  minIntervalMs: 60_000,
+  analysisRoundCooldown: 1,
+  minIntervalMs: 5_000,
   forceUpdateInterval: 8,
   keywordThreshold: 3,
   significanceThreshold: 3,

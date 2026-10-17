@@ -184,7 +184,10 @@ export class BotRuntime implements Managed {
         send,
         botConfig: cfg,
         registries: this.#deps.registries,
-        pipelineHandle: (message) => this.#pipeline?.handle(message) ?? Promise.resolve(),
+        pipelineHandle: {
+          handle: (message) => this.#pipeline?.handle(message) ?? Promise.resolve(),
+          traces: () => this.#pipeline?.traces() ?? [],
+        },
         sessions: this.#sessions,
       });
       // A broken plugin directory must not stop the bot from booting.

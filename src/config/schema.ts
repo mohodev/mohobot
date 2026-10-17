@@ -250,9 +250,9 @@ export const BotConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(false),
       /** Turns skipped between analyses when nothing forces one. */
-      analysisRoundCooldown: z.number().int().min(0).max(20).default(2),
+      analysisRoundCooldown: z.number().int().min(0).max(20).default(1),
       /** Wall-clock floor between two analyses for one user. */
-      minIntervalMs: z.number().int().min(0).max(3600_000).default(60000),
+      minIntervalMs: z.number().int().min(0).max(3600_000).default(5000),
       /** Hard cap: analyse at least every N analysed turns. */
       forceUpdateInterval: z.number().int().min(1).max(100).default(8),
       /** Emotional keyword weight needed to justify an analysis. */

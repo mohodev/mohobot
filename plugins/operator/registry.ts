@@ -33,6 +33,10 @@ export interface ToolContext {
   storage: ScopedStorage;
   logger: Logger;
   rootDir: string;
+  /** Optional live trace reader (newest first). */
+  traces?: () => import('../../src/pipeline/chat-trace.js').ChatTrace[];
+  /** Optional live session store. */
+  sessions?: import('../../src/session/types.js').SessionManagerLike;
   /** Injected so tests never spawn a real process. */
   exec(command: string, args: readonly string[], options?: { timeoutMs?: number }): Promise<ExecResult>;
 }
@@ -59,6 +63,8 @@ export interface OperatorEnv {
   storage: ScopedStorage;
   logger: Logger;
   rootDir: string;
+  traces?: () => import('../../src/pipeline/chat-trace.js').ChatTrace[];
+  sessions?: import('../../src/session/types.js').SessionManagerLike;
   exec: ToolContext['exec'];
 }
 

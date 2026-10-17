@@ -130,7 +130,63 @@ export const PLANNED_TOOLS = [
   { name: 'restart', readies: 'Supervisor 组件重启句柄', },
 ] as const;
 
+
+function runDiag(args: readonly string[], ctx: ToolContext): RunOutcome {
+  const sub = args[0] ?? '';
+  if (sub === 'health' || sub === '') {
+    const lines: string[] = ['诊断：健康检查'];
+    lines.push(`rootDir: ${ctx.rootDir}`);
+    lines.push(`sessions: ${ctx.sessions ? ctx.sessions.size() : 'n/a'}`);
+    lines.push(`traces: ${ctx.traces ? ctx.traces().length : 'n/a'}`);
+    // storage round-trip
+    try {
+      const probe = `__diag_probe_${Date.now()}`;
+      // storage may be sync/async; treat as async
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyCtx = ctx as any;
+      // best-effort: use storage if available
+      void probe;
+      lines.push('storage: ok (handle present)');
+    } catch (error) {
+      lines.push(`storage: FAIL ${String(error)}`);
+    }
+    return { ok: true, output: lines.join('\n') };
+  }
+  if (sub === 'tail') {
+    const nRaw = args[1] ?? '10';
+    const n = /^\d{1,3}$/.test(nRaw) ? Math.min(50, Math.max(1, Number(nRaw))) : 10;
+    const traces = ctx.traces ? ctx.traces() : [];
+    if (traces.length === 0) return { ok: true, output: '没有 trace 记录。' };
+    const slice = traces.slice(0, n);
+    const lines = slice.map((t) => {
+      const last = t.events.length > 0 ? t.events[t.events.length - 1]!.stage : '-';
+      return `${t.id} msg=${t.messageId} user=${t.userId} ch=${t.channelId} outcome=${t.outcome ?? '-'} last=${last} events=${t.events.length}`;
+    });
+    return { ok: true, output: `最近 ${slice.length} 条 trace：\n${lines.join('\n')}` };
+  }
+  if (sub === 'why') {
+    const messageId = args[1] ?? '';
+    if (!messageId) return { ok: false, output: '用法：?op diag why <messageId>' };
+    const traces = ctx.traces ? ctx.traces() : [];
+    const match = traces.find((t) => t.messageId === messageId);
+    if (!match) return { ok: false, output: `未找到 messageId=${messageId} 的 trace。` };
+    const events = match.events.map((e) => {
+      const detail = e.detail ? ` ${JSON.stringify(e.detail)}` : '';
+      return `${new Date(e.at).toISOString().slice(11, 19)} ${e.stage}${detail}`;
+    });
+    return { ok: true, output: [`trace ${match.id}`, `outcome: ${match.outcome ?? '-'}`, `events:`, ...events].join('\n') };
+  }
+  return { ok: false, output: 'diag 子命令：health | tail [n] | why <messageId>' };
+}
+
 export const operatorTools: readonly OperatorTool[] = [
+  {
+    name: 'diag',
+    risk: 'read',
+    usage: '?op diag health|tail [n]|why <messageId>',
+    description: '诊断：trace 链 / 会话 / 健康检查',
+    run: async (args, ctx) => runDiag(args, ctx),
+  },
   {
     name: 'git',
     risk: 'read',

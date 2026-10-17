@@ -79,7 +79,11 @@ export interface PluginContext {
    * session memory, command routing) - used by devtools `!act` to let a
    * developer inject messages as if they came from a real user.
    */
-  pipeline?: { handle(message: MohoMessage): Promise<void> };
+  pipeline?: {
+    handle(message: MohoMessage): Promise<void>;
+    /** Recent chat traces (newest first), when the runtime exposes them. */
+    traces?(): import('../pipeline/chat-trace.js').ChatTrace[];
+  };
   /**
    * Optional read-only handle to the live session store. When present a plugin
    * can inspect the current session (e.g. devtools `!记忆`) and reuse the

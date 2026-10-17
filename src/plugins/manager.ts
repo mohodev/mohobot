@@ -49,8 +49,11 @@ export interface PluginManagerOptions {
    * Optional re-feed into the live pipeline. When supplied, plugins can push a
    * synthetic message through the real pipeline (persona + session + commands).
    * Devtools `!act` uses this to inject messages as if from a real user.
+   * `traces` (when present) exposes recent chat traces for diagnostics.
    */
-  pipelineHandle?: (message: MohoMessage) => Promise<void>;
+  pipelineHandle?:
+    | ((message: MohoMessage) => Promise<void>)
+    | { handle(message: MohoMessage): Promise<void>; traces?(): import('../pipeline/chat-trace.js').ChatTrace[] };
   /** Optional session store, exposed read-only so plugins can inspect context (e.g. !记忆). */
   sessions?: SessionManagerLike;
 }
@@ -425,7 +428,10 @@ export class PluginManager {
       // source, so #teardown can reap them precisely on unload/reload.
       registry: this.#scopedRegistries(id),
       pipeline: this.#opts.pipelineHandle
-        ? { handle: (message) => this.#opts.pipelineHandle!(message) }
+        ? (typeof this.#opts.pipelineHandle === 'function'
+            ? { handle: (message: MohoMessage) => (this.#opts.pipelineHandle as (m: MohoMessage) => Promise<void>)(message) }
+            : { handle: (this.#opts.pipelineHandle as { handle(m: MohoMessage): Promise<void> }).handle.bind(this.#opts.pipelineHandle),
+                traces: (this.#opts.pipelineHandle as { traces?(): import('../pipeline/chat-trace.js').ChatTrace[] }).traces })
         : undefined,
       sessions: this.#opts.sessions,
     };

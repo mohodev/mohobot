@@ -45,7 +45,7 @@ function settings(config: Record<string, unknown>): OperatorSettings {
   };
 }
 
-function envFor(command: CommandContext, storage: ScopedStorage, logger: OperatorEnv['logger'], rootDir: string): OperatorEnv {
+function envFor(command: CommandContext, storage: ScopedStorage, logger: OperatorEnv['logger'], rootDir: string, traces?: OperatorEnv['traces'], sessions?: OperatorEnv['sessions']): OperatorEnv {
   const { exec } = spawnAdapter();
   return {
     callerId: command.message.author.id,
@@ -53,6 +53,8 @@ function envFor(command: CommandContext, storage: ScopedStorage, logger: Operato
     storage,
     logger,
     rootDir,
+    traces,
+    sessions,
     exec,
   };
 }
@@ -100,6 +102,8 @@ const operator: Plugin = {
 
     const storage = context.storage;
     const logger = context.logger;
+    const traces = context.pipeline?.traces;
+    const sessions = context.sessions;
 
     const toolHelp = (): string => [
       '运维工具（仅管理员）',
@@ -115,7 +119,7 @@ const operator: Plugin = {
           const args = command.args;
           if (args.length === 0) return toolHelp();
 
-          const env = envFor(command, storage, logger, config.rootDir);
+          const env = envFor(command, storage, logger, config.rootDir, traces, sessions);
 
           if (args[0] === 'audit') {
             const entries = await readAudit(storage);

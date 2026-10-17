@@ -107,13 +107,18 @@ export function toMohoMessage(input: AdapterMessageInput): MohoMessage {
     location: input.location,
   };
 
+  // Discord leaves the raw mention token (e.g. <@123456>) in the message
+  // body; strip it so the model never sees unreadable residue.
+  const rawContent = typeof input.content === 'string' ? input.content : '';
+  const content = rawContent.replace(/<@!?\d+>/g, '').replace(/\s{2,}/g, ' ').trim();
+
   return {
     id: input.id,
     platform: input.platform ?? 'discord',
     botId: input.botId,
     channel,
     author: mapAuthor(input.author),
-    content: typeof input.content === 'string' ? input.content : '',
+    content,
     mentionsBot: input.mentionsBot === true,
     replyToId: optionalString(input.replyToId),
     attachments: (input.attachments ?? []).map(mapAttachment),
