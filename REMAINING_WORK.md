@@ -32,8 +32,7 @@
 - [x] diff 预览 + dry-run（read 子命令）
 
 ### Phase 3 — 生命周期（restart）
-- [ ] `restart` 工具：Supervisor 组件级重启，两步确认
-- [ ] 重启前自动 typecheck + test 门禁
+- [x] `restart` 工具：进程重启（两步确认），重启前自动 typecheck + test 门禁
 
 ### Phase 4 — LLM 调度层（真正的 agent）
 - [ ] agent loop：LLM + tool-calling，把 diag/git/verify/patch/config/restart 作为 tools

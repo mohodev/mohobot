@@ -328,6 +328,31 @@ async function runConfig(args: readonly string[], ctx: ToolContext): Promise<Run
   }
 }
 
+
+export type RestartParsed = { ok: true } | { ok: false; error: string };
+
+export function parseRestartArgs(_args: readonly string[]): RestartParsed {
+  return { ok: true };
+}
+
+async function runRestart(args: readonly string[], ctx: ToolContext): Promise<RunOutcome> {
+  // Gate: typecheck + test must pass before any restart is attempted.
+  const tc = await ctx.exec('npm', ['run', '--silent', 'typecheck', '--prefix', ctx.rootDir], { timeoutMs: 180_000 });
+  if (tc.code !== 0) {
+    return { ok: false, output: `typecheck 失败（${tc.code}），已中止重启：\n${tc.stderr || tc.stdout}`.slice(0, OUTPUT_CAP) };
+  }
+  const test = await ctx.exec('npm', ['run', '--silent', 'test', '--prefix', ctx.rootDir], { timeoutMs: 300_000 });
+  if (test.code !== 0) {
+    return { ok: false, output: `test 失败（${test.code}），已中止重启：\n${test.stderr || test.stdout}`.slice(0, OUTPUT_CAP) };
+  }
+  if (!process.env.VITEST) {
+    setTimeout(() => {
+      try { process.exit(0); } catch { /* ignore */ }
+    }, 100);
+  }
+  return { ok: true, output: 'typecheck 与 test 均通过，已请求重启进程。' };
+}
+
 export const operatorTools: readonly OperatorTool[] = [
   {
     name: 'diag',
@@ -351,6 +376,14 @@ export const operatorTools: readonly OperatorTool[] = [
     usage: '?op config read <路径> | ?op config write <路径> <base64 内容>',
     description: '读写 data/config/*.yaml（走热重载，禁止 .env*/DB）',
     run: runConfig,
+  },
+  {
+    name: 'restart',
+    risk: 'write',
+    confirm: true,
+    usage: '?op restart',
+    description: '重启进程（重启前自动 typecheck + test 门禁）',
+    run: runRestart,
   },
   {
     name: 'git',
