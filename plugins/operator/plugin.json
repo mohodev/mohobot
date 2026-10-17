@@ -1,0 +1,16 @@
+{
+  "name": "operator",
+  "version": "0.1.0",
+  "description": "Operator agent framework: scoped, audited tools for diagnosing and maintaining the runtime.",
+  "author": "mohobot",
+  "main": "index.ts",
+  "enabled": false,
+  "priority": 50,
+  "config": {
+    "rootDir": ".",
+    "auditCap": 200,
+    "pendingTtlSeconds": 300,
+    "verifyTimeoutMs": 180000,
+    "verifyTimeoutMaxMs": 600000
+  }
+}
