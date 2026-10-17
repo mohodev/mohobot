@@ -5,7 +5,7 @@
   "description": "Multi-Character-AI-Runtime - 拟人化多角色 Discord AI Runtime",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "start": "node app.js",
@@ -35,6 +35,7 @@
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
   }
 }
