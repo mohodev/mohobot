@@ -10,6 +10,8 @@
  *   - session/new: create a new conversation session
  *   - session/prompt: send a user message and stream the response
  *   - session/cancel: cancel an in-flight prompt
+ *   - tools/list: advertise injected operator tools (read-only over ACP)
+ *   - tools/call: run a read tool; write/danger tools are refused
  *
  * Notifications:
  *   - session/update: stream agent message chunks
@@ -26,6 +28,16 @@
 import type { AIProvider, AIResponse, ChatOptions } from '../ai/types.js';
 import type { ChatMessage } from '../core/types.js';
 import type { Logger } from '../core/logger.js';
+import {
+  coerceAcpArgs,
+  findAcpTool,
+  listAcpTools,
+  runAcpTool,
+  type AcpOperatorContext,
+  type AcpOperatorTool,
+} from './operator-tools.js';
+
+export type { AcpOperatorContext, AcpOperatorTool } from './operator-tools.js';
 
 // ── JSON-RPC 2.0 types ─────────────────────────────────────────────────────
 
@@ -80,6 +92,13 @@ export interface AcpServerOptions {
   agentName?: string;
   /** Agent version. */
   agentVersion?: string;
+  /**
+   * Operator tools exposed over `tools/list` / `tools/call`. Injected by the
+   * host — ACP never imports `plugins/` itself. Absent means `{ tools: [] }`.
+   */
+  operatorTools?: readonly AcpOperatorTool[];
+  /** Root/logger/exec for tool runs; required for `tools/call` to work. */
+  operatorContext?: AcpOperatorContext;
 }
 
 export class AcpServer {
@@ -88,6 +107,8 @@ export class AcpServer {
   private readonly protocolVersion: number;
   private readonly agentName: string;
   private readonly agentVersion: string;
+  private readonly operatorTools: readonly AcpOperatorTool[];
+  private readonly operatorContext: AcpOperatorContext | undefined;
 
   private readonly sessions = new Map<string, Session>();
   private nextSessionId = 1;
@@ -99,6 +120,8 @@ export class AcpServer {
     this.protocolVersion = opts.protocolVersion ?? 1;
     this.agentName = opts.agentName ?? 'MohoBot';
     this.agentVersion = opts.agentVersion ?? '1.0.0';
+    this.operatorTools = opts.operatorTools ?? [];
+    this.operatorContext = opts.operatorContext;
   }
 
   /** Start reading JSON-RPC messages from stdin and writing to stdout. */
@@ -178,6 +201,10 @@ export class AcpServer {
           return { jsonrpc: '2.0', id, result: this.handleSessionDelete(params ?? {}) };
         case 'session/list':
           return { jsonrpc: '2.0', id, result: this.handleSessionList() };
+        case 'tools/list':
+          return { jsonrpc: '2.0', id, result: this.handleToolsList() };
+        case 'tools/call':
+          return await this.handleToolsCall(id, params ?? {});
         case 'session/set_mode':
           return { jsonrpc: '2.0', id, result: {} };
         case 'logout':
@@ -212,6 +239,7 @@ export class AcpServer {
       protocolVersion: this.protocolVersion,
       agentCapabilities: {
         loadSession: true,
+        tools: true,
         promptCapabilities: {
           image: false,
           audio: false,
@@ -386,6 +414,35 @@ export class AcpServer {
       sessionId: s.id,
       cwd: process.cwd(),
     }));
+  }
+
+  private handleToolsList(): Record<string, unknown> {
+    return { tools: listAcpTools(this.operatorTools) };
+  }
+
+  private async handleToolsCall(id: number | string, params: Record<string, unknown>): Promise<JsonRpcResponse> {
+    const name = typeof params.name === 'string' ? params.name : '';
+    if (!name) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: 'tools/call requires a tool name' } };
+    }
+    if (this.operatorTools.length === 0) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: 'No operator tools are registered' } };
+    }
+    if (!findAcpTool(this.operatorTools, name)) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: `Unknown tool: ${name}` } };
+    }
+    const ctx = this.operatorContext;
+    if (!ctx) {
+      return { jsonrpc: '2.0', id, error: { code: -32603, message: 'Operator context not configured' } };
+    }
+    // Editors send `arguments`; accept `args` as an alias for convenience.
+    const args = coerceAcpArgs(params.arguments ?? params.args);
+    if (!args) {
+      return { jsonrpc: '2.0', id, error: { code: -32602, message: 'arguments must be an array' } };
+    }
+    // Refusals (write/danger) and tool failures come back as text, not errors.
+    const text = await runAcpTool(this.operatorTools, name, args, ctx);
+    return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }] } };
   }
 
   private handleCancel(params: Record<string, unknown>): void {

@@ -118,18 +118,17 @@ async function runVerify(args: readonly string[], ctx: ToolContext): Promise<Run
 }
 
 /**
- * Seams still waiting for their core handles. Each entry states the handle it
- * needs, so wiring stays an explicit decision instead of a guess:
- *  - diag   needs ctx.sessions / trace store + usage kv (pipeline today)
- *  - patch  needs a file-write handle + confirm token (never a bare shell)
- *  - config needs the hot-reload handle (data/config/, never data/.env*)
- *  - restart needs the Supervisor component handle
+ * Status ledger for the tool seams from the phase plan. diag/patch/config/
+ * restart have landed (Phase 1–4) and are registered in `operatorTools` below
+ * — the `ready: true` entries are a record, not work left to do. Add a
+ * `ready: false` entry only when a new seam is designed but still waiting for
+ * a core handle (e.g. a provider/plugin-context句柄 for the ACP bridge).
  */
 export const PLANNED_TOOLS = [
-  { name: 'diag', readies: 'ctx 需要会话/trace/usage 只读句柄', },
-  { name: 'patch', readies: '受控文件写入句柄 + 二次确认', },
-  { name: 'config', readies: '热重载句柄（禁碰 .env* 与 DB）', },
-  { name: 'restart', readies: 'Supervisor 组件重启句柄', },
+  { name: 'diag', ready: true, note: '已实现：health/tail/why，读 ctx.sessions/traces（Phase 1）' },
+  { name: 'patch', ready: true, note: '已实现：受控写入 src/plugins/extensions，禁 .env*/DB（Phase 2）' },
+  { name: 'config', ready: true, note: '已实现：data/config/*.{yaml,yml,json} 读写走热重载（Phase 2）' },
+  { name: 'restart', ready: true, note: '已实现：typecheck+test 门禁通过后才重启（Phase 3）' },
 ] as const;
 
 

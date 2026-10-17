@@ -214,7 +214,7 @@ function formatAudit(entry: AuditEntry): string {
 }
 
 
-async function runAgent(
+export async function runAgent(
   goal: string,
   env: OperatorEnv,
   getProvider: OperatorEnv extends { getProvider?: infer G } ? G : any,
