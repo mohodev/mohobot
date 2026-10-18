@@ -54,34 +54,34 @@
 - [x] 消息级 Planner：`MessagePlanner` 默认关闭，单次 LLM 决策 `reply/ignore`；direct summon/DM/admin 永不 ignore；失败 fallback 到 reply
 - [x] Talk Governor 第二阶段：quiet hours + topic relevance + focus lease + SQLite 持久化 state store；仍缺主动消息队列和 Future Task 出站二次治理
 - [x] Future Tasks 基础闭环：SQLite 持久化、CAS 原子 claim、lease recovery、重试/timeout/uncertain、受限 `world.tick` Runner、Admin list/schedule API；没有开放任意 Discord 投递/模型工具，后续需先设计安全 handler 与 owner 读写隔离
-- [ ] 记忆治理：按用户/频道/来源批量删除、tombstone/回收站、删除审计、派生 embedding 清理、脱敏导出与 dry-run 导入
-- [x] MessageSync 删除联动：`MemoryDeletionCoordinator` 接入 Runtime；Expression Memory 注册为 deletion sink（`expression-deletion-sink.ts`）；tombstone 后 late edit/append 不复活；semantic memory sink 留 TODO
+- [x] 记忆治理：semantic memory 按用户/频道/来源批量删除（tombstone）、回收站/恢复、删除经 AdminServer 审计、vector/embeddingModel 派生数据同步清除、脱敏 JSONL 导出与 dry-run 导入
+- [x] MessageSync 删除联动：`MemoryDeletionCoordinator` 接入 Runtime；Expression Memory 与 Semantic Memory 均注册为 deletion sink；tombstone 后 late edit/append 不复活
 - [x] 世界模拟 Phase 0：`world-model.ts`/`world-replay.ts` 纯状态机、稳定事件 ID、来源/信任/时间区间/phase/幂等 replay
 - [x] 世界模拟 Phase 1：`WorldStore`/`DeviceStore` 已从 `VersionedJsonStore` 迁移到 SQLite；保留一次性 JSON 迁移；旧文件不再写回
 - [x] 世界模拟 Phase 2 基础：确认日程由 World tick 驱动阶段演化，phase idempotency + DailyLife daily marker 防重复；Future Task 可调度受限 world.tick；仍未把确认事件自动排程或接入发言决策
-- [ ] 世界模拟 Phase 3：日程/地点/活动已存在；天气/情报候选、关系事件和长期世界记忆的来源链、置信度、过期策略仍需实现
-- [ ] 世界模拟 Phase 4 基础：shared/per-bot/per-channel domain 与内存 trace 查询已实现；尚未持久化隔离策略/trace，也缺少事件抢占恢复、管理员 dry-run 和完整端到端回放
+- [x] 世界模拟 Phase 3：情报/天气候选带 sourceChain/confidence/expiresAt，关系事件候选规则合并，统一走 candidate → 管理员确认流（不引入 LLM 调用）
+- [x] 世界模拟 Phase 4：domain 策略与 trace 经 SQLite 持久化（`world-domain:`/`world-trace:` 前缀，best-effort），重叠日程按"后确认者抢占"规则拒绝并写 trace，`POST /api/world/schedule/dry-run` 无写入模拟，schedule→confirm→tick→trace 端到端 replay 测试
 - [x] 世界模拟辅助基础已存在但尚未完整接线：`DailyLifeSimulator` 提供低戏剧性日常活动与规则回退；`event-intelligence` 提供事件候选/证据/信任合并；`day-planner` 提供规则日计划
 - [x] 角色互询安全闸门已存在 — `src/social/disclosure.ts`：仅 `shared`、双方 affinity >= 70、对方 opt-in 且存在内部通道；实际询问/抽象回答/审计接线仍未完成
 - [x] Discord 服务器规划器完整控制面 — `GuildPlanner` + AdminServer inventory/plan/apply API + route-policy + RBAC + 二次确认 + Runtime 注入；回滚和审计持久化留后续
 - [x] 消息生命周期索引已有 tombstone — `src/session/message-sync.ts`：编辑/删除幂等、迟到 edit 不覆盖删除、thread/forum/guild/DM location 规范化；已与 Expression Memory 的来源删除联动（`MemoryDeletionCoordinator` + `ExpressionDeletionSink`）
 - [x] 配置发布状态机已完整实现 — `SqlitePublicationStateStore` 持久化 + `onActivated` hook 驱动 Runtime 组件重建 + activation receipt 区分"已发布"与"实际生效"
 - [x] 多模态结果已标记为不可信观察 — OCR/VLM 通过统一 `wrapUntrusted` 协议标记；pipeline、tools、MCP、memory 均已接入
-- [x] Model Operations 后端视图 — 跨 Bot dashboard、usage、provider health 与任务 lane 策略及 Admin API 已实现；lane 尚未用于模型请求路由，也缺 WebUI/完整审计视图
+- [x] Model Operations 完整收口 — 跨 Bot dashboard/usage/provider health API + `lane-provider` 任务 lane 模型路由（`ai.options.taskLanes` 配置，默认关闭，不健康自动回退）+ fallback/熔断事件进 dashboard + WebUI「模型运营」页（models.read 门控）
 - [x] OpenCode/ACP/MCP/Operator 已形成独立执行平面 + 统一权限矩阵（`authorization-matrix.ts`）+ 端到端越权回归测试
 - [x] Expression/Jargon 学习拆分基础：独立 opt-in JargonMemory 群体样本、source author/sharing group、候选审核 API 与词条 recall 已接入；仍缺向量召回
 - [x] DailyLifeSimulator 接入 World tick：无活动日自动生成日常活动（规则回退，不调 LLM），写回 location/activity/mood，appliedPhases 防重复
 - [x] Social Disclosure 完整调用链：`consultPeer()` gate → shared-only prompt → provider call → answer → disclosure audit 持久化；`GET /api/social/disclosure-audit` API
 - [x] Guild Workspace Planner 执行层：`GuildPlanner` 控制面完成；inventory/plan/apply API + route-policy（`guild.read`/`guild.manage`）+ RBAC + 二次确认 + Runtime 注入；仍缺回滚和审计持久化
 - [x] 统一不可信数据协议：`wrapUntrusted`/provenance 全链路接入 pipeline（user turns + memory recall）、AI tools、MCP bridge、media OCR/VLM；端到端注入回归测试覆盖 6 种来源
-- [ ] 记忆回收与导出：message tombstone 联动 semantic/expression memory 来源删除，批量删除、recycle bin、恢复、删除审计、脱敏 JSONL 导出和 dry-run 导入
-- [ ] Discord 投递不确定状态：Gateway 暴露 `delivered/rejected/unknown` 且 pipeline 记录状态；Future Tasks 尚未提供 Discord 投递/unknown reconcile，不承诺 exactly-once
+- [x] 记忆回收与导出：message tombstone 联动 semantic/expression memory 来源删除，批量删除、recycle bin、恢复、删除审计、脱敏 JSONL 导出和 dry-run 导入
+- [x] Discord 投递不确定状态：Gateway 暴露 `delivered/rejected/unknown` 且 pipeline 记录状态；Future Task `discord.deliver`（dedupeKey 幂等，payload 白名单校验）+ outbox 投递记录 + `POST /api/tasks/future/:id/reconcile` 对账（delivered→complete，rejected→可重试，unknown→保持 uncertain），不承诺 exactly-once
 - [x] DailyLife 接线：已接入 `WorldStore.tick()` — 无活动日自动 propose + 规则回退 + 写回 + best-effort 失败不阻断
 - [x] Guild Plan 控制面：AdminServer 已有 inventory/plan/apply API + route-policy + RBAC + 二次确认 + 幂等 key + 部分失败结果
 - [x] 配置发布持久化与激活：Runtime 已使用 `SqlitePublicationStateStore`；重启恢复 revision/ACK/pending/rollback；`onActivated` hook 触发 config reload + 组件重建；activation receipt 区分"已发布"与"实际生效"
 - [ ] 世界/设备并发一致性：WorldStore/DeviceStore 已迁移 SQLite（WAL 模式），仍有 2 秒 TtlCache；多实例部署需补跨进程 stale cache 策略
 - [x] 角色互询已实现：`consultPeer()` 完整链路（gate + shared-only prompt + 抽象回答 + audit）；与 cross-chat 的管理员驱动公开对聊分离
-- [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；仍缺 `chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
+- [x] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；`chat_log` 保留期/容量/摘要长度已通过 `chatLog` 全局配置化（内存 buffer + SQLite 定期清理）；热重载已支持新增/删除/禁用 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
 
-## 当前状态（2026-10-18 第三批集成中）
-第一、二批保持已完成。第三批完成 Future Tasks 受限执行闭环、世界 phase 演化与基础 trace、opt-in JargonMemory、Model Operations 后端视图、Discord 投递结果记录；未完成项仍以 `[ ]` 标记，重点为 semantic memory 删除治理、世界 trace 持久化/干跑、Discord unknown reconcile、模型 lane 实际路由、chat-log 保留策略和运行时 Bot 增删。第三批当前验证为 typecheck 通过、155 测试文件 1113 测试通过、secret scan 通过；后续修改后需重跑。
+## 当前状态（2026-10-18 第四批收口完成）
+第一、二、三批保持已完成。第四批收口：semantic memory 治理（批量删除/回收站/审计/导出/导入 dry-run）、世界模拟 Phase 3/4（来源链确认流、trace/domain 持久化、抢占、dry-run、replay）、Model Operations（lane 路由、dashboard 事件、WebUI）、chat_log 配置化与 Bot 热重载增删、Discord 投递对账。验证：typecheck、158 测试文件 1126 测试、build、secret scan 全部通过。剩余 `[ ]` 项仅有多实例部署的 World/Device 2 秒缓存一致性（单实例部署不受影响）。
