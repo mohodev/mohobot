@@ -60,8 +60,12 @@ WebUI「MCP 工具」页（`mcp.read` 门控）展示策略/工具/审计；调�
 `mcp.call` 可见。角色门控见 `src/admin/rbac.ts`：`mcp.read` 自 viewer 起，
 `mcp.call` 自 admin 起。
 
-## 尚未接的部分（诚实边界）
+## 对话模型接入
 
-权限 + 审计层与真实 transport 已就绪，但 **MCP 工具还没有被喂给对话模型 /
-pipeline**：现在只能由管理员经 WebUI/API 显式调用并审计。把 MCP 工具作为
-模型可调用工具接入回复路径，属后续工作（需要新的 pipeline 阶段）。
+MCP 工具已经可以作为模型工具进入回复 pipeline：`src/ai/mcp-tools.ts`
+将启动后发现的工具注册到每个 Bot 的 `ChatToolRegistry`，模型调用仍统一经过
+`McpManager.callTool()`，因此权限门与脱敏审计保持不变。模型调用者固定使用
+最低权限 `viewer` 角色；管理员权限工具即使被模型请求也会被拒绝并记录审计。
+
+模型工具调用仍受 `ai.tools.enabled` 总开关、allowlist 与 `maxRounds` 限制；MCP
+本身默认关闭。MCP manager 会在 Bot 启动前完成初始化，确保工具 schema 已可用。

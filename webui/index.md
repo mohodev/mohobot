@@ -16,7 +16,7 @@
 | 行为引擎 | 已实现 | `POST /api/behavior/dry-run` + `src/admin/behavior-dry-run.ts`、`day-planner.ts`、`event-intelligence.ts` |
 | 日志查看器 | 已实现 | `GET /api/logs`（level/component/after/limit 分页）+ `LogBuffer`（`src/core/log-buffer.ts`） |
 | 插件管理器 | 已实现 | `GET /api/bots/:id/plugins` + `POST .../plugins/:id/reload`（`plugin.reload` 权限 + 二次确认）；WebUI「插件管理」页 |
-| MCP 工具管理 | 已实现 | `src/mcp/`：client/permissions/audit + 真实 transport（stdio/http）+ `McpManager`，config 驱动（`mcp.enabled` 默认关闭，见 `docs/MCP.md`）；管理面 `GET /api/mcp/policy\|tools\|audit` + `POST /api/mcp/call`（二次确认）+ WebUI「MCP 工具」页。尚未把 MCP 工具喂给对话模型/pipeline（属后续） |
+| MCP 工具管理 | 已实现 | `src/mcp/`：client/permissions/audit + 真实 transport（stdio/http）+ `McpManager`，config 驱动（`mcp.enabled` 默认关闭，见 `docs/MCP.md`）；管理面 `GET /api/mcp/policy\|tools\|audit` + `POST /api/mcp/call`（二次确认）+ WebUI「MCP 工具」页；`src/ai/mcp-tools.ts` 已将 MCP 工具桥接进模型 pipeline，模型调用固定走 `viewer` 权限。 |
 | 测试聊天 | 已实现 | `POST /api/debug/chat`（+ capabilities）经 `DebugChatFacade`（`src/admin/debug-chat.ts`）；WebUI「调试聊天」页，`debug.chat` 权限 |
 | 角色互聊 | 已实现 | `src/characters/cross-chat.ts` + `POST /api/characters/cross-chat`（轮转调度、硬回合上限、重复检测、超时熔断、沙箱 system prompt）；角色页 UI 含互聊入口 |
 | Bot 操作面板 | 已实现 | RBAC（`src/admin/rbac.ts`）+ 二次确认（`POST /api/confirmations`）+ 审计（`GET /api/admin/audit`）；重启 `POST /api/bots/:id/restart`（dangerous） |
@@ -31,6 +31,6 @@
 3. **受控操作** ✅ — 重启 Bot、重载插件、删会话、任务暂停/恢复；RBAC + 二次确认 + 审计日志。
 4. **角色域模型** ✅ — Schema/存储/API/UI + 批量导入（`POST /api/characters/import`）+ 角色互聊（`POST /api/characters/cross-chat`）均已落地。
 5. **长期记忆与测试聊天** ✅ — `/api/memory` 隔离与删除审计、`/api/debug/chat` 均已交付。
-6. **MCP/行为/世界模拟** — 行为 ✅、世界模拟 ✅；MCP ✅（`src/mcp/`：权限+审计+stdio/http transport + `McpManager`，管理面 API + WebUI 页，默认关闭、最小权限）；把 MCP 工具喂给对话模型/pipeline 属后续。
+6. **MCP/行为/世界模拟** — 行为 ✅、世界模拟 ✅；MCP ✅（`src/mcp/`：权限+审计+stdio/http transport + `McpManager`，管理面 API + WebUI 页，默认关闭、最小权限；`src/ai/mcp-tools.ts` 已桥接模型 pipeline）。
 
 验收标准：每个功能必须同时具备后端实现、前端交互、权限边界、错误处理和自动化测试；只有页面文字不算完成。

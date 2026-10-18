@@ -46,7 +46,7 @@
 - `chat_log` 需要配置化保留周期、容量上限、用户删除与查询权限。
 - Runtime 热重载只重启已存在 Bot；新增/删除 Bot 仍要求进程重启。
 - 全局配置（存储、日志级别、Supervisor、监听路径）改变后未动态重建相关组件。
-- ~~管理 WebUI、角色、世界模拟、行为引擎、MCP、真实长期记忆仍未实现~~ → **2026-10-17 更新：已实现**。管理 WebUI（`src/admin/server.ts` + `webui/`，RBAC + 二次确认 + 审计）、角色 CRUD/批量导入/互聊（`src/characters/`）、世界模拟（`src/admin/world.ts`）、行为引擎（`behavior-dry-run.ts`/`day-planner.ts`/`event-intelligence.ts`）、可检索长期记忆（`src/memory/semantic-memory.ts`）、MCP 权限+审计+transport（`src/mcp/`，默认关闭，config 驱动）均已落地。仅 MCP 的“工具权限+审计”之外，把 MCP 工具真正喂给模型/pipeline 仍属后续（`docs/MCP.md`）。
+- ~~管理 WebUI、角色、世界模拟、行为引擎、MCP、真实长期记忆仍未实现~~ → **2026-10-17 更新：已实现**。管理 WebUI（`src/admin/server.ts` + `webui/`，RBAC + 二次确认 + 审计）、角色 CRUD/批量导入/互聊（`src/characters/`）、世界模拟（`src/admin/world.ts`）、行为引擎（`behavior-dry-run.ts`/`day-planner.ts`/`event-intelligence.ts`）、可检索长期记忆（`src/memory/semantic-memory.ts`）、MCP 权限+审计+transport + 模型工具桥接（`src/mcp/` + `src/ai/mcp-tools.ts`，默认关闭，config 驱动）均已落地。模型调用固定使用低权限 `viewer` 角色，并继续经过 MCP 权限门与审计。
 
 ## 安全原则
 
@@ -74,4 +74,3 @@ Kilo 侧账号不可用，上述凭据**无法吊销/轮换**。项目决策：�
 3. `npm run scan-secrets -- --history` 会持续报告上述两条历史命中，这是**已知且接受**的；`npm test` 的守卫仍保证被跟踪文件不再含凭据形状的值。
 
 另外：上级目录 `/workspaces/264638881` 的 `.gitignore` 显式放行 `*.txt`，会让放在那里的凭据文件（如 `key.txt`）变成可被 `git add -A` 提交的未跟踪文件；已在该 `.gitignore` 末尾追加 `key.txt`。
-
