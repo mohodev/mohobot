@@ -136,6 +136,13 @@ export function chatLogQuery(channelId: string, limit = 50, botId?: string): Cha
   return (botId ? db.prepare(QUERY_BOT_SQL).all(channelId, botId, n) : db.prepare(QUERY_SQL).all(channelId, n)) as ChatLogRow[];
 }
 
+/** Remove persistent chat-log rows older than the configured retention period. */
+export function chatLogPurgeExpired(retentionDays: number): number {
+  const days = Number.isFinite(retentionDays) && retentionDays > 0 ? retentionDays : 30;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return resolveDb().prepare('DELETE FROM chat_log WHERE created_at IS NOT NULL AND created_at < ?').run(cutoff).changes;
+}
+
 /** Close only a handle this module opened itself. */
 export function closeChatLogDb(): void {
   if (owned === undefined) return;

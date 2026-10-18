@@ -46,6 +46,7 @@ import{GuildPlanner,type GuildPlanAdapter}from'./admin/guild-plan.js';
 import { FutureTaskRunner } from './tasks/future-task-runner.js';
 import { FutureTaskStore } from './tasks/future-task.js';
 import { WorldStore } from './admin/world.js';
+import { chatLogPurgeExpired } from './storage/chatlog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -88,6 +89,7 @@ export class Runtime {
     this.#config = await this.#loader.load();
 
     this.#logger = createLogger({ name: 'mohobot', level: this.#config.global.logLevel, sink: this.#logs });
+    discordChatLog.configure(this.#config.global.chatLog);
     this.#logger.info(
       { root: ROOT_DIR, bots: this.#config.bots.length, storage: this.#config.global.storage.driver },
       'MohoBot booting',
@@ -110,7 +112,10 @@ export class Runtime {
       this.#storage = createStorage(this.#config.global.storage, { rootDir: ROOT_DIR, logger: this.#logger });
       await this.#storage.init();
       this.#logger.info({ driver: this.#config.global.storage.driver }, 'storage ready');
-      this.#tasks.spawn(async () => void (await this.#storage?.purgeExpired()), {
+       this.#tasks.spawn(async () => {
+         await this.#storage?.purgeExpired();
+         chatLogPurgeExpired(this.#config.global.chatLog.retentionDays);
+       }, {
         name: 'housekeeping',
         intervalMs: 300_000,
         timeoutMs: 30_000,
@@ -144,20 +149,7 @@ export class Runtime {
         this.#logger.info({ bot: botConfig.id }, 'bot disabled by config; skipping');
         continue;
       }
-      const bot = new BotRuntime({
-        config: botConfig,
-        global: this.#config.global,
-        rootDir: ROOT_DIR,
-        events: this.#events,
-        logger: this.#logger,
-        tasks: this.#tasks,
-        storage: this.#storage,
-        registries,
-        mcp: this.#mcp,
-      });
-      this.#bots.set(botConfig.id, bot);
-      // Not critical: one dead bot must never take the runtime with it.
-      this.#supervisor.register(bot, { critical: false });
+      this.#registerBot(botConfig);
     }
 
     if (this.#bots.size === 0) {
@@ -303,11 +295,33 @@ export class Runtime {
   async #onReload(event: ReloadEvent): Promise<void> {
     if (event.kind === 'config') {
       const next = await this.#loader.reload();
+      discordChatLog.configure(next.global.chatLog);
+      const enabled = new Map(next.bots.filter((config) => config.enabled).map((config) => [config.id, config]));
+      // Stop and unregister bots removed from config or explicitly disabled.
+      for (const [id, bot] of [...this.#bots]) {
+        if (enabled.has(id)) continue;
+        this.#logger.info({ bot: id }, 'bot removed or disabled by config; stopping');
+        try {
+          await this.#supervisor.stopComponent(bot.name);
+        } catch (error) {
+          this.#logger.warn({ bot: id, err: String(error) }, 'bot stop during config reload failed');
+        }
+        this.#supervisor.unregister(bot.name);
+        this.#bots.delete(id);
+      }
       // Restart only bots whose config actually changed.
-      for (const botConfig of next.bots) {
+      for (const botConfig of enabled.values()) {
         const bot = this.#bots.get(botConfig.id);
         if (!bot) {
-          this.#logger.info({ bot: botConfig.id }, 'new bot in config; restart required to activate');
+          this.#logger.info({ bot: botConfig.id }, 'new bot in config; starting');
+          try {
+            this.#registerBot(botConfig, next.global);
+            await this.#supervisor.startComponent(`bot:${botConfig.id}`);
+          } catch (error) {
+            this.#logger.error({ bot: botConfig.id, err: String(error) }, 'new bot failed to activate (continuing)');
+            this.#supervisor.unregister(`bot:${botConfig.id}`);
+            this.#bots.delete(botConfig.id);
+          }
           continue;
         }
         const before = JSON.stringify(this.#config.bots.find((b) => b.id === botConfig.id));
@@ -331,6 +345,23 @@ export class Runtime {
         }
       }
     }
+  }
+
+  #registerBot(botConfig: ResolvedConfig['bots'][number], global = this.#config.global): void {
+    const bot = new BotRuntime({
+      config: botConfig,
+      global,
+      rootDir: ROOT_DIR,
+      events: this.#events,
+      logger: this.#logger,
+      tasks: this.#tasks,
+      storage: this.#storage,
+      registries,
+      mcp: this.#mcp,
+    });
+    this.#bots.set(botConfig.id, bot);
+    // Not critical: one dead bot must never take the runtime with it.
+    this.#supervisor.register(bot, { critical: false });
   }
 
   /**

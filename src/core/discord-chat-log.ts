@@ -58,9 +58,11 @@ function positive(value:number|undefined,fallback:number):number{return Number.i
 
 /** Bounded FIFO of recent Discord chat exchanges, newest returned first. */
 export class DiscordChatLogBuffer {
-  readonly #capacity:number;readonly #maxSummary:number;
+  #capacity:number;#maxSummary:number;
   readonly #entries:DiscordChatLogEntry[]=[];#seq=0;
   constructor(options:DiscordChatLogOptions={}){this.#capacity=positive(options.capacity,DEFAULT_CAPACITY);this.#maxSummary=positive(options.maxSummaryLength,DEFAULT_MAX_SUMMARY);}
+  /** Update limits without replacing the shared writer/reader instance. */
+  configure(options:DiscordChatLogOptions={}):void{this.#capacity=positive(options.capacity,this.#capacity);this.#maxSummary=positive(options.maxSummaryLength,this.#maxSummary);if(this.#entries.length>this.#capacity)this.#entries.splice(0,this.#entries.length-this.#capacity);}
   /** Record one exchange. Non-Discord platforms are silently ignored. Never throws. */
   record(input:DiscordChatLogInput):DiscordChatLogEntry|undefined{
     try{
