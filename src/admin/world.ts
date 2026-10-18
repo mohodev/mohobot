@@ -9,7 +9,7 @@ import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
 import type { Storage } from '../storage/types.js';
-import { configureWorldIsolation, getWorldForBot, recordTrace } from './world-isolation.js';
+import { configureWorldIsolation, getWorldForBot, recordTrace, releaseWorldIsolation } from './world-isolation.js';
 
 export interface WorldState {
   clock: string;
@@ -141,6 +141,7 @@ export class WorldStore {
 
   async close(): Promise<void> {
     this.#cache.clear();
+    releaseWorldIsolation(this.#storage);
     await this.#storage.close();
   }
 

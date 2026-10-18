@@ -29,13 +29,14 @@ describe('world replay', () => {
     try {
       await store.schedule({ id: 'replay-event', kind: 'rest', title: 'Quiet day', startsAt: start, endsAt: '2032-03-01T14:00:00.000Z', location: 'home' });
       await store.confirmScheduled('replay-event', 'confirmed');
-      const evolved = await store.tick(Date.parse(start) + 60 * 60 * 1000);
+      // +30 minutes into a 4h window keeps progress < 0.25, i.e. the 'start' phase.
+      const evolved = await store.tick(Date.parse(start) + 30 * 60 * 1000);
       expect(evolved.schedule[0]?.trust).toBe('confirmed');
       expect(evolved.appliedPhases).toContain('replay-event:start');
       const traces = await queryPersistentTraces({ botId: 'replay-bot' });
       expect(traces.some((trace) => trace.kind === 'evolution')).toBe(true);
       const replayEvent = createWorldEvent({ sourceKind: 'manual', sourceId: 'replay-event', time: { start, end: '2032-03-01T14:00:00.000Z' }, scope: 'world', payload: { title: 'Quiet day' }, phase: 'start' });
-      expect(replayWorld([{ event: replayEvent, action: 'confirm' }, { event: replayEvent, action: 'activate' }, { event: replayEvent, action: 'apply-phase', phaseKey: 'replay-event:start' }]).events[0]?.status).toBe('active');
+      expect(replayWorld([{ event: replayEvent, action: 'confirm' }, { event: replayEvent, action: 'activate' }, { event: replayEvent, action: 'apply-phase', phaseKey: 'replay-event:start' }]).events[0]?.status).toBe('phase-applied');
     } finally {
       await store.close();
       await fs.rm(root, { recursive: true, force: true });

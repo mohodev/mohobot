@@ -37,6 +37,13 @@ export function configureWorldIsolation(storage: Storage): void {
   storageReady = storage.init();
 }
 
+/** Release the persistent sink if it is the given storage (e.g. on close). */
+export function releaseWorldIsolation(storage: Storage): void {
+  if (persistentStorage !== storage) return;
+  persistentStorage = undefined;
+  storageReady = undefined;
+}
+
 function domainKey(botId: string, channelId?: string, strategy?: WorldDomainStrategy): string {
   const s = strategy ?? DEFAULT_STRATEGY;
   if (s === 'shared') return SHARED_DOMAIN_ID;
@@ -60,8 +67,10 @@ export function getWorldForBot(botId: string, channelId?: string, strategy?: Wor
 }
 
 async function persistDomain(domain: WorldDomain): Promise<void> {
-  await storageReady;
-  await persistentStorage?.save(`world-domain:${domain.id}`, domain);
+  try {
+    await storageReady;
+    await persistentStorage?.save(`world-domain:${domain.id}`, domain);
+  } catch { /* trace/domain persistence is best-effort observability */ }
 }
 
 export function listDomains(): WorldDomain[] {
@@ -72,17 +81,19 @@ export function recordTrace(entry: Omit<WorldTraceEntry, 'id'>): WorldTraceEntry
   const record: WorldTraceEntry = { ...entry, id: `trace:${globalThis.crypto.randomUUID()}` };
   traces.push(record);
   if (traces.length > MAX_TRACES) traces.splice(0, traces.length - MAX_TRACES);
-  if (persistentStorage) pendingWrites = pendingWrites.then(() => persistTrace(record));
+  if (persistentStorage) pendingWrites = pendingWrites.then(() => persistTrace(record)).catch(() => {});
   return record;
 }
 
 async function persistTrace(record: WorldTraceEntry): Promise<void> {
   const storage = persistentStorage;
   if (!storage) return;
-  await storageReady;
-  await storage.save(`world-trace:${record.id}`, record);
-  const rows = await storage.query<WorldTraceEntry>({ prefix: 'world-trace:', limit: MAX_TRACES + 1 });
-  for (const row of rows.slice(MAX_TRACES)) await storage.delete(row.key);
+  try {
+    await storageReady;
+    await storage.save(`world-trace:${record.id}`, record);
+    const rows = await storage.query<WorldTraceEntry>({ prefix: 'world-trace:', limit: MAX_TRACES + 1 });
+    for (const row of rows.slice(MAX_TRACES)) await storage.delete(row.key);
+  } catch { /* trace persistence is best-effort observability */ }
 }
 
 export function queryTraces(opts?: {
