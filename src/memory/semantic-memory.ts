@@ -28,6 +28,7 @@ export interface SemanticMemoryRecord {
   /** Optional derived index. `text` and messages remain the source of truth. */
   vector?: number[];
   embeddingModel?: string;
+  tombstone?: { at: number; reason?: string; reviewer?: string };
 }
 
 export interface SemanticMemoryOptions {
@@ -133,6 +134,11 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
     };
     const key = this.#key(record);
 
+    if (input.user.sourceMessageId !== undefined) {
+      const deleted = await this.#storage.query<SemanticMemoryRecord>({ prefix: `${PREFIX}${input.botId}:`, limit: 5000 });
+      if (deleted.some(({ value }) => value.user?.sourceMessageId === input.user.sourceMessageId && value.user?.sourcePlatform === input.user.sourcePlatform && value.tombstone)) return;
+    }
+
     // Source text is durable before optional indexing starts.
     await this.#storage.save(key, record);
     if (!this.#embedding) return;
@@ -140,7 +146,8 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
     try {
       const [vector] = await this.#embedding.embed([record.text]);
       if (!vector?.length) throw new Error('embedding provider returned no vector');
-      await this.#storage.save(key, { ...record, vector, embeddingModel: this.#embedding.model });
+      const latest = await this.#storage.get<SemanticMemoryRecord>(key);
+      if (!latest?.tombstone) await this.#storage.save(key, { ...record, vector, embeddingModel: this.#embedding.model });
     } catch (error) {
       this.#logger.warn({ err: error, key }, 'memory saved without embedding');
     }
@@ -155,7 +162,7 @@ export class SemanticMemoryAdapter implements MemoryAdapter {
     const targetDomain = this.#channelDomain(input.channelId);
     const visible = records
       .filter(({ value }) => {
-        if (value.userId !== input.userId || !allowed.has(value.scope)) return false;
+        if (value.tombstone || value.userId !== input.userId || !allowed.has(value.scope)) return false;
         if (value.channelId === input.channelId) return true;
         if (value.scope !== 'shared' || !this.#crossChannelScopeAuthorized) return false;
         return this.#channelDomain(value.channelId) === targetDomain;
