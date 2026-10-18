@@ -80,5 +80,8 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'POST',pattern:/^\/api\/config\/rollback$/,permission:'config.publish',action:'config.rollback',risk:'dangerous',confirmation:true},
 {method:'GET',pattern:/^\/api\/config\/activation-receipts$/,permission:'config.publish',action:'config.activation.receipts',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/config\/activation-receipt$/,permission:'config.publish',action:'config.activation.receipt.record',risk:'impact',confirmation:true},
+{method:'GET',pattern:/^\/api\/guild\/inventory$/,permission:'guild.read',action:'guild.inventory',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/guild\/plan$/,permission:'guild.read',action:'guild.plan',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/guild\/apply$/,permission:'guild.manage',action:'guild.apply',risk:'impact',confirmation:true},
 ]as const;
 export function routePolicy(method:string,path:string):RoutePolicy|undefined{return ROUTE_POLICIES.find(p=>p.method===method&&p.pattern.test(path));}

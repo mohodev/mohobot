@@ -46,6 +46,8 @@ import { VisionRouter } from '../media/vision.js';
 import { MediaRuntime } from '../media/runtime.js';
 import { OpenAICompatibleOcrProvider, OpenAICompatibleVisionProvider } from '../media/openai-compatible.js';
 import { ContextArchiver } from '../context-archiver/index.js';
+import { MemoryDeletionCoordinator } from '../memory/deletion-coordinator.js';
+import { ExpressionDeletionSink } from '../memory/expression-deletion-sink.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -92,6 +94,7 @@ export class BotRuntime implements Managed {
   #plugins?: PluginManager;
   #pipeline?: MessagePipeline;
   #archiver?: ContextArchiver;
+  #deletionCoordinator?: MemoryDeletionCoordinator;
   #unsubscribe: Array<() => void> = [];
   #sweepTaskId?: string;
   #worldTickTaskId?: string;
@@ -368,6 +371,24 @@ export class BotRuntime implements Managed {
       archiveAgeHours: 24,
       compressArchived: true,
     });
+    // Deletion coordinator: bridges message deletions → long-term memory sinks.
+    // Uses the bot's storage for persistent idempotency markers.
+    const deletionCoordinator = new MemoryDeletionCoordinator({
+      storage: this.#deps.storage,
+      logger: this.#logger,
+    });
+    if (this.#deps.storage) {
+      // Expression Memory sink: tombstones expression records whose source
+      // message was deleted. Only meaningful when expression memory is enabled
+      // (the storage prefix scan is cheap even if no records exist).
+      deletionCoordinator.register(new ExpressionDeletionSink({
+        storage: this.#deps.storage,
+        logger: this.#logger,
+      }));
+      // TODO: register semantic memory deletion sink when a `forgetSourceMessage`
+      // interface is available on the semantic memory adapter.
+    }
+    this.#deletionCoordinator = deletionCoordinator;
     // LLM function/tool-calling registry. Tools are offered to the model in the
     // reply path only when cfg.ai.tools.enabled (default off); the registry is
     // otherwise inert. Built-in: song-library lookup (port of upstream
@@ -533,6 +554,16 @@ export class BotRuntime implements Managed {
             sourceMessageId: event.messageId,
             sourcePlatform: event.platform,
           });
+          // Fan out to long-term memory sinks (expression memory tombstoning, etc.)
+          await this.#deletionCoordinator?.notify({
+            botId: event.botId,
+            sourceMessageId: event.messageId,
+            sourcePlatform: event.platform,
+            channelId: event.location.channelId,
+            userId: event.authorId ?? indexed?.authorId,
+            content: indexed?.content,
+            deletedAt: event.deletedAt,
+          });
         })().catch((error) => this.#logger.warn({ err: error }, 'message delete correction failed'));
       }),
       this.#deps.events.on('thread:lifecycle', (event) => {
@@ -631,6 +662,8 @@ export class BotRuntime implements Managed {
       this.#healthTaskId = undefined;
     }
     this.#health = undefined;
+
+    this.#deletionCoordinator = undefined;
 
     // Each teardown step is independent - one failure must not skip the rest.
     try {

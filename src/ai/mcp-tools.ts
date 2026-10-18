@@ -58,6 +58,8 @@ export function registerMcpTools(registry: ChatToolRegistry, mcp: McpManager, op
         const result = await mcp.callTool(ref.server, ref.name, args, caller);
         const text = result.content.filter(isTextContent).map((c) => c.text).join('\n');
         if (result.isError) return { error: text || 'mcp tool error' };
+        // Untrusted-data wrapping is applied by executeToolCall (src/ai/tools.ts)
+        // which marks all tool results uniformly with source 'tool'.
         return text.length > 0 ? text : { ok: true };
       },
     });

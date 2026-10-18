@@ -10,6 +10,7 @@
 
 import type { ChatToolCall } from '../core/types.js';
 import type { ChatToolDefinition } from './types.js';
+import { markUntrusted, formatUntrustedData } from '../security/untrusted-data.js';
 
 export interface ChatToolContext {
   botId: string;
@@ -83,8 +84,8 @@ export async function executeToolCall(
     const result = tool.contextAware === false
       ? await tool.handler(args, undefined as unknown as ChatToolContext)
       : await tool.handler(args, context);
-    if (typeof result === 'string') return result;
-    return JSON.stringify(result) ?? 'null';
+    const raw = typeof result === 'string' ? result : (JSON.stringify(result) ?? 'null');
+    return formatUntrustedData(markUntrusted('tool', raw));
   } catch (error) {
     return JSON.stringify({ error: `工具执行失败: ${errorMessage(error)}` });
   }

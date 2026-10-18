@@ -42,6 +42,7 @@ import{ExtensionsControlFacade}from'./admin/extensions-control.js';
 import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
 import{TaskControlFacade}from'./admin/task-control.js';
+import{GuildPlanner,type GuildPlanAdapter}from'./admin/guild-plan.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -180,7 +181,27 @@ export class Runtime {
       const activationReceipts=new ActivationReceiptLedger({storage:this.#storage,logger:this.#logger});
       await activationReceipts.init();
       const publicationMachine=new ConfigPublicationStateMachine(publicationStore);
-      const publicationAdmin=new ConfigPublicationAdminAdapter(publicationMachine,{receipts:activationReceipts});
+      const publicationAdmin=new ConfigPublicationAdminAdapter(publicationMachine,{receipts:activationReceipts,onActivated:async(snapshot,scope)=>{
+        this.#logger.info({scope,revision:snapshot.state.activeRevision},'config publication activated; reloading runtime');
+        try{
+          const next=await this.#loader.reload();
+          for(const botConfig of next.bots){
+            const bot=this.#bots.get(botConfig.id);
+            if(!bot){this.#logger.info({bot:botConfig.id},'new bot in published config; restart required to activate');continue;}
+            const before=JSON.stringify(this.#config.bots.find(b=>b.id===botConfig.id));
+            const after=JSON.stringify(botConfig);
+            if(before===after)continue;
+            this.#logger.info({bot:botConfig.id},'bot config changed via publication; restarting');
+            bot.applyConfig(botConfig);
+            await this.#supervisor.restartComponent(bot.name);
+          }
+          this.#config=next;
+          await activationReceipts.recordFromSnapshot(snapshot,{actor:'runtime-publication',now:publicationMachine.now(),detail:`activated revision ${snapshot.state.activeRevision} via publication`});
+          this.#logger.info({scope,revision:snapshot.state.activeRevision},'config publication reload complete');
+        }catch(error){
+          this.#logger.error({scope,revision:snapshot.state.activeRevision,err:error instanceof Error?error.message:String(error)},'config publication reload failed; previous config remains active');
+        }
+      }});
       // Boot activation: whatever is already active in persisted publication
       // state is what this process is running; record the receipt so the
       // audit plane can tell "published" apart from "actually effective".
@@ -214,6 +235,19 @@ export class Runtime {
         const runner=new CrossChatRunner({catalog:crossChatCatalog,provider,logger:this.#logger});
         return runner.run({characterIds:input.characterIds,topic:input.topic,startWith:input.startWith});
       };
+      const guildPlanAdapter:GuildPlanAdapter={
+        inventory:async(botId,guildId)=>{
+          const gw=this.#bots.get(botId)?.gateway;
+          if(!gw?.guildInventory)throw new Error('gateway does not support guild inventory');
+          return gw.guildInventory(guildId);
+        },
+        apply:async(botId,plan)=>{
+          const gw=this.#bots.get(botId)?.gateway;
+          if(!gw?.applyGuildPlan)throw new Error('gateway does not support guild plan application');
+          return gw.applyGuildPlan(plan);
+        },
+      };
+      const guildPlanner=new GuildPlanner(guildPlanAdapter);
       this.#admin = new AdminServer({
         rootDir: ROOT_DIR,
         host: this.#config.global.admin.host,
@@ -234,6 +268,7 @@ export class Runtime {
         debugChat,
         crossChat,
         mcp: this.#mcp,
+        guildPlanner,
       });
       await this.#admin.start();
     } else {

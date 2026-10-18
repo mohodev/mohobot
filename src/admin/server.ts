@@ -36,6 +36,7 @@ import{DebugChatError,type DebugChatFacade}from'./debug-chat.js';
 import { WorldStore } from './world.js';
 import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
 import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
+import type{GuildPlanner}from'./guild-plan.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -68,6 +69,8 @@ export interface AdminServerOptions {
   crossChat?: (input: CrossChatInput & { botId?: string }) => Promise<CrossChatResult>;
   /** MCP client manager; absent when `mcp.enabled` is false. */
   mcp?: McpManager;
+  /** Guild planner; absent when no gateway supports guild administration. */
+  guildPlanner?: GuildPlanner;
 }
 
 interface ApiResult { status: number; body: unknown }
@@ -500,6 +503,34 @@ export class AdminServer {
       const parsed=parseAffinityAdjust(input);const row = await this.#affinity.adjust(parsed.botId,parsed.userId,parsed.delta,parsed.reason,parsed.note);
       return this.#ok({ affinity: row });
     }
+    if(method==='GET'&&pathname==='/api/guild/inventory'){
+      const planner=this.#guildPlanner();
+      const botId=typeof url.searchParams.get('botId')==='string'?url.searchParams.get('botId')!:'';
+      const guildId=url.searchParams.get('guildId');
+      if(!guildId)throw new HttpError(400,'guildId required');
+      const result=await planner.inventory(botId||this.#defaultBotId(),guildId);
+      return this.#ok(result);
+    }
+    if(method==='POST'&&pathname==='/api/guild/plan'){
+      const planner=this.#guildPlanner();
+      const botId=typeof input.botId==='string'?input.botId:'';
+      const guildId=typeof input.guildId==='string'?input.guildId:'';
+      if(!guildId)throw new HttpError(400,'guildId required');
+      const result=await planner.plan(botId||this.#defaultBotId(),guildId);
+      return this.#ok(result);
+    }
+    if(method==='POST'&&pathname==='/api/guild/apply'){
+      const planner=this.#guildPlanner();
+      const botId=typeof input.botId==='string'?input.botId:'';
+      const plan=input.plan;
+      if(!plan||typeof plan!=='object'||Array.isArray(plan))throw new HttpError(400,'plan object required');
+      const expectedDigest=typeof input.expectedDigest==='string'?input.expectedDigest:'';
+      const idempotencyKey=typeof input.idempotencyKey==='string'?input.idempotencyKey:'';
+      if(!expectedDigest)throw new HttpError(400,'expectedDigest required');
+      if(!idempotencyKey)throw new HttpError(400,'idempotencyKey required');
+      const result=await planner.apply(botId||this.#defaultBotId(),plan as any,expectedDigest,idempotencyKey);
+      return this.#ok(result);
+    }
     throw new HttpError(403, `handler missing for policy ${policy.action}`);
   }
 
@@ -536,6 +567,9 @@ export class AdminServer {
     if (!this.#opts.botControl) throw new HttpError(409, 'bot control unavailable');
     return this.#opts.botControl;
   }
+
+  #guildPlanner():GuildPlanner{if(!this.#opts.guildPlanner)throw new HttpError(409,'guild planner unavailable');return this.#opts.guildPlanner;}
+  #defaultBotId():string{const ids=this.#opts.snapshots().map(s=>s.id);if(ids.length===1)return ids[0]!;if(ids.length===0)throw new HttpError(409,'no bots available');throw new HttpError(400,'botId required when multiple bots are configured');}
 
   #mapError(error: unknown): HttpError {
     if (error instanceof HttpError) return error;

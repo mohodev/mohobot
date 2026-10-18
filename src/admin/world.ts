@@ -1,8 +1,11 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ScheduledWorldEvent } from './world-events.js';
 import { activeScheduledEvent, validateScheduledEvent } from './world-events.js';
 import { TtlCache } from '../core/ttl-cache.js';
-import { VersionedJsonStore } from '../core/versioned-json.js';
+import { createNullLogger } from '../core/logger.js';
+import { SqliteStorage } from '../storage/sqlite.js';
+import type { Storage } from '../storage/types.js';
 
 export interface WorldState {
   clock: string;
@@ -27,18 +30,56 @@ const DEFAULT_WORLD: WorldState = {
 };
 
 export class WorldStore {
-  readonly #store: VersionedJsonStore<WorldState>;
+  readonly #storage: Storage;
+  readonly #key: string;
+  readonly #legacyFile: string;
   readonly #cache = new TtlCache<WorldState>(2_000);
+  #ready?: Promise<void>;
+
   constructor(rootDir: string, botId?: string) {
-    const file = botId ? path.join(rootDir, 'data', 'bots', botId, 'world', 'state.json') : path.join(rootDir, 'data', 'world', 'state.json');
-    this.#store = new VersionedJsonStore({ file, defaultValue: () => structuredClone(DEFAULT_WORLD), normalize: normalizeWorld });
+    this.#storage = new SqliteStorage({
+      path: path.join(rootDir, 'data', 'mohobot.db'),
+      logger: createNullLogger(),
+    });
+    this.#key = `world:${botId ?? 'default'}`;
+    this.#legacyFile = botId
+      ? path.join(rootDir, 'data', 'bots', botId, 'world', 'state.json')
+      : path.join(rootDir, 'data', 'world', 'state.json');
   }
 
-  async get(): Promise<WorldState> { const cached=this.#cache.get();if(cached)return structuredClone(cached);const value=await this.#store.get();this.#cache.set(value);return structuredClone(value); }
+  async get(): Promise<WorldState> {
+    const cached = this.#cache.get();
+    if (cached) return structuredClone(cached);
+    await this.#init();
+    const current = await this.#storage.get<WorldState>(this.#key);
+    if (current !== undefined) {
+      const value = normalizeWorld(current);
+      this.#cache.set(value);
+      return structuredClone(value);
+    }
+    const legacy = await readLegacy(this.#legacyFile);
+    const value = normalizeWorld(legacy ?? structuredClone(DEFAULT_WORLD));
+    await this.#storage.save(this.#key, value);
+    this.#cache.set(value);
+    return structuredClone(value);
+  }
 
-  async save(state: WorldState): Promise<void> { const saved=await this.#store.save(state);this.#cache.set(saved.data); }
+  async save(state: WorldState): Promise<void> {
+    const normalized = normalizeWorld(state);
+    await this.#init();
+    await this.#storage.save(this.#key, normalized);
+    this.#cache.set(normalized);
+  }
 
-  async #update(mutator: (state: WorldState) => void): Promise<WorldState> { const saved=await this.#store.update((state)=>{mutator(state);return state;});this.#cache.set(saved.data);return structuredClone(saved.data); }
+  async #update(mutator: (state: WorldState) => void): Promise<WorldState> {
+    const state = await this.get();
+    mutator(state);
+    const normalized = normalizeWorld(state);
+    await this.#init();
+    await this.#storage.save(this.#key, normalized);
+    this.#cache.set(normalized);
+    return structuredClone(normalized);
+  }
 
   async schedule(input: Partial<ScheduledWorldEvent>): Promise<WorldState> { const event=validateScheduledEvent(input);return this.#update((state)=>{state.schedule=[...state.schedule.filter((item)=>item.id!==event.id),event].sort((a,b)=>Date.parse(a.startsAt)-Date.parse(b.startsAt)).slice(-500);}); }
 
@@ -76,6 +117,20 @@ export class WorldStore {
     const event={id:`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,type,text,at:new Date().toISOString()};state.clock=event.at;state.events=[event,...state.events].slice(0,100);
     if(type==='social')mood.sociability=Math.min(1,mood.sociability+0.08);if(type==='conflict')mood.stress=Math.min(1,mood.stress+0.15);if(type==='rest'){mood.energy=Math.min(1,mood.energy+0.2);mood.stress=Math.max(0,mood.stress-0.15);}
   }); }
+
+  async #init(): Promise<void> {
+    this.#ready ??= this.#storage.init();
+    await this.#ready;
+  }
 }
 
 function normalizeWorld(value:unknown):WorldState{const row=(value&&typeof value==='object'&&!Array.isArray(value)?value:{})as Partial<WorldState>;return{...DEFAULT_WORLD,...row,mood:{...DEFAULT_WORLD.mood,...(row.mood??{})},events:row.events??[],schedule:row.schedule??[],appliedPhases:row.appliedPhases??[]};}
+
+async function readLegacy(file: string): Promise<WorldState | undefined> {
+  let raw: string;
+  try { raw = await fs.readFile(file, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
+  const parsed = JSON.parse(raw) as unknown;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'data' in parsed) return (parsed as { data: WorldState }).data;
+  return parsed as WorldState;
+}

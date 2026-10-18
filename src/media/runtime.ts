@@ -3,6 +3,7 @@ import type { DownloadedMedia } from './downloader.js';
 import { SafeMediaDownloader } from './downloader.js';
 import { MediaHashCache } from './cache.js';
 import { VisionRouter, type VisionObservation } from './vision.js';
+import { markUntrusted, formatUntrustedData } from '../security/untrusted-data.js';
 
 export interface MediaDownloaderLike {
   download(url: string): Promise<DownloadedMedia>;
@@ -130,8 +131,12 @@ export class MediaRuntime {
       sha256: item.sha256,
       status: item.status,
       cached: item.cached,
-      description: item.observation?.description,
-      ocr: item.observation?.ocr,
+      description: item.observation?.description
+        ? formatUntrustedData(markUntrusted('vlm', item.observation.description))
+        : undefined,
+      ocr: item.observation?.ocr
+        ? { trust: 'untrusted' as const, text: formatUntrustedData(markUntrusted('ocr', item.observation.ocr.text)) }
+        : undefined,
       failures: item.observation?.failures,
       reason: item.reason,
     }));

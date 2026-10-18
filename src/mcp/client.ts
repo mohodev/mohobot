@@ -138,6 +138,11 @@ export class McpClient {
    * Permission-gated, audited tool invocation. Denials throw before the
    * transport is touched; tool-level failures come back as `isError` results;
    * transport/protocol faults throw typed McpErrors. Every path is recorded.
+   *
+   * TODO: When MCP results are consumed outside the LLM tool-call loop
+   * (e.g. admin UI, ACP), apply `markUntrusted('mcp', …)` +
+   * `formatUntrustedData()` at that surface before injecting into any prompt.
+   * The chat-tool path already wraps via `executeToolCall` (source: 'tool').
    */
   async callTool(name: string, args: Record<string, unknown> | undefined, caller: McpCaller): Promise<McpCallResult> {
     const label = caller ? `${caller.id ?? 'anonymous'} (${caller.role ?? 'unknown'})` : 'anonymous';

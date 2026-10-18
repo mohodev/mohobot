@@ -40,6 +40,7 @@ import type { Storage } from '../storage/types.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
+import { markUntrusted, formatUntrustedData } from '../security/untrusted-data.js';
 import { discordChatLog } from '../core/discord-chat-log.js';
 import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
@@ -731,15 +732,36 @@ export class MessagePipeline {
         personaText = cfg.systemPrompt;
       }
     }
+    // Separate recalled memory entries from the system prompt; they carry
+    // untrusted long-term recall data. Semantic memory uses '[Recalled …]',
+    // expression memory uses '[表达风格参考]'. The system prompt itself is the
+    // first entry (personaText) and must not be wrapped.
+    const isRecalledMemory = (m: ChatMessage): boolean =>
+      m.role === 'system' && m.content !== cfg.systemPrompt &&
+      (m.content.startsWith('[Recalled ') || m.content.startsWith('[表达风格参考]'));
+    const recalledMemories = messages.filter(isRecalledMemory).map((m) => ({
+      ...m,
+      content: formatUntrustedData(markUntrusted('memory', m.content)),
+    }));
+    // Mark user-role turns as untrusted data before they enter the model
+    // context. This is a non-invasive annotation: the original session store
+    // is unchanged; only the prompt array sent to the AI provider is wrapped.
+    const contextTurns = messages.filter((m) => m.role !== 'system').map((m) => {
+      if (m.role === 'user') {
+        return { ...m, content: formatUntrustedData(markUntrusted('user', m.content)) };
+      }
+      return m;
+    });
     messages = [
       { role: 'system', content: personaText },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
+      ...recalledMemories,
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
       ...(emotionBlock ? [{ role: 'system' as const, content: emotionBlock }] : []),
       ...(songBlock ? [{ role: 'system' as const, content: songBlock }] : []),
-      ...messages.filter((m) => m.role !== 'system'),
+      ...contextTurns,
     ];
 
     if (this.#deps.plugins) {
