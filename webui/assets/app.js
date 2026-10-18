@@ -201,6 +201,18 @@ async function models() {
   app.innerHTML = `<div class="summary-grid"><article class="card"><h3>目录模型</h3><div class="metric">${esc(models.length)}</div><div class="muted">最后刷新 ${esc(catalog.fetchedAt || '—')}</div></article><article class="card"><h3>免费端点</h3><div class="metric">${esc(catalog.freeEndpointCount ?? '—')}</div></article></div><div class="table-wrap"><table><thead><tr><th>模型</th><th>能力</th><th>健康</th></tr></thead><tbody>${models.map((model) => { const probe = modelHealth[model.id] || {}; const ok = probe.ok === true; return `<tr><td><strong>${esc(model.id)}</strong><small>${esc(model.description)}</small></td><td>${(model.capabilities || []).map((capability) => `<span class="tag">${esc(capability)}</span>`).join('')}</td><td><span class="state ${ok ? 'online' : 'offline'}">${esc(probe.status || (ok ? '正常' : '未知'))}</span></td></tr>`; }).join('')}</tbody></table></div>`;
 }
 
+async function modelops() {
+  try {
+    const result = await request('/models/dashboard');
+    const dashboard = result.dashboard || {};
+    const bots = Array.isArray(dashboard.bots) ? dashboard.bots : [];
+    const providers = Array.isArray(dashboard.providers) ? dashboard.providers : [];
+    const events = Array.isArray(dashboard.events) ? dashboard.events : [];
+    app.innerHTML = `<div class="summary-grid"><article class="card"><h3>运行机器人</h3><div class="metric">${esc(dashboard.totals?.running ?? 0)} <small>/ ${esc(dashboard.totals?.bots ?? 0)}</small></div></article><article class="card"><h3>可用模型</h3><div class="metric">${esc(dashboard.totals?.availableModels ?? 0)} <small>/ ${esc(dashboard.totals?.models ?? 0)}</small></div></article></div><div class="section-head"><div><h2>Bot 模型状态</h2><p class="muted">健康、会话与当前 provider 的只读汇总。</p></div><button id="refresh-modelops">刷新</button></div><div class="table-wrap"><table><thead><tr><th>Bot</th><th>Provider / 模型</th><th>会话</th><th>状态</th></tr></thead><tbody>${bots.map((bot) => `<tr><td><strong>${esc(bot.botName || bot.botId)}</strong><small>${esc(bot.botId)}</small></td><td>${esc(bot.provider)} / ${esc(bot.model)}</td><td>${esc(bot.sessions ?? 0)}</td><td><span class="state ${bot.running ? 'online' : 'offline'}">${bot.running ? '运行中' : '已停止'}</span></td></tr>`).join('') || '<tr><td colspan="4">暂无 Bot 数据</td></tr>'}</tbody></table></div><div class="section-head"><div><h2>Provider 健康</h2></div></div><div class="table-wrap"><table><thead><tr><th>Provider</th><th>模型数</th><th>可用</th><th>平均延迟</th></tr></thead><tbody>${providers.map((provider) => `<tr><td><strong>${esc(provider.provider)}</strong></td><td>${esc(provider.modelCount)}</td><td>${esc(provider.availableCount)}</td><td>${esc(provider.avgLatencyMs == null ? '—' : `${provider.avgLatencyMs} ms`)}</td></tr>`).join('') || '<tr><td colspan="4">暂无 Provider 数据</td></tr>'}</tbody></table></div><div class="section-head"><div><h2>最近路由事件</h2></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模型</th><th>详情</th></tr></thead><tbody>${events.map((event) => `<tr><td>${esc(event.at ? new Date(event.at).toLocaleString() : '—')}</td><td>${esc(event.kind)}</td><td>${esc(event.model || '—')}</td><td>${esc(event.detail)}</td></tr>`).join('') || '<tr><td colspan="4">暂无 fallback 或熔断事件</td></tr>'}</tbody></table></div>`;
+    document.querySelector('#refresh-modelops').addEventListener('click', modelops);
+  } catch (error) { app.innerHTML = unavailable(error); }
+}
+
 async function providers(){const rows=(await request('/providers')).providers||[];app.innerHTML=`<div class="section-head"><div><h2>供应商与任务路由</h2><p class="muted">密钥与服务地址永不回显。配置变更请走版本化配置发布。</p></div></div><div class="table-wrap"><table><thead><tr><th>机器人</th><th>供应商</th><th>模型</th><th>密钥</th><th>任务路由</th><th>操作</th></tr></thead><tbody>${rows.map(x=>`<tr><td>${esc(x.botId)}</td><td>${esc(x.provider)}</td><td>${esc(x.model)}</td><td>${x.apiKeyConfigured?'已配置':'未配置'}</td><td><code>${esc(JSON.stringify(x.taskRoutes||{}))}</code></td><td><button data-probe-provider="${esc(x.botId)}" ${has('providers.probe')?'':'disabled'}>连接探测</button></td></tr>`).join('')}</tbody></table></div><section id="provider-result"></section>`;app.querySelectorAll('[data-probe-provider]').forEach(b=>b.onclick=async()=>{const probe=await request(`/providers/${encodeURIComponent(b.dataset.probeProvider)}/probe`,{method:'POST',body:body({})});document.querySelector('#provider-result').innerHTML=`<div class="notice ${probe.probe.ok?'success':'error'}">${esc(probe.probe.botId)}：${probe.probe.ok?'连接正常':probe.probe.detail||'不可用'}</div>`;});}
 
 async function config() {
@@ -373,7 +385,7 @@ async function mcp() {
   });
 }
 
-const tabs = { overview,bots,plugins,extensions,mcp,operations,opaudit,logs,memory,behavior,debugchat,knowledge, users,tokens, health, models,providers, config, characters, world,device, metrics };
+const tabs = { overview,bots,plugins,extensions,mcp,operations,opaudit,logs,memory,behavior,debugchat,knowledge, users,tokens, health, models,modelops,providers, config, characters, world,device, metrics };
 async function activate(button) {
   if (!button || button.hidden) return;
   document.querySelectorAll('#navigation button').forEach((item) => item.classList.toggle('active', item === button));

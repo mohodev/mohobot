@@ -50,6 +50,7 @@ import { MemoryDeletionCoordinator } from '../memory/deletion-coordinator.js';
 import { ExpressionDeletionSink } from '../memory/expression-deletion-sink.js';
 import { SqliteTalkGovernorStateStore } from '../pipeline/talk-governor-sqlite-store.js';
 import { JargonMemory } from '../memory/jargon-memory.js';
+import { LaneProvider } from '../ai/lane-provider.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -225,9 +226,10 @@ export class BotRuntime implements Managed {
     this.#usage = this.#deps.storage
       ? new UsageRecorder({ storage: this.#deps.storage, logger: this.#logger })
       : undefined;
-    this.#provider = this.#usage
+    const recorded = this.#usage
       ? new UsageRecordingProvider(resolved, { recorder: this.#usage, botId: cfg.id })
       : resolved;
+    this.#provider = new LaneProvider(recorded, cfg.ai.options.taskLanes, () => this.snapshot() ? [this.snapshot()] : []);
     // The summarizer needs the live provider, which is built after sessions
     // (plugins load in between). Offline/mock providers yield no summarizer, so
     // sessions then keep the legacy hard trim instead of storing canned text.
