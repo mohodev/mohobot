@@ -422,6 +422,15 @@ export const GlobalConfigSchema = z.object({
   logLevel: LogLevelSchema.default('info'),
   admin: z.object({host:z.string().default('127.0.0.1'),port:z.number().int().min(1).max(65535).default(3210),token:z.string().default('')}).default({}),
   storage: StorageConfigSchema.default({}),
+  /** Live and persistent Discord chat-log retention settings. */
+  chatLog: z.object({
+    /** Persistent chat-log rows older than this many days are purged. */
+    retentionDays: z.number().int().positive().default(30),
+    /** Maximum number of recent in-memory Discord chat-log entries. */
+    capacity: z.number().int().positive().default(500),
+    /** Maximum length of each in-memory chat-log summary. */
+    maxSummaryLength: z.number().int().positive().default(500),
+  }).default({}),
   supervisor: SupervisorConfigSchema.default({}),
   hotReload: HotReloadConfigSchema.default({}),
   plugins: z
