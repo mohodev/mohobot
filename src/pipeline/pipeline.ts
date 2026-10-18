@@ -32,6 +32,7 @@ import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { decideSocially } from './social-decision.js';
 import { TalkGovernor } from './talk-governor.js';
+import type { TalkGovernorStateStore } from './talk-governor-state.js';
 import { privacyGate } from './privacy-gate.js';
 import { PublicRelationshipStore } from './public-relationships.js';
 import { DeviceStore } from '../admin/device.js';
@@ -47,6 +48,7 @@ import { effectiveSessionChannelId } from '../session/context-policy.js';
 import { ContextArchiver, type ContextEntry } from '../context-archiver/index.js';
 import { BanError, BanStore, formatDuration, looksLikeDuration, parseDuration } from './ban-store.js';
 import { RepeatGuard } from './repeat-guard.js';
+import { MessagePlanner } from './message-planner.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
@@ -162,6 +164,7 @@ export interface PipelineDeps {
    * `config.ai.tools.enabled`; omitted or empty = reply path unchanged.
    */
   chatTools?: ChatToolRegistry;
+  talkGovernorStore?: TalkGovernorStateStore;
 }
 
 /** The slice of the usage recorder the pipeline needs. */
@@ -337,6 +340,7 @@ export class MessagePipeline {
   readonly #active = new Map<string, AbortController>();
   readonly #recentReplies = new Map<string, number[]>();
   readonly #talkGovernor: TalkGovernor;
+  readonly #planner: MessagePlanner | undefined;
   readonly #stats: PipelineStats = { handled: 0, replied: 0, skipped: 0, aiFailures: 0, rateLimited: 0 };
 
   constructor(deps: PipelineDeps) {
@@ -350,7 +354,10 @@ export class MessagePipeline {
     this.#archiver = deps.contextArchiver;
     this.#repeats = new RepeatGuard({ maxRepeats: deps.config.repeatGuard.maxRepeats, windowMs: deps.config.repeatGuard.windowMs });
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
-    this.#talkGovernor = new TalkGovernor(deps.config.social.talkGovernor);
+    this.#talkGovernor = new TalkGovernor(deps.config.social.talkGovernor, deps.talkGovernorStore ? { store: deps.talkGovernorStore } : undefined);
+    if (deps.config.messagePlanner.enabled) {
+      this.#planner = new MessagePlanner(deps.provider, deps.config.messagePlanner, this.#logger);
+    }
   }
 
   stats(): PipelineStats {
@@ -642,6 +649,26 @@ export class MessagePipeline {
       log.debug({ reason: social.reason, traceId: trace.id }, 'social decision skipped model call');
       return;
     }
+
+    // Optional LLM planner: a bounded single call that may downgrade "reply"
+    // to "ignore" for messages the social gate passed but that are still not
+    // worth a full model call. Direct summons and admin commands are exempt
+    // inside MessagePlanner.plan() itself.
+    if (this.#planner) {
+      const plannerDecision = await this.#planner.plan(
+        message,
+        { channelName: message.channel.name, recentMessages: [] },
+        cfg.ai.timeoutMs,
+      );
+      if (plannerDecision.action === 'ignore') {
+        this.#stats.skipped += 1;
+        this.#trace(trace, 'ignored', { reason: `planner:${plannerDecision.reason}` });
+        log.debug({ reason: plannerDecision.reason, traceId: trace.id }, 'message planner skipped model call');
+        return;
+      }
+      this.#trace(trace, 'context', { plannerAction: 'reply', plannerReason: plannerDecision.reason });
+    }
+
     this.#trace(trace, 'context', { socialReason: social.reason, sessionScope: cfg.session.scope });
 
     if (cfg.rateLimit.enabled && !this.#limiter.allow(`${message.author.id}`)) {

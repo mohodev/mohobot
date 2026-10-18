@@ -12,6 +12,36 @@ export interface ExpressionReplacement {
   text: string;
 }
 
+export interface BulkDeleteFilter {
+  botId: string;
+  userId?: string;
+  channelId?: string;
+  before?: number;
+}
+
+export interface ExportOptions {
+  /** Filter by status. */
+  status?: ExpressionStatus;
+  /** Maximum records to export. */
+  limit?: number;
+}
+
+/** A single sanitized record for JSONL export (no raw user/channel IDs). */
+export interface SanitizedExpressionRecord {
+  id: string;
+  category: ExpressionCategory;
+  text: string;
+  normalized: string;
+  status: ExpressionStatus;
+  confidence: number;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;
+  sourcePlatform?: string;
+  reviewer?: string;
+  tombstone?: { at: number; reason?: string };
+}
+
 export interface ExpressionMemoryGovernanceOptions {
   storage: Storage;
   logger: Logger;
@@ -88,6 +118,91 @@ export class ExpressionMemoryGovernance {
     return rows.map((row) => row.value).filter(validRecord)
       .filter((record) => status === undefined || record.status === status)
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  /** Tombstone all records matching the filter. Returns the count of newly tombstoned records. */
+  async bulkDelete(filter: BulkDeleteFilter, reviewer: string, reason?: string): Promise<number> {
+    const prefix = filter.userId !== undefined
+      ? `${EXPRESSION_MEMORY_PREFIX}${filter.botId}:${filter.userId}:`
+      : `${EXPRESSION_MEMORY_PREFIX}${filter.botId}:`;
+    const rows = await this.#storage.query<unknown>({ prefix, limit: 5000 });
+    const now = this.#now();
+    let count = 0;
+    for (const row of rows) {
+      if (!validRecord(row.value)) continue;
+      const record = row.value;
+      if (record.tombstone !== undefined) continue;
+      if (filter.channelId !== undefined && record.channelId !== filter.channelId) continue;
+      if (filter.before !== undefined && record.createdAt >= filter.before) continue;
+      const updated: ExpressionMemoryRecord = {
+        ...record, recordVersion: 2, reviewer, updatedAt: now,
+        tombstone: { at: now, reviewer, ...(reason !== undefined ? { reason } : {}) },
+      };
+      await this.#storage.save(row.key, updated);
+      count += 1;
+    }
+    if (count > 0) this.#logger.info({ botId: filter.botId, reviewer, count, reason }, 'expression memory bulk delete');
+    return count;
+  }
+
+  /** List tombstoned records that have not yet expired (restorable). */
+  async recycleBin(botId: string, limit = 100): Promise<ExpressionMemoryRecord[]> {
+    const prefix = `${EXPRESSION_MEMORY_PREFIX}${botId}:`;
+    const rows = await this.#storage.query<unknown>({ prefix, limit: 5000 });
+    const now = this.#now();
+    return rows.map((row) => row.value).filter(validRecord)
+      .filter((record) => record.tombstone !== undefined && (record.expiresAt === undefined || record.expiresAt > now))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, Math.max(1, Math.min(limit, 1000)));
+  }
+
+  /** Restore a tombstoned record back to approved status. Only non-expired records may be restored. */
+  async restore(botId: string, userId: string, id: string, reviewer: string): Promise<ExpressionGovernanceOutcome> {
+    const record = await this.#load(botId, userId, id);
+    if (!record) return 'not-found';
+    if (record.tombstone === undefined) return 'unchanged';
+    const now = this.#now();
+    if (record.expiresAt !== undefined && record.expiresAt <= now) return 'invalid';
+    const updated: ExpressionMemoryRecord = {
+      ...record, recordVersion: 2, reviewer, updatedAt: now,
+      status: 'approved', tombstone: undefined,
+    };
+    await this.#storage.save(this.#key(botId, userId, id), updated);
+    this.#logger.info({ botId, userId, id, reviewer }, 'expression memory record restored from tombstone');
+    return 'applied';
+  }
+
+  /**
+   * Export sanitized JSONL lines for a bot. Strips userId, channelId, botId,
+   * sourceMessageId, sourceCreatedAt, and tombstone reviewer to prevent PII leakage.
+   */
+  async exportSanitized(botId: string, options?: ExportOptions): Promise<string> {
+    const prefix = `${EXPRESSION_MEMORY_PREFIX}${botId}:`;
+    const rows = await this.#storage.query<unknown>({ prefix, limit: 5000 });
+    const limit = Math.max(1, Math.min(options?.limit ?? 1000, 5000));
+    const records = rows.map((row) => row.value).filter(validRecord)
+      .filter((record) => options?.status === undefined || record.status === options.status)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, limit);
+    const lines: string[] = [];
+    for (const record of records) {
+      const sanitized: SanitizedExpressionRecord = {
+        id: record.id,
+        category: record.category,
+        text: record.text,
+        normalized: record.normalized,
+        status: record.status,
+        confidence: record.confidence,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        ...(record.expiresAt !== undefined ? { expiresAt: record.expiresAt } : {}),
+        ...(record.sourcePlatform !== undefined ? { sourcePlatform: record.sourcePlatform } : {}),
+        ...(record.reviewer !== undefined ? { reviewer: record.reviewer } : {}),
+        ...(record.tombstone !== undefined ? { tombstone: { at: record.tombstone.at, ...(record.tombstone.reason !== undefined ? { reason: record.tombstone.reason } : {}) } } : {}),
+      };
+      lines.push(JSON.stringify(sanitized));
+    }
+    return lines.join('\n');
   }
 
   async #transition(

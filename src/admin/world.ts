@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ScheduledWorldEvent } from './world-events.js';
 import { activeScheduledEvent, validateScheduledEvent } from './world-events.js';
+import { DailyLifeSimulator } from './daily-life.js';
+import type { DailyLifeEvent } from './daily-life.js';
 import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
@@ -86,24 +88,42 @@ export class WorldStore {
   async confirmScheduled(id: string, trust: ScheduledWorldEvent['trust']): Promise<WorldState> { return this.#update((state)=>{const event=state.schedule.find((item)=>item.id===id);if(!event)throw new Error('scheduled event not found');event.trust=trust;}); }
 
   async tick(at = Date.now()): Promise<WorldState> {
-    return this.#update((state)=>{
+    const state = await this.get();
     const active = activeScheduledEvent(state.schedule, at);
     state.clock = new Date(at).toISOString();
-    if (!active) return;
-    const start = Date.parse(active.startsAt), end = Date.parse(active.endsAt), progress = (at-start)/(end-start);
-    state.location = active.location;
-    const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
-    const phaseKey = `${active.id}:${phase}`;
-    const firstInPhase = !state.appliedPhases.includes(phaseKey);
-    if (active.kind === 'concert') {
-      state.activity = phase === 'start' ? `演出准备：${active.title}` : phase === 'middle' ? `参加演出：${active.title}` : `演出结束，正在收尾：${active.title}`;
-      if (firstInPhase) { state.mood.energy = Math.max(0, (state.mood.energy ?? .65) - (phase === 'end' ? .08 : .12)); state.mood.stress = Math.max(0, Math.min(1, (state.mood.stress ?? .2) + (phase === 'start' ? .08 : -.03))); }
-    } else if (active.kind === 'trip') {
-      state.activity = phase === 'start' ? `前往${active.location}` : phase === 'middle' ? `出差中：${active.title}` : `准备返程：${active.title}`;
-      if (firstInPhase) state.mood.energy = Math.max(0, (state.mood.energy ?? .65)-.05);
-    } else state.activity = active.title;
-    if (firstInPhase) state.appliedPhases = [...state.appliedPhases, phaseKey].slice(-1000);
-    });
+    if (active) {
+      const start = Date.parse(active.startsAt), end = Date.parse(active.endsAt), progress = (at-start)/(end-start);
+      state.location = active.location;
+      const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
+      const phaseKey = `${active.id}:${phase}`;
+      const firstInPhase = !state.appliedPhases.includes(phaseKey);
+      if (active.kind === 'concert') {
+        state.activity = phase === 'start' ? `演出准备：${active.title}` : phase === 'middle' ? `参加演出：${active.title}` : `演出结束，正在收尾：${active.title}`;
+        if (firstInPhase) { state.mood.energy = Math.max(0, (state.mood.energy ?? .65) - (phase === 'end' ? .08 : .12)); state.mood.stress = Math.max(0, Math.min(1, (state.mood.stress ?? .2) + (phase === 'start' ? .08 : -.03))); }
+      } else if (active.kind === 'trip') {
+        state.activity = phase === 'start' ? `前往${active.location}` : phase === 'middle' ? `出差中：${active.title}` : `准备返程：${active.title}`;
+        if (firstInPhase) state.mood.energy = Math.max(0, (state.mood.energy ?? .65)-.05);
+      } else state.activity = active.title;
+      if (firstInPhase) state.appliedPhases = [...state.appliedPhases, phaseKey].slice(-1000);
+    } else {
+      const dateKey = `daily:${new Date(at).toISOString().slice(0, 10)}`;
+      if (!state.appliedPhases.includes(dateKey)) {
+        try {
+          const sim = new DailyLifeSimulator();
+          const evt: DailyLifeEvent = await sim.propose(state, '角色');
+          state.location = evt.location;
+          state.activity = evt.activity;
+          state.mood.energy = clampMood((state.mood.energy ?? 0.65) + evt.energyDelta);
+          state.mood.stress = clampMood((state.mood.stress ?? 0.2) + evt.stressDelta);
+          state.appliedPhases = [...state.appliedPhases, dateKey].slice(-1000);
+        } catch { /* best-effort: daily life failure does not block tick */ }
+      }
+    }
+    const normalized = normalizeWorld(state);
+    await this.#init();
+    await this.#storage.save(this.#key, normalized);
+    this.#cache.set(normalized);
+    return structuredClone(normalized);
   }
 
   async context(at = Date.now()): Promise<string> {
@@ -123,6 +143,8 @@ export class WorldStore {
     await this.#ready;
   }
 }
+
+function clampMood(n: number): number { return Math.max(0, Math.min(1, n)); }
 
 function normalizeWorld(value:unknown):WorldState{const row=(value&&typeof value==='object'&&!Array.isArray(value)?value:{})as Partial<WorldState>;return{...DEFAULT_WORLD,...row,mood:{...DEFAULT_WORLD.mood,...(row.mood??{})},events:row.events??[],schedule:row.schedule??[],appliedPhases:row.appliedPhases??[]};}
 

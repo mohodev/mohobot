@@ -48,6 +48,7 @@ import { OpenAICompatibleOcrProvider, OpenAICompatibleVisionProvider } from '../
 import { ContextArchiver } from '../context-archiver/index.js';
 import { MemoryDeletionCoordinator } from '../memory/deletion-coordinator.js';
 import { ExpressionDeletionSink } from '../memory/expression-deletion-sink.js';
+import { SqliteTalkGovernorStateStore } from '../pipeline/talk-governor-sqlite-store.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -422,6 +423,11 @@ export class BotRuntime implements Managed {
       const bridged = registerMcpTools(chatTools, this.#deps.mcp, { logger: this.#logger });
       if (bridged > 0) this.#logger.info({ bridged }, 'mcp tools bridged into reply path');
     }
+    let talkGovernorStore: SqliteTalkGovernorStateStore | undefined;
+    if (this.#deps.storage) {
+      talkGovernorStore = new SqliteTalkGovernorStateStore(this.#deps.storage);
+      await talkGovernorStore.init();
+    }
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
@@ -436,6 +442,7 @@ export class BotRuntime implements Managed {
       reflection,
       contextArchiver: this.#archiver,
       bans: BanStore.for(this.#deps.storage, this.#logger),
+      talkGovernorStore,
       typing: async (channelId) => {
         await this.#gateway?.typing(channelId);
       },

@@ -313,6 +313,19 @@ export const BotConfigSchema = z.object({
     })
     .default({}),
   /**
+   * Optional LLM-based message planner: after the rule-based social decision
+   * says "reply", a single bounded LLM call decides whether the reply is
+   * actually worthwhile. Direct summons (DM, @mention) and admin commands
+   * are never subject to the planner. Disabled by default.
+   */
+  messagePlanner: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** Model override; unset = use the bot's main ai.model. */
+      model: z.string().min(1).optional(),
+    })
+    .default({}),
+  /**
    * Silently ignore auto-replies and a sender repeating the same text
    * `maxRepeats` times within `windowMs` (spam, stuck clients, bot echo loops).
    */

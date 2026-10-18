@@ -66,6 +66,13 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/knowledge-bases\/[^/]+\/bindings$/,permission:'knowledge.read',action:'knowledge.bindings.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/knowledge-bases\/[^/]+\/bindings$/,permission:'knowledge.write',action:'knowledge.bindings.create',risk:'impact',confirmation:true},
 {method:'DELETE',pattern:/^\/api\/knowledge-bases\/[^/]+\/bindings\/[^/]+\/[^/]+$/,permission:'knowledge.delete',action:'knowledge.bindings.delete',risk:'dangerous',confirmation:true},
+{method:'GET',pattern:/^\/api\/memory\/expressions$/,permission:'memory.read',action:'expressions.list',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/memory\/expressions\/approve$/,permission:'memory.write',action:'expressions.approve',risk:'impact',confirmation:true},
+{method:'POST',pattern:/^\/api\/memory\/expressions\/reject$/,permission:'memory.write',action:'expressions.reject',risk:'impact',confirmation:true},
+{method:'POST',pattern:/^\/api\/memory\/expressions\/bulk-delete$/,permission:'memory.delete',action:'expressions.bulk-delete',risk:'dangerous',confirmation:true},
+{method:'GET',pattern:/^\/api\/memory\/expressions\/recycle-bin$/,permission:'memory.read',action:'expressions.recycle-bin',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/memory\/expressions\/restore$/,permission:'memory.write',action:'expressions.restore',risk:'impact',confirmation:true},
+{method:'GET',pattern:/^\/api\/memory\/expressions\/export$/,permission:'memory.read',action:'expressions.export',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/world(?:\/day-plan)?$/,permission:'world.read',action:'world.read',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/world\/schedule$/,permission:'world.write',action:'world.schedule',risk:'reversible',confirmation:false},
 {method:'POST',pattern:/^\/api\/world\/schedule\/[^/]+\/trust$/,permission:'world.confirm',action:'world.schedule.confirm',risk:'impact',confirmation:true},
@@ -83,5 +90,6 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/guild\/inventory$/,permission:'guild.read',action:'guild.inventory',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/guild\/plan$/,permission:'guild.read',action:'guild.plan',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/guild\/apply$/,permission:'guild.manage',action:'guild.apply',risk:'impact',confirmation:true},
+{method:'GET',pattern:/^\/api\/social\/disclosure-audit$/,permission:'audit.read',action:'social.disclosure-audit.read',risk:'read',confirmation:false},
 ]as const;
 export function routePolicy(method:string,path:string):RoutePolicy|undefined{return ROUTE_POLICIES.find(p=>p.method===method&&p.pattern.test(path));}

@@ -14,6 +14,8 @@ import type { LogBuffer } from '../core/log-buffer.js';
 import type { DiscordChatLogBuffer, DiscordChatDirection } from '../core/discord-chat-log.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
+import{ExpressionMemoryGovernance}from'../memory/expression-memory-governance.js';
+import type{ExpressionStatus}from'../memory/expression-memory.js';
 import{KnowledgeBaseStore}from'../knowledge/store.js';
 import type { Storage } from '../storage/types.js';
 import { chatLogQuery } from '../storage/chatlog.js';
@@ -37,6 +39,7 @@ import { WorldStore } from './world.js';
 import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
 import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
 import type{GuildPlanner}from'./guild-plan.js';
+import{listAudits as listDisclosureAudits}from'../social/disclosure.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -148,6 +151,7 @@ export class AdminServer {
   readonly #device: DeviceStore;
   readonly #catalog: ModelCatalogStore;
   readonly #memories:MemoryAdminService;
+  readonly #expressionGov:ExpressionMemoryGovernance;
   readonly #knowledge:KnowledgeBaseStore;
   #server?: http.Server;
 
@@ -174,6 +178,7 @@ export class AdminServer {
     this.#device = new DeviceStore(opts.rootDir);
     this.#catalog = new ModelCatalogStore(opts.rootDir);
     this.#memories=new MemoryAdminService(opts.storage);
+    this.#expressionGov=new ExpressionMemoryGovernance({storage:opts.storage,logger:opts.logger});
     this.#knowledge=new KnowledgeBaseStore(opts.storage);
   }
 
@@ -468,6 +473,55 @@ export class AdminServer {
       });
       return this.#ok({ result });
     }
+    if(method==='GET'&&pathname==='/api/memory/expressions'){
+      const botId=url.searchParams.get('botId');if(!botId)throw new HttpError(400,'botId required');
+      const userId=stringParam(url,'userId');const statusRaw=stringParam(url,'status');
+      if(statusRaw&&!['pending','approved','rejected','superseded'].includes(statusRaw))throw new HttpError(400,'invalid status');
+      const records=await this.#expressionGov.list(botId,userId??undefined,statusRaw as ExpressionStatus|undefined);
+      return this.#ok({records});
+    }
+    if(method==='POST'&&pathname==='/api/memory/expressions/approve'){
+      const botId=String(input.botId??'');const userId=String(input.userId??'');const id=String(input.id??'');
+      if(!botId||!userId||!id)throw new HttpError(400,'botId, userId, and id required');
+      const outcome=await this.#expressionGov.approve(botId,userId,id,auth.principal.id);
+      return this.#ok({outcome});
+    }
+    if(method==='POST'&&pathname==='/api/memory/expressions/reject'){
+      const botId=String(input.botId??'');const userId=String(input.userId??'');const id=String(input.id??'');
+      if(!botId||!userId||!id)throw new HttpError(400,'botId, userId, and id required');
+      const outcome=await this.#expressionGov.reject(botId,userId,id,auth.principal.id);
+      return this.#ok({outcome});
+    }
+    if(method==='POST'&&pathname==='/api/memory/expressions/bulk-delete'){
+      const botId=String(input.botId??'');if(!botId)throw new HttpError(400,'botId required');
+      const userId=typeof input.userId==='string'?input.userId:undefined;
+      const channelId=typeof input.channelId==='string'?input.channelId:undefined;
+      const before=typeof input.before==='number'&&Number.isFinite(input.before)?input.before:undefined;
+      const reason=typeof input.reason==='string'?input.reason:undefined;
+      const count=await this.#expressionGov.bulkDelete({botId,userId,channelId,before},auth.principal.id,reason);
+      return this.#ok({deleted:count});
+    }
+    if(method==='GET'&&pathname==='/api/memory/expressions/recycle-bin'){
+      const botId=url.searchParams.get('botId');if(!botId)throw new HttpError(400,'botId required');
+      const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>1000))throw new HttpError(400,'invalid limit');
+      const records=await this.#expressionGov.recycleBin(botId,limit);
+      return this.#ok({records});
+    }
+    if(method==='POST'&&pathname==='/api/memory/expressions/restore'){
+      const botId=String(input.botId??'');const userId=String(input.userId??'');const id=String(input.id??'');
+      if(!botId||!userId||!id)throw new HttpError(400,'botId, userId, and id required');
+      const outcome=await this.#expressionGov.restore(botId,userId,id,auth.principal.id);
+      if(outcome==='invalid')throw new HttpError(409,'record has expired and cannot be restored');
+      return this.#ok({outcome});
+    }
+    if(method==='GET'&&pathname==='/api/memory/expressions/export'){
+      const botId=url.searchParams.get('botId');if(!botId)throw new HttpError(400,'botId required');
+      const statusRaw=stringParam(url,'status');
+      if(statusRaw&&!['pending','approved','rejected','superseded'].includes(statusRaw))throw new HttpError(400,'invalid status');
+      const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>5000))throw new HttpError(400,'invalid limit');
+      const jsonl=await this.#expressionGov.exportSanitized(botId,{status:statusRaw as ExpressionStatus|undefined,limit});
+      return this.#ok({data:jsonl});
+    }
     if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
     const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
     if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#worldFor(this.#stateBotId(dry.botId)).get(),this.#deviceFor(this.#stateBotId(dry.botId)).get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
@@ -530,6 +584,11 @@ export class AdminServer {
       if(!idempotencyKey)throw new HttpError(400,'idempotencyKey required');
       const result=await planner.apply(botId||this.#defaultBotId(),plan as any,expectedDigest,idempotencyKey);
       return this.#ok(result);
+    }
+    if(method==='GET'&&pathname==='/api/social/disclosure-audit'){
+      const limit=intParam(url,'limit')??50;if(!Number.isSafeInteger(limit)||limit<1||limit>200)throw new HttpError(400,'invalid limit');
+      const botId=stringParam(url,'botId');
+      return this.#ok({entries:await listDisclosureAudits(this.#opts.storage,botId||undefined,limit)});
     }
     throw new HttpError(403, `handler missing for policy ${policy.action}`);
   }

@@ -1,5 +1,7 @@
 import type { MohoMessage } from '../core/types.js';
 import type { SocialDecision } from './social-decision.js';
+import type { TalkGovernorChannelState, TalkGovernorStateStore } from './talk-governor-state.js';
+import { MemoryTalkGovernorStateStore } from './talk-governor-state.js';
 
 export interface TalkGovernorConfig {
   enabled: boolean;
@@ -18,17 +20,16 @@ export interface TalkGovernorDecision {
   channelId: string;
 }
 
-interface ChannelState { delivered: number[]; lastAt: number; consecutive: number; backoffUntil: number; }
-
-/** In-memory voluntary-speech governor. It deliberately never governs direct summons. */
+/** Voluntary-speech governor. It deliberately never governs direct summons. */
 export class TalkGovernor {
   readonly #config: TalkGovernorConfig;
-  readonly #states = new Map<string, ChannelState>();
+  readonly #store: TalkGovernorStateStore;
   readonly #now: () => number;
 
-  constructor(config: TalkGovernorConfig, now: () => number = Date.now) {
+  constructor(config: TalkGovernorConfig, opts?: { now?: () => number; store?: TalkGovernorStateStore }) {
     this.#config = config;
-    this.#now = now;
+    this.#now = opts?.now ?? Date.now;
+    this.#store = opts?.store ?? new MemoryTalkGovernorStateStore();
   }
 
   decide(message: MohoMessage, social: SocialDecision): TalkGovernorDecision {
@@ -42,6 +43,7 @@ export class TalkGovernor {
     const now = this.#now();
     const state = this.#state(channelId);
     state.delivered = state.delivered.filter((at) => now - at < 3_600_000);
+    this.#store.set(channelId, state);
     if (this.#config.hourlyBudget <= state.delivered.length) return { allowed: false, reason: 'hourly-budget', channelId };
     if (now < state.backoffUntil || (state.lastAt > 0 && now - state.lastAt < this.#config.cooldownMs)) {
       return { allowed: false, reason: 'cooldown', channelId };
@@ -61,13 +63,12 @@ export class TalkGovernor {
       const exponent = state.consecutive - this.#config.consecutiveLimit;
       state.backoffUntil = now + Math.min(this.#config.maxBackoffMs, this.#config.cooldownMs * this.#config.backoffFactor ** exponent);
     }
+    this.#store.set(channelId, state);
   }
 
-  reset(channelId?: string): void { if (channelId) this.#states.delete(channelId); else this.#states.clear(); }
+  reset(channelId?: string): void { this.#store.delete(channelId); }
 
-  #state(channelId: string): ChannelState {
-    let state = this.#states.get(channelId);
-    if (!state) { state = { delivered: [], lastAt: 0, consecutive: 0, backoffUntil: 0 }; this.#states.set(channelId, state); }
-    return state;
+  #state(channelId: string): TalkGovernorChannelState {
+    return this.#store.get(channelId) ?? { delivered: [], lastAt: 0, consecutive: 0, backoffUntil: 0, focusUntil: 0, pending: new Map() };
   }
 }

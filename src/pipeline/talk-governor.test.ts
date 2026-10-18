@@ -20,7 +20,7 @@ describe('TalkGovernor', () => {
   });
 
   it('governs only opted-in voluntary participation by default', () => {
-    const governor = new TalkGovernor({ enabled: true, hourlyBudget: 1, cooldownMs: 100, consecutiveLimit: 2, maxBackoffMs: 1000, backoffFactor: 2, governRoomQuestions: false, governPeerBanter: false }, () => 1000);
+    const governor = new TalkGovernor({ enabled: true, hourlyBudget: 1, cooldownMs: 100, consecutiveLimit: 2, maxBackoffMs: 1000, backoffFactor: 2, governRoomQuestions: false, governPeerBanter: false }, { now: () => 1000 });
     expect(governor.decide(message(), social('group question')).reason).toBe('outside-scope');
     expect(governor.decide(message(), social('peer rp character interjected')).reason).toBe('outside-scope');
     expect(governor.decide(message(), social('natural group participation')).reason).toBe('allowed');
@@ -30,7 +30,7 @@ describe('TalkGovernor', () => {
 
   it('shares budget per channel and resets independently', () => {
     let now = 1000;
-    const governor = new TalkGovernor({ enabled: true, hourlyBudget: 2, cooldownMs: 0, consecutiveLimit: 20, maxBackoffMs: 0, backoffFactor: 2, governRoomQuestions: true, governPeerBanter: true }, () => now);
+    const governor = new TalkGovernor({ enabled: true, hourlyBudget: 2, cooldownMs: 0, consecutiveLimit: 20, maxBackoffMs: 0, backoffFactor: 2, governRoomQuestions: true, governPeerBanter: true }, { now: () => now });
     governor.commit('c');
     governor.commit('c');
     expect(governor.decide(message(), social('natural group participation')).reason).toBe('hourly-budget');
