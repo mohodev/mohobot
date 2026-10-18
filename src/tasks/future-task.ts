@@ -178,6 +178,28 @@ export class FutureTaskStore {
     task.status='uncertain';task.error=error;task.completedAt=Date.now();await this.storage.save(taskKey(taskId),task);return task;
   }
 
+  async reconcile(taskId: string, outcome: 'delivered' | 'rejected' | 'unknown', reason?: string): Promise<FutureTask> {
+    assertId(taskId, 'task id');
+    const task = envelope(await this.storage.get(taskKey(taskId)));
+    if (!task) throw new Error('task not found');
+    if (task.status !== 'uncertain') throw new Error('task is not uncertain');
+    if (outcome === 'delivered') {
+      task.status = 'completed';
+      task.completedAt = Date.now();
+      task.result = { status: 'delivered', reconciled: true };
+    } else if (outcome === 'rejected') {
+      task.status = 'pending';
+      task.scheduledAt = Date.now();
+      task.claimedBy = undefined;
+      task.claimedAt = undefined;
+      task.error = reason ?? 'delivery confirmed not sent; returned to pending';
+    } else {
+      task.error = reason ?? 'delivery remains uncertain';
+    }
+    await this.storage.save(taskKey(taskId), task);
+    return task;
+  }
+
   async recover(staleMs: number): Promise<FutureTask[]> {
     const now = Date.now();
     const rows = await this.storage.query<unknown>({ prefix: PREFIX, limit: 10_000 });

@@ -221,4 +221,17 @@ describe('FutureTaskStore', () => {
     expect(all).toHaveLength(1);
     expect(all[0]!.type).toBe('test');
   });
+
+  it('reconciles uncertain delivery records without retrying unknown outcomes', async () => {
+    const { storage, tasks } = store();
+    await storage.init();
+    const task = await tasks.schedule({ type: 'discord.deliver', payload: { dedupeKey: 'k' }, owner: 'admin' });
+    await tasks.claim(task.id, 'worker');
+    await tasks.uncertain(task.id, 'network timeout');
+    const unchanged = await tasks.reconcile(task.id, 'unknown', 'outbox still ambiguous');
+    expect(unchanged.status).toBe('uncertain');
+    expect(unchanged.error).toBe('outbox still ambiguous');
+    const completed = await tasks.reconcile(task.id, 'delivered');
+    expect(completed.status).toBe('completed');
+  });
 });

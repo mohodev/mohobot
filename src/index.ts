@@ -46,6 +46,8 @@ import{GuildPlanner,type GuildPlanAdapter}from'./admin/guild-plan.js';
 import { FutureTaskRunner } from './tasks/future-task-runner.js';
 import { FutureTaskStore } from './tasks/future-task.js';
 import { WorldStore } from './admin/world.js';
+import { DiscordDeliveryOutbox } from './discord/outbox.js';
+import type { DeliveryResult } from './discord/types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -173,6 +175,38 @@ export class Runtime {
         if (typeof botId !== 'string' || !this.#bots.has(botId)) throw new Error('unknown botId for world.tick');
         const world = new WorldStore(ROOT_DIR, botId);
         try { return await world.tick(); } finally { await world.close(); }
+      });
+      this.#futureRunner.register('discord.deliver', async (task) => {
+        const payload = task.payload;
+        if (Object.keys(payload).some((key) => !['botId', 'channelId', 'dedupeKey', 'content'].includes(key))) throw new Error('invalid payload for discord.deliver');
+        if (typeof payload.botId !== 'string' || !this.#bots.has(payload.botId)) throw new Error('unknown botId for discord.deliver');
+        if (typeof payload.channelId !== 'string' || !/^\d{1,32}$/.test(payload.channelId)) throw new Error('invalid channelId for discord.deliver');
+        if (typeof payload.dedupeKey !== 'string' || !/^[\w:.\-]{1,160}$/.test(payload.dedupeKey)) throw new Error('invalid dedupeKey for discord.deliver');
+        if (typeof payload.content !== 'string' || payload.content.length === 0 || payload.content.length > 2000) throw new Error('invalid content for discord.deliver');
+        const outbox = new DiscordDeliveryOutbox(this.#storage!);
+        const existing = await outbox.get(payload.dedupeKey);
+        if (existing?.status === 'delivered') return { status: 'delivered', deduplicated: true, messageId: existing.messageId };
+        const reservation = await outbox.reserve({ dedupeKey: payload.dedupeKey, botId: payload.botId, channelId: payload.channelId, content: payload.content });
+        if (!reservation.reserved) {
+          if (reservation.record.status === 'delivered') return { status: 'delivered', deduplicated: true, messageId: reservation.record.messageId };
+          if (reservation.record.status === 'unknown' || reservation.record.status === 'sending') {
+            return { status: 'unknown', error: reservation.record.error ?? `delivery already reserved: ${reservation.record.status}` };
+          }
+          throw new Error(`delivery already reserved: ${reservation.record.status}`);
+        }
+        const gateway = this.#bots.get(payload.botId)?.gateway;
+        if (!gateway) throw new Error('gateway unavailable for discord.deliver');
+        if (gateway.platform !== 'discord') throw new Error('discord gateway unavailable for discord.deliver');
+        let result: DeliveryResult;
+        try {
+          result = await gateway.send({ channelId: payload.channelId, content: payload.content, suppressMentions: true });
+        } catch (error) {
+          const unknown = { status: 'unknown' as const, error: error instanceof Error ? error.message : String(error) };
+          await outbox.record(payload.dedupeKey, unknown);
+          return unknown;
+        }
+        await outbox.record(payload.dedupeKey, result);
+        return result;
       });
       this.#futureRunner.start();
     }
