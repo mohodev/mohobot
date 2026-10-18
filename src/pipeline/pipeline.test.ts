@@ -91,7 +91,10 @@ describe('MessagePipeline ordering', () => {
       model: 'test',
       async chat(messages: Array<{ role: string; content: string }>) {
         const users = messages.filter((m) => m.role === 'user');
-        const prompt = users.at(-1)?.content ?? '';
+        const raw = users.at(-1)?.content ?? '';
+        // Untrusted-data wrapping may envelope the user content; extract the
+        // bare text for matching while keeping the original for the reply tag.
+        const prompt = raw.includes('"untrusted_data"') ? (JSON.parse(raw).text ?? raw) : raw;
         calls.push(prompt);
         if (prompt === 'first') {
           markFirstStarted?.();
@@ -351,7 +354,10 @@ describe('persona messages', () => {
     const sent: string[] = [];
     const pipeline = new MessagePipeline({ config, provider: { name: 'x', model: 'x', async chat(messages) { return { content: `heard:${messages.filter((m) => m.role === 'user').at(-1)?.content}`, model: 'x', ms: 0 }; }, async health() { return { ok: true }; } }, sessions, events: new EventBus(), logger: createNullLogger(), send: async (out) => { sent.push(out.content); } });
     await pipeline.handle({ id: '1', platform: 'console', botId: 'main', channel: { id: 'c', dm: true }, author: { id: 'u', username: 'u', bot: false }, content: '!help me with this', mentionsBot: true, attachments: [], createdAt: 0 });
-    expect(sent).toEqual(['heard:!help me with this']);
+    const parsed = JSON.parse(sent[0]!.replace(/^heard:/, ''));
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.source).toBe('user');
+    expect(parsed.text).toBe('!help me with this');
   });
 });
 

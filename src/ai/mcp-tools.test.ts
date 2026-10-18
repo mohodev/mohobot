@@ -56,12 +56,15 @@ describe('MCP -> ChatToolRegistry bridge', () => {
     expect(search.function.description).toContain('[MCP demo]');
   });
 
-  it('routes an allowed tool call through the manager and returns its text', async () => {
+  it('routes an allowed tool call through the manager and returns its text wrapped as untrusted', async () => {
     const { manager, calls } = await makeManager();
     const registry = new ChatToolRegistry();
     registerMcpTools(registry, manager);
     const out = await executeToolCall(registry, { id: '1', name: 'mcp_demo_search_web', arguments: '{"q":"hi"}' }, CTX);
-    expect(out).toContain('result:{"q":"hi"}');
+    const parsed = JSON.parse(out);
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.source).toBe('tool');
+    expect(parsed.text).toContain('result:{"q":"hi"}');
     expect(calls.count).toBe(1);
   });
 

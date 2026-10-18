@@ -613,7 +613,10 @@ export class MessagePipeline {
       return;
     }
 
-    const [device, world] = await Promise.all([this.#device.get(), this.#world.get()]);
+    const [device, world] = await Promise.all([
+      this.#device.get().catch(() => undefined as any),
+      this.#world.get().catch(() => undefined as any),
+    ]).then(([d, w]) => [d ?? { screen: 'idle', battery: 100, network: 'wifi' }, w ?? { clock: new Date().toISOString(), weather: 'clear', location: 'online', activity: 'idle', mood: { energy: 0.65, sociability: 0.55, curiosity: 0.7, stress: 0.2 }, events: [], schedule: [], appliedPhases: [] }] as const);
     const social = decideSocially(
       { ...message, content: prompt },
       {
@@ -689,7 +692,7 @@ export class MessagePipeline {
     }
     // Live time anchor, character world state and the user's relationship state
     // are all separate system blocks: the persona prompt stays untouched.
-    const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context()]);
+    const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context().catch(() => '')]);
     // Relationship state for this user. Never fatal: a broken store must not
     // cost the reply, it only means the bot forgets how it feels about them.
     let emotionBlock: string | undefined;

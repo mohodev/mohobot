@@ -69,19 +69,24 @@ describe('ChatToolRegistry', () => {
 });
 
 describe('executeToolCall', () => {
-  it('returns a string handler result as-is', async () => {
+  it('returns a string handler result wrapped as untrusted data', async () => {
     const registry = new ChatToolRegistry();
     registry.register(tool('echo', (args) => `got:${String(args.text)}`));
     const result = await executeToolCall(registry, call('echo', { text: 'hi' }), context);
-    expect(result).toBe('got:hi');
+    const parsed = JSON.parse(result);
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.source).toBe('tool');
+    expect(parsed.text).toBe('got:hi');
   });
 
-  it('JSON-stringifies a non-string handler result', async () => {
+  it('JSON-stringifies a non-string handler result and wraps as untrusted', async () => {
     const registry = new ChatToolRegistry();
     registry.register(tool('sum', async (args) => ({ total: Number(args.a) + Number(args.b) })));
     const result = await executeToolCall(registry, call('sum', { a: 2, b: 3 }), context);
-    expect(result).toBe('{"total":5}');
-    expect(JSON.parse(result)).toEqual({ total: 5 });
+    const parsed = JSON.parse(result);
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.source).toBe('tool');
+    expect(parsed.text).toBe('{"total":5}');
   });
 
   it('reports an unknown tool as an error result', async () => {
@@ -132,7 +137,9 @@ describe('executeToolCall', () => {
     const handler = vi.fn((_args: Record<string, unknown>, ctx: ChatToolContext) => ctx.channelId);
     registry.register(tool('where', handler));
     const result = await executeToolCall(registry, call('where', {}), context);
-    expect(result).toBe('c1');
+    const parsed = JSON.parse(result);
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.text).toBe('c1');
     expect(handler).toHaveBeenCalledWith({}, context);
   });
 
@@ -141,7 +148,9 @@ describe('executeToolCall', () => {
     const handler = vi.fn((_args: Record<string, unknown>, _ctx?: ChatToolContext) => 'pure');
     registry.register(tool('pure_math', handler, false));
     const result = await executeToolCall(registry, call('pure_math', { x: 1 }), context);
-    expect(result).toBe('pure');
+    const parsed = JSON.parse(result);
+    expect(parsed.type).toBe('untrusted_data');
+    expect(parsed.text).toBe('pure');
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]?.[0]).toEqual({ x: 1 });
     expect(handler.mock.calls[0]?.[1]).toBeUndefined();

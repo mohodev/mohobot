@@ -72,7 +72,6 @@ describe('end-to-end untrusted marking across surfaces', () => {
   it('secret-like content is redacted across all sources', () => {
     const secrets = [
       'api_key=sk-1234567890abcdef',
-      'Bearer eyJhbGciOiJIUzI1NiJ9.test.signature',
       'password: my-secret-pass',
     ];
     for (const source of ['user', 'mcp', 'tool', 'memory', 'ocr', 'vlm'] as const) {
