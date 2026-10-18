@@ -111,6 +111,23 @@ export class SqliteStorage implements Storage {
       recordType === null ? null : CURRENT_WRITER_VERSION);
   }
 
+  async compareAndSet<T>(key: string, expected: T | undefined, value: T): Promise<boolean> {
+    const db = this.#must();
+    const transaction = db.transaction(() => {
+      const row = db.prepare('SELECT value, expires_at FROM kv WHERE key = ?').get(key) as { value: string; expires_at: number | null } | undefined;
+      const current = !row || (row.expires_at !== null && row.expires_at <= Date.now()) ? undefined : JSON.parse(row.value) as T;
+      if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
+      const now = Date.now();
+      const recordType = expectedRecordType(key);
+      db.prepare(`INSERT INTO kv (key,value,updated_at,expires_at,record_type,record_version,writer_version) VALUES (?,?,?,NULL,?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at,expires_at=NULL,
+        record_type=excluded.record_type,record_version=excluded.record_version,writer_version=excluded.writer_version`)
+        .run(key, JSON.stringify(value ?? null), now, recordType, recordType === null ? null : CURRENT_RECORD_VERSION, recordType === null ? null : CURRENT_WRITER_VERSION);
+      return true;
+    });
+    return transaction();
+  }
+
   async get<T>(key: string): Promise<T | undefined> {
     const db = this.#must();
     const row = db.prepare('SELECT key, value, updated_at, expires_at, record_type, record_version, writer_version FROM kv WHERE key = ?').get(key) as

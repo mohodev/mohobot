@@ -12,7 +12,7 @@ import { scrub } from './logger.js';
 import type { Platform } from './types.js';
 
 export type DiscordChatDirection = 'in' | 'out';
-export type DiscordChatOutcome = 'received' | 'delivered' | 'delivery_failed';
+export type DiscordChatOutcome = 'received' | 'delivered' | 'delivery_failed' | 'unknown';
 
 export interface DiscordChatLogEntry {
   seq: number;

@@ -12,7 +12,7 @@ import type { Logger } from '../core/logger.js';
 import type { BotId, OutboundMessage } from '../core/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import { sanitizeOutbound, toMohoMessage } from './adapter.js';
-import type { Gateway, GatewayStatus } from './types.js';
+import type { DeliveryResult, Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
 
 export const CONSOLE_CHANNEL_ID = 'console';
@@ -111,11 +111,12 @@ export class ConsoleGateway implements Gateway {
     this.#events.emit('message:create', { message });
   }
 
-  async send(out: OutboundMessage): Promise<void> {
+  async send(out: OutboundMessage): Promise<DeliveryResult> {
     const content = sanitizeOutbound(out.content, {
       suppressMentions: out.suppressMentions === true,
     });
     process.stdout.write(`[${this.#botName}] ${content}\n`);
+    return { status: 'delivered' };
   }
 
   async typing(_channelId: string): Promise<void> {

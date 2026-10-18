@@ -2,12 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ScheduledWorldEvent } from './world-events.js';
 import { activeScheduledEvent, validateScheduledEvent } from './world-events.js';
+import { evolveWorld, type EvolutionPhase } from './world-evolution.js';
 import { DailyLifeSimulator } from './daily-life.js';
 import type { DailyLifeEvent } from './daily-life.js';
 import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
 import type { Storage } from '../storage/types.js';
+import { getWorldForBot, recordTrace } from './world-isolation.js';
 
 export interface WorldState {
   clock: string;
@@ -34,6 +36,7 @@ const DEFAULT_WORLD: WorldState = {
 export class WorldStore {
   readonly #storage: Storage;
   readonly #key: string;
+  readonly #botId: string;
   readonly #legacyFile: string;
   readonly #cache = new TtlCache<WorldState>(2_000);
   #ready?: Promise<void>;
@@ -44,6 +47,7 @@ export class WorldStore {
       logger: createNullLogger(),
     });
     this.#key = `world:${botId ?? 'default'}`;
+    this.#botId = botId ?? 'default';
     this.#legacyFile = botId
       ? path.join(rootDir, 'data', 'bots', botId, 'world', 'state.json')
       : path.join(rootDir, 'data', 'world', 'state.json');
@@ -89,22 +93,19 @@ export class WorldStore {
 
   async tick(at = Date.now()): Promise<WorldState> {
     const state = await this.get();
+    const before = structuredClone(state);
     const active = activeScheduledEvent(state.schedule, at);
     state.clock = new Date(at).toISOString();
     if (active) {
       const start = Date.parse(active.startsAt), end = Date.parse(active.endsAt), progress = (at-start)/(end-start);
-      state.location = active.location;
       const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
-      const phaseKey = `${active.id}:${phase}`;
-      const firstInPhase = !state.appliedPhases.includes(phaseKey);
+      const evolved = evolveWorld(state, active, phase as EvolutionPhase);
+      Object.assign(state, evolved.state);
       if (active.kind === 'concert') {
         state.activity = phase === 'start' ? `演出准备：${active.title}` : phase === 'middle' ? `参加演出：${active.title}` : `演出结束，正在收尾：${active.title}`;
-        if (firstInPhase) { state.mood.energy = Math.max(0, (state.mood.energy ?? .65) - (phase === 'end' ? .08 : .12)); state.mood.stress = Math.max(0, Math.min(1, (state.mood.stress ?? .2) + (phase === 'start' ? .08 : -.03))); }
       } else if (active.kind === 'trip') {
         state.activity = phase === 'start' ? `前往${active.location}` : phase === 'middle' ? `出差中：${active.title}` : `准备返程：${active.title}`;
-        if (firstInPhase) state.mood.energy = Math.max(0, (state.mood.energy ?? .65)-.05);
       } else state.activity = active.title;
-      if (firstInPhase) state.appliedPhases = [...state.appliedPhases, phaseKey].slice(-1000);
     } else {
       const dateKey = `daily:${new Date(at).toISOString().slice(0, 10)}`;
       if (!state.appliedPhases.includes(dateKey)) {
@@ -123,7 +124,14 @@ export class WorldStore {
     await this.#init();
     await this.#storage.save(this.#key, normalized);
     this.#cache.set(normalized);
+    const domain = getWorldForBot(this.#botId);
+    recordTrace({ domainId: domain.id, botId: this.#botId, at: new Date(at).toISOString(), kind: active ? 'evolution' : 'daily-life', phaseKey: normalized.appliedPhases.at(-1), before: { location: before.location, activity: before.activity, mood: before.mood }, after: { location: normalized.location, activity: normalized.activity, mood: normalized.mood } });
     return structuredClone(normalized);
+  }
+
+  async close(): Promise<void> {
+    this.#cache.clear();
+    await this.#storage.close();
   }
 
   async context(at = Date.now()): Promise<string> {

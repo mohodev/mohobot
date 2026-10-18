@@ -31,7 +31,7 @@ import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
 import type { BotId, EmbedCard, MohoMessageDelete, MohoMessageLocation, MohoMessageUpdate, MohoThreadLifecycle, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
-import type { Gateway, GatewayStatus } from './types.js';
+import type { DeliveryResult, Gateway, GatewayStatus } from './types.js';
 import { persistChat } from '../pipeline/persist.js';
 import { WorldStore } from '../admin/world.js';
 import { presenceFromWorld } from './presence.js';
@@ -631,7 +631,7 @@ export class DiscordGateway implements Gateway {
 
   // ---------------------------------------------------------------- outbound
 
-  async send(out: OutboundMessage): Promise<void> {
+  async send(out: OutboundMessage): Promise<DeliveryResult> {
     const client = this.#client;
     if (!client) throw new Error(`[${this.botId}] gateway is not started`);
 
@@ -649,23 +649,24 @@ export class DiscordGateway implements Gateway {
           payload.reply = { messageReference: out.replyToId, failIfNotExists: false };
         }
         if (allowedMentions) payload.allowedMentions = allowedMentions;
-        await channel.send(payload);
-        return;
+        const sent = await channel.send(payload);
+        return { status: 'delivered', messageId: sent.id };
       } catch (error) {
         const reason = describeError(error);
         this.#lastError = reason;
         this.#logger.error({ err: error, channelId: out.channelId }, 'discord embed send failed');
-        throw new Error(`[${this.botId}] failed to send embed to channel ${out.channelId}: ${reason}`);
+        return this.#classifyDeliveryError(error, reason);
       }
     }
 
     // Plain text path - also the fallback when an embed would overflow the limits.
     const text = sanitizeOutbound(out.content, { suppressMentions: suppress });
     const chunks = chunkContent(text, this.#config.discord.maxReplyLength);
-    if (chunks.length === 0) return;
+    if (chunks.length === 0) return { status: 'delivered' };
 
     try {
       const channel = await this.#resolveSendable(out.channelId);
+      let lastMessageId: string | undefined;
 
       for (const [index, chunk] of chunks.entries()) {
         const payload: MessageCreateOptions = { content: chunk };
@@ -673,15 +674,27 @@ export class DiscordGateway implements Gateway {
           payload.reply = { messageReference: out.replyToId, failIfNotExists: false };
         }
         if (allowedMentions) payload.allowedMentions = allowedMentions;
-        await channel.send(payload);
+        const sent = await channel.send(payload);
+        lastMessageId = sent.id;
         if (index < chunks.length - 1) await sleep(CHUNK_DELAY_MS);
       }
+      return { status: 'delivered', messageId: lastMessageId };
     } catch (error) {
       const reason = describeError(error);
       this.#lastError = reason;
       this.#logger.error({ err: error, channelId: out.channelId }, 'discord send failed');
-      throw new Error(`[${this.botId}] failed to send to channel ${out.channelId}: ${reason}`);
+      return this.#classifyDeliveryError(error, reason);
     }
+  }
+
+  #classifyDeliveryError(error: unknown, reason: string): DeliveryResult {
+    if (error instanceof Error && 'code' in error && typeof (error as { code: unknown }).code === 'number') {
+      return { status: 'rejected', error: reason };
+    }
+    if (error instanceof Error && ('status' in error || 'httpStatus' in error)) {
+      return { status: 'rejected', error: reason };
+    }
+    return { status: 'unknown', error: reason };
   }
 
   /** Translate a platform-agnostic EmbedCard into a Discord REST embed. */

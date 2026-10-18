@@ -23,6 +23,8 @@ export interface StoredRecord<T = unknown> {
 export interface Storage {
   init(): Promise<void>;
   save<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
+  /** Atomically replace a JSON value only when the current value matches expected. */
+  compareAndSet?<T>(key: string, expected: T | undefined, value: T): Promise<boolean>;
   get<T>(key: string): Promise<T | undefined>;
   delete(key: string): Promise<void>;
   query<T>(filter: QueryFilter): Promise<StoredRecord<T>[]>;

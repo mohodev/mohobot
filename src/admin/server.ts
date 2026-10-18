@@ -14,12 +14,14 @@ import type { LogBuffer } from '../core/log-buffer.js';
 import type { DiscordChatLogBuffer, DiscordChatDirection } from '../core/discord-chat-log.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
+import{JargonMemory}from'../memory/jargon-memory.js';
 import{ExpressionMemoryGovernance}from'../memory/expression-memory-governance.js';
 import type{ExpressionStatus}from'../memory/expression-memory.js';
 import{KnowledgeBaseStore}from'../knowledge/store.js';
 import type { Storage } from '../storage/types.js';
 import { chatLogQuery } from '../storage/chatlog.js';
 import { ModelCatalogStore, recommend } from '../ai/model-catalog.js';
+import { ModelOperationsDashboard } from '../ai/model-operations.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
 import { AffinityStore } from './affinity.js';
 import { AdminAuthError, AdminAuthService, type AuthenticatedAdmin } from './auth-service.js';
@@ -40,6 +42,8 @@ import{behaviorDryRun,parseBehaviorDryRun}from'./behavior-dry-run.js';
 import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
 import type{GuildPlanner}from'./guild-plan.js';
 import{listAudits as listDisclosureAudits}from'../social/disclosure.js';
+import { FutureTaskStore } from '../tasks/future-task.js';
+import { listDomains, queryTraces } from './world-isolation.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -152,7 +156,10 @@ export class AdminServer {
   readonly #catalog: ModelCatalogStore;
   readonly #memories:MemoryAdminService;
   readonly #expressionGov:ExpressionMemoryGovernance;
+  readonly #jargon:JargonMemory;
   readonly #knowledge:KnowledgeBaseStore;
+  readonly #modelDashboard:ModelOperationsDashboard;
+  readonly #futureTasks:FutureTaskStore;
   #server?: http.Server;
 
   /** Select a bot-owned state store. Legacy no-bot deployments retain their old path. */
@@ -179,7 +186,10 @@ export class AdminServer {
     this.#catalog = new ModelCatalogStore(opts.rootDir);
     this.#memories=new MemoryAdminService(opts.storage);
     this.#expressionGov=new ExpressionMemoryGovernance({storage:opts.storage,logger:opts.logger});
+    this.#jargon=new JargonMemory({storage:opts.storage,logger:opts.logger});
     this.#knowledge=new KnowledgeBaseStore(opts.storage);
+    this.#modelDashboard=new ModelOperationsDashboard({snapshots:opts.snapshots,usage:{totals:(botId,days)=>opts.snapshots().find((snapshot)=>snapshot.id===botId)?.usage?.totals(botId,days)??Promise.resolve([])}});
+    this.#futureTasks=new FutureTaskStore(opts.storage);
   }
 
   get port(): number | undefined {
@@ -320,6 +330,9 @@ export class AdminServer {
       return this.#ok({ catalog, recommendations: task ? recommend(catalog, task) : undefined });
     }
     if (method === 'GET' && pathname === '/api/models/health') return this.#ok({ health: await this.#opts.modelHealth?.() ?? this.#opts.botControl?.modelHealth() ?? { configured: false } });
+    if(method==='GET'&&pathname==='/api/models/dashboard')return this.#ok({dashboard:this.#modelDashboard.overview()});
+    const modelUsageMatch=pathname.match(/^\/api\/models\/usage\/([^/]+)$/);if(method==='GET'&&modelUsageMatch){const detail=await this.#modelDashboard.botUsage(decodeURIComponent(modelUsageMatch[1]!));if(!detail)throw new HttpError(404,'bot not found');return this.#ok({usage:detail});}
+    const providerHealthMatch=pathname.match(/^\/api\/models\/health\/([^/]+)$/);if(method==='GET'&&providerHealthMatch){const detail=this.#modelDashboard.providerHealth(decodeURIComponent(providerHealthMatch[1]!));if(!detail)throw new HttpError(404,'provider not found');return this.#ok({health:detail});}
     if(method==='GET'&&pathname==='/api/providers')return this.#ok({providers:this.#providers().list()});
     if(method==='GET'&&pathname==='/api/extensions')return this.#ok({extensions:this.#opts.extensions?.list()??{providers:[],gateways:[],storages:[],memories:[]}});
     const providerProbe=pathname.match(/^\/api\/providers\/([^/]+)\/probe$/);if(method==='POST'&&providerProbe)return this.#ok({probe:await this.#providers().probe(decodeURIComponent(providerProbe[1]!))});
@@ -522,6 +535,19 @@ export class AdminServer {
       const jsonl=await this.#expressionGov.exportSanitized(botId,{status:statusRaw as ExpressionStatus|undefined,limit});
       return this.#ok({data:jsonl});
     }
+    if(method==='GET'&&pathname==='/api/memory/jargon'){
+      const status=stringParam(url,'status');
+      if(status&&!['candidate','approved','rejected'].includes(status))throw new HttpError(400,'invalid status');
+      return this.#ok({entries:await this.#jargon.list({channelId:stringParam(url,'channelId'),guildId:stringParam(url,'guildId'),status:status as 'candidate'|'approved'|'rejected'|undefined,limit:intParam(url,'limit'),offset:intParam(url,'offset')})});
+    }
+    if(method==='POST'&&pathname==='/api/memory/jargon/approve'){
+      const id=typeof input.id==='string'?input.id:'';if(!id)throw new HttpError(400,'id required');
+      return this.#ok({outcome:await this.#jargon.approve(id,auth.principal.id)});
+    }
+    if(method==='POST'&&pathname==='/api/memory/jargon/reject'){
+      const id=typeof input.id==='string'?input.id:'';if(!id)throw new HttpError(400,'id required');
+      return this.#ok({outcome:await this.#jargon.reject(id,auth.principal.id)});
+    }
     if(method==='GET'&&pathname==='/api/memory'){const scope=url.searchParams.get('scope');if(scope&&!['private','relationship','shared'].includes(scope))throw new HttpError(400,'invalid scope');const rawLimit=url.searchParams.get('limit');const limit=rawLimit===null?undefined:Number(rawLimit);if(limit!==undefined&&(!Number.isSafeInteger(limit)||limit<1||limit>200))throw new HttpError(400,'invalid limit');return this.#ok({memories:await this.#memories.list({botId:url.searchParams.get('botId')||undefined,channelId:url.searchParams.get('channelId')||undefined,userId:url.searchParams.get('userId')||undefined,scope:scope as any,limit})});}
     const memoryMatch=pathname.match(/^\/api\/memory\/([^/]+)$/);if(method==='GET'&&memoryMatch){const memory=await this.#memories.get(decodeURIComponent(memoryMatch[1]!));if(!memory)throw new HttpError(404,'memory not found');return this.#ok({memory});}if(method==='DELETE'&&memoryMatch){const deleted=await this.#memories.delete(decodeURIComponent(memoryMatch[1]!));if(!deleted)throw new HttpError(404,'memory not found');return this.#ok({deleted:true});}
     if(method==='POST'&&pathname==='/api/behavior/dry-run'){const dry=parseBehaviorDryRun(input);const[world,device,affinity]=await Promise.all([this.#worldFor(this.#stateBotId(dry.botId)).get(),this.#deviceFor(this.#stateBotId(dry.botId)).get(),this.#affinity.get(dry.botId,dry.userId)]);return this.#ok({result:behaviorDryRun(dry,{world,device,affinity})});}
@@ -534,6 +560,21 @@ export class AdminServer {
     const bindings=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings$/);if(bindings){const baseId=decodeURIComponent(bindings[1]!);if(method==='GET')return this.#ok({bindings:await this.#knowledge.bindings(baseId)});if(method==='POST')return this.#ok({binding:await this.#knowledge.bind({baseId,targetType:input.targetType as 'bot'|'character',targetId:String(input.targetId??'')})});}
     const binding=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings\/([^/]+)\/([^/]+)$/);if(method==='DELETE'&&binding){if(!await this.#knowledge.unbind(decodeURIComponent(binding[1]!),decodeURIComponent(binding[2]!) as 'bot'|'character',decodeURIComponent(binding[3]!)))throw new HttpError(404,'binding not found');return this.#ok({deleted:true});}
     if (method === 'GET' && pathname === '/api/world') return this.#ok({ world: await this.#worldFor(stateBotId()).get() });
+    if(method==='GET'&&pathname==='/api/world/schedule'){const world=await this.#worldFor(this.#stateBotId(stringParam(url,'botId'))).get();return this.#ok({schedule:world.schedule,domains:listDomains()});}
+    if(method==='GET'&&pathname==='/api/world/trace')return this.#ok({traces:queryTraces({botId:stringParam(url,'botId'),domainId:stringParam(url,'domainId'),limit:intParam(url,'limit')})});
+    if(method==='GET'&&pathname==='/api/tasks/future'){
+      const status=stringParam(url,'status');if(status&&!['pending','claimed','completed','failed','expired','uncertain'].includes(status))throw new HttpError(400,'invalid task status');
+      const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>500))throw new HttpError(400,'invalid limit');
+      return this.#ok({tasks:await this.#futureTasks.list({status:status as any,owner:stringParam(url,'owner'),type:stringParam(url,'type'),limit})});
+    }
+    if(method==='POST'&&pathname==='/api/tasks/future/schedule'){
+      const type=typeof input.type==='string'?input.type:'';const owner=typeof input.owner==='string'?input.owner:auth.principal.id;
+      if(!type||!input.payload||typeof input.payload!=='object'||Array.isArray(input.payload))throw new HttpError(400,'type and object payload required');
+      if(type!=='world.tick'||typeof (input.payload as Record<string,unknown>).botId!=='string')throw new HttpError(400,'unsupported task type or invalid botId');
+      if(!this.#opts.snapshots().some((snapshot)=>snapshot.id===(input.payload as Record<string,unknown>).botId))throw new HttpError(404,'bot not found');
+      const task=await this.#futureTasks.schedule({type,payload:input.payload as Record<string,unknown>,owner,scheduledAt:typeof input.scheduledAt==='number'?input.scheduledAt:undefined,maxRetries:typeof input.maxRetries==='number'?input.maxRetries:undefined,timeoutMs:typeof input.timeoutMs==='number'?input.timeoutMs:undefined});
+      return{status:201,body:{ok:true,task}};
+    }
     if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#worldFor(stateBotId()).schedule({ ...input, trust: 'candidate' }) } };
     if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split('/')[4] ?? '');

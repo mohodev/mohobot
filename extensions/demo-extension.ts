@@ -19,6 +19,7 @@ import type { Registries } from '../src/core/registries.js';
 import type { Logger } from '../src/core/logger.js';
 import type { AIProvider, AIResponse } from '../src/ai/types.js';
 import type { Gateway, GatewayStatus } from '../src/discord/types.js';
+import type { DeliveryResult } from '../src/discord/types.js';
 import type { ChatMessage, MohoMessage, OutboundMessage } from '../src/core/types.js';
 import type { MemoryAdapter, QueryFilter, Storage, StoredRecord } from '../src/storage/types.js';
 
@@ -66,9 +67,10 @@ class WebhookGateway implements Gateway {
     this.#onMessage = handler;
   }
 
-  async send(out: OutboundMessage): Promise<void> {
+  async send(out: OutboundMessage): Promise<DeliveryResult> {
     this.sent.push(out);
     process.stdout.write(`[webhook] ${out.content}\n`);
+    return { status: 'delivered' };
   }
 
   async typing(_channelId: string): Promise<void> {

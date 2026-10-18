@@ -49,6 +49,7 @@ import { ContextArchiver } from '../context-archiver/index.js';
 import { MemoryDeletionCoordinator } from '../memory/deletion-coordinator.js';
 import { ExpressionDeletionSink } from '../memory/expression-deletion-sink.js';
 import { SqliteTalkGovernorStateStore } from '../pipeline/talk-governor-sqlite-store.js';
+import { JargonMemory } from '../memory/jargon-memory.js';
 
 export interface BotRuntimeDeps {
   config: ResolvedBotConfig;
@@ -76,6 +77,7 @@ export interface BotSnapshot {
   plugins: { id: string; state: string; errors: number }[];
   pipeline: PipelineStats;
   modelHealth?: HealthSnapshot;
+  usage?: UsageRecorder;
 }
 
 export class BotRuntime implements Managed {
@@ -167,6 +169,10 @@ export class BotRuntime implements Managed {
     const send = async (out: OutboundMessage): Promise<void> => {
       if (!this.#gateway) throw new Error('gateway not started');
       await this.#gateway.send(out);
+    };
+    const deliver = async (out: OutboundMessage) => {
+      if (!this.#gateway) throw new Error('gateway not started');
+      return await this.#gateway.send(out);
     };
 
     if (this.#deps.global.plugins.enabled) {
@@ -428,15 +434,17 @@ export class BotRuntime implements Managed {
       talkGovernorStore = new SqliteTalkGovernorStateStore(this.#deps.storage);
       await talkGovernorStore.init();
     }
+    const jargonMemory = this.#deps.storage && cfg.jargonMemory.enabled ? new JargonMemory({ storage: this.#deps.storage, logger: this.#logger }) : undefined;
     this.#pipeline = new MessagePipeline({
       config: cfg,
       provider: this.#provider,
       sessions: this.#sessions,
       storage: this.#deps.storage,
+      jargonMemory,
       plugins: this.#plugins,
       events: this.#deps.events,
       logger: this.#logger,
-      send,
+      send: deliver,
       media,
       publicRelationships,
       reflection,
@@ -532,6 +540,7 @@ export class BotRuntime implements Managed {
       this.#deps.events.on('config:reload:failed', () => { void reportOperational('配置重载失败', { bot: cfg.id }); }),
       this.#deps.events.on('message:create', ({ message }) => {
         if (message.botId !== cfg.id) return;
+        if (jargonMemory && !message.author.bot && !message.channel.dm) void jargonMemory.capture({ content: message.content, authorId: message.author.id, channelId: message.channel.id, guildId: message.channel.guildId }).catch((error) => this.#logger.warn({ err: error }, 'jargon capture failed'));
         void this.#pipeline?.handle(message as MohoMessage);
       }),
       this.#deps.events.on('message:update', (event) => {
@@ -737,6 +746,7 @@ export class BotRuntime implements Managed {
         rateLimited: 0,
       },
       ...(this.#health ? { modelHealth: this.#health.snapshot() } : {}),
+      ...(this.#usage ? { usage: this.#usage } : {}),
     };
   }
 }

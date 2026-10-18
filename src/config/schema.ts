@@ -325,6 +325,7 @@ export const BotConfigSchema = z.object({
       model: z.string().min(1).optional(),
     })
     .default({}),
+  jargonMemory: z.object({ enabled: z.boolean().default(false), recallLimit: z.number().int().min(1).max(50).default(10) }).default({}),
   /**
    * Silently ignore auto-replies and a sender repeating the same text
    * `maxRepeats` times within `windowMs` (spam, stuck clients, bot echo loops).

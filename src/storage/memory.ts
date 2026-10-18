@@ -48,6 +48,15 @@ export class MemoryStorage implements Storage {
     this.#rows.set(key, { value: JSON.stringify(value ?? null), updatedAt: now, expiresAt });
   }
 
+  async compareAndSet<T>(key: string, expected: T | undefined, value: T): Promise<boolean> {
+    this.#must();
+    const entry = this.#rows.get(key);
+    const current = !entry || (entry.expiresAt !== null && entry.expiresAt <= Date.now()) ? undefined : this.#decode<T>(key, entry.value);
+    if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
+    this.#rows.set(key, { value: JSON.stringify(value ?? null), updatedAt: Date.now(), expiresAt: null });
+    return true;
+  }
+
   async get<T>(key: string): Promise<T | undefined> {
     this.#must();
     const entry = this.#rows.get(key);

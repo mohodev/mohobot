@@ -30,6 +30,7 @@ import type { AbEvaluationOutcome, AbSide, AbVote, PersonaAbRecord, PersonaAbSta
 import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
+import { JargonMemory, buildJargonBlock } from '../memory/jargon-memory.js';
 import { decideSocially } from './social-decision.js';
 import { TalkGovernor } from './talk-governor.js';
 import type { TalkGovernorStateStore } from './talk-governor-state.js';
@@ -126,7 +127,7 @@ export interface PipelineDeps {
   plugins?: PluginManager;
   events: EventBus;
   logger: Logger;
-  send: (out: OutboundMessage) => Promise<void>;
+  send: (out: OutboundMessage) => Promise<void | { status: 'delivered' | 'rejected' | 'unknown'; messageId?: string; error?: string }>;
   /** Batch-coalescing window override (tests inject a tiny quietMs). */
   topicBuffer?: TopicBuffer;
   typing?: (channelId: string) => Promise<void>;
@@ -136,6 +137,7 @@ export interface PipelineDeps {
   /** Root for World/Device state. Defaults to MOHO_ROOT/process cwd for compatibility. */
   stateRoot?: string;
   storage?: Storage;
+  jargonMemory?: JargonMemory;
   /** Explicit public-only relation facts; never derived from affinity or DMs. */
   publicRelationships?: PublicRelationshipStore;
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;
@@ -371,6 +373,8 @@ export class MessagePipeline {
     const event = trace.events.at(-1);
     if (event) this.#deps.events.emit('chat:trace', { botId: trace.botId, traceId: trace.id, messageId: trace.messageId, channelId: trace.channelId, userId: trace.userId, event, outcome: trace.outcome });
   }
+
+  #traceById(id:string,stage:Parameters<ChatTraceStore['add']>[1],detail?:Parameters<ChatTraceStore['add']>[2]):void { this.#traces.addById(id,stage,detail); }
 
   /** Admin-only Discord chat log; recorder itself ignores non-discord platforms and never throws. */
   #chatLog(direction: 'in' | 'out', message: MohoMessage, content: string, outcome: 'received' | 'delivered' | 'delivery_failed', traceId?: string): void {
@@ -786,6 +790,7 @@ export class MessagePipeline {
       { role: 'system', content: personaText },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
+      ...(this.#deps.jargonMemory ? [buildJargonBlock(await this.#deps.jargonMemory.recall(message.channel.id, message.channel.guildId, cfg.jargonMemory.recallLimit))].filter((x): x is NonNullable<typeof x> => Boolean(x)) : []),
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
       ...recalledMemories,
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
@@ -1481,7 +1486,7 @@ export class MessagePipeline {
     const text = typeof content === 'object' ? '' : content;
     const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
     try {
-      await this.#deps.send({
+      const delivery = await this.#deps.send({
         channelId: message.channel.id,
         content: safeContent,
         embed,
@@ -1494,8 +1499,10 @@ export class MessagePipeline {
       } catch (error) {
         this.#logger.warn({ err: error instanceof Error ? error.message : String(error), channel: message.channel.id }, 'outbound chat log write failed');
       }
-      this.#chatLog('out', message, safeContent, 'delivered', traceId);
-      return true;
+      const deliveryStatus = delivery && typeof delivery === 'object' ? delivery.status : 'delivered';
+      this.#chatLog('out', message, safeContent, deliveryStatus === 'delivered' ? 'delivered' : 'delivery_failed', traceId);
+      if (traceId) this.#traceById(traceId, deliveryStatus === 'delivered' ? 'delivered' : deliveryStatus === 'unknown' ? 'delivery_unknown' : 'delivery_failed', delivery && typeof delivery === 'object' && delivery.messageId ? { messageId: delivery.messageId } : undefined);
+      return deliveryStatus === 'delivered';
     } catch (error) {
       this.#chatLog('out', message, safeContent, 'delivery_failed', traceId);
       this.#logger.error(

@@ -43,6 +43,9 @@ import { BotControlFacade } from './admin/bot-control.js';
 import{OpsControlFacade}from'./admin/ops-control.js';
 import{TaskControlFacade}from'./admin/task-control.js';
 import{GuildPlanner,type GuildPlanAdapter}from'./admin/guild-plan.js';
+import { FutureTaskRunner } from './tasks/future-task-runner.js';
+import { FutureTaskStore } from './tasks/future-task.js';
+import { WorldStore } from './admin/world.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */
@@ -59,6 +62,7 @@ export class Runtime {
   #tasks!: TaskManager;
   #supervisor!: Supervisor;
   #storage?: Storage;
+  #futureRunner?: FutureTaskRunner;
   #loader!: ConfigLoader;
   #config!: ResolvedConfig;
   #bots = new Map<string, BotRuntime>();
@@ -161,6 +165,17 @@ export class Runtime {
     }
 
     await this.#supervisor.startAll();
+
+    if (this.#storage) {
+      this.#futureRunner = new FutureTaskRunner({ store: new FutureTaskStore(this.#storage), logger: this.#logger });
+      this.#futureRunner.register('world.tick', async (task) => {
+        const botId = task.payload.botId;
+        if (typeof botId !== 'string' || !this.#bots.has(botId)) throw new Error('unknown botId for world.tick');
+        const world = new WorldStore(ROOT_DIR, botId);
+        try { return await world.tick(); } finally { await world.close(); }
+      });
+      this.#futureRunner.start();
+    }
 
     if (this.#config.global.hotReload.enabled) {
       this.#hotReload = new HotReloader({
@@ -403,6 +418,7 @@ export class Runtime {
     try {
       await this.#mcp?.stop();
       await this.#admin?.stop();
+      await this.#futureRunner?.stop(3000);
       await this.#hotReload?.stop();
       await this.#tasks?.stopAll(3000);
       await this.#supervisor?.shutdown();
