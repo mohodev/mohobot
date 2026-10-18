@@ -53,11 +53,32 @@
 - [ ] Talk Governor 第二阶段：IANA 时区 quiet hours、topic relevance、Focus lease、主动消息队列，以及 Future Task 出站二次治理
 - [ ] Future Tasks：SQLite 持久化任务/执行记录、原子 claim、lease/recovery、owner 隔离、重试/超时/uncertain 状态；再接模型工具、管理 API 和 Discord 投递
 - [ ] 记忆治理：按用户/频道/来源批量删除、tombstone/回收站、删除审计、派生 embedding 清理、脱敏导出与 dry-run 导入
+- [ ] MessageSync 删除联动：当前 `src/session/message-sync.ts`/`SessionManager.deleteSourceMessage()` 只处理原始消息索引和短期 session；需让 semantic/expression memory 按 `sourceMessageId` 删除或 tombstone，且阻止异步派生数据复活
 - [ ] 世界模拟 Phase 0：把当前 `WorldStore`/`world-tick`/`world-events`/`day-planner` 收敛为可测试的状态机和事件模型，补齐事件来源、信任、时间区间、阶段幂等和回放测试
 - [ ] 世界模拟 Phase 1：将 `WorldStore` 从 `VersionedJsonStore` 迁移到 SQLite（当前架构声明 SQLite-only，但世界/设备状态仍是 JSON 文件），保留迁移备份和旧数据兼容
 - [ ] 世界模拟 Phase 2：确认事件 → 持久化 Future Task/内部事件 → 状态演化 → 行为/情绪/发言决策；避免 `world-tick` 重复生成事件或重复扣除状态
 - [ ] 世界模拟 Phase 3：角色日程、地点/活动、天气/情报候选、关系事件和长期世界记忆的来源链、置信度、过期与管理员确认
 - [ ] 世界模拟 Phase 4：多 Bot/多频道世界域隔离或共享策略、事件抢占/恢复、可观测 trace、管理员 dry-run 和完整端到端回放
+- [x] 世界模拟辅助基础已存在但尚未完整接线：`DailyLifeSimulator` 提供低戏剧性日常活动与规则回退；`event-intelligence` 提供事件候选/证据/信任合并；`day-planner` 提供规则日计划
+- [x] 角色互询安全闸门已存在 — `src/social/disclosure.ts`：仅 `shared`、双方 affinity >= 70、对方 opt-in 且存在内部通道；实际询问/抽象回答/审计接线仍未完成
+- [x] Discord 服务器规划器已有非破坏性 plan — `src/discord/guild-admin.ts`：只生成创建/移动/topic 计划，保留现有频道，不删除权限/成员；实际确认执行、回滚和审计仍未完成
+- [x] 消息生命周期索引已有 tombstone — `src/session/message-sync.ts`：编辑/删除幂等、迟到 edit 不覆盖删除、thread/forum/guild/DM location 规范化；尚未与长期记忆、Expression Memory 的来源删除联动
+- [x] 配置发布状态机已有基础实现 — `src/config/publication-state.ts`：digest、revision、quorum/target ACK、超时回滚、transition history；仍需补运行时组件激活/重建和生产多节点接线说明
+- [x] 多模态结果已标记为不可信观察 — `src/media/vision.ts`：OCR 使用 `trust: 'untrusted'`，VLM/OCR 独立降级，缓存为派生状态；仍需与统一 prompt injection/记忆安全协议收敛
+- [x] 模型运营基础已存在 — model catalog、health coordinator、multi-router、circuit breaker、fallback、usage/cost 统计；仍缺一份统一 Model Operations 规格和跨 Bot/provider 的运营视图
+- [x] OpenCode/ACP/MCP/Operator 已形成独立执行平面：聊天模型、外部 Agent、MCP viewer、Operator admin 权限边界分别存在；仍需补统一权限矩阵和端到端越权回归
+- [ ] Expression/Jargon 学习拆分：当前 Expression Memory 仅是用户偏好规则记忆，尚未实现群体表达样本、黑话含义、source author、sharing group、candidate 审核和向量召回
+- [ ] DailyLifeSimulator 接入 World tick：无活动日生成日常活动，写回地点/活动/energy/stress，并通过 Future Tasks/事件机制驱动后续状态
+- [ ] Social Disclosure 实际调用链：使用 `mayConsultPeer()` 生成仅含抽象 shared facts 的内部询问，禁止私聊 transcript/diary/relationship notes 泄露，并写 disclosure audit
+- [ ] Guild Workspace Planner 执行层：inventory → dry-run plan → 管理员确认 → Discord API 执行 → 结果审计/可回滚；不得删除频道、成员、角色或权限
+- [ ] 统一不可信数据协议：用户文本、OCR/VLM、MCP 返回、长期记忆、工具结果都必须作为 data 而非 instruction 进入 prompt，并有统一注入测试
+- [ ] 记忆回收与导出：message tombstone 联动 semantic/expression memory 来源删除，批量删除、recycle bin、恢复、删除审计、脱敏 JSONL 导出和 dry-run 导入
+- [ ] Discord 投递不确定状态：Gateway 暴露 `delivered/rejected/unknown` 结果，Future Tasks 对 unknown 提供 reconcile，不承诺 exactly-once
+- [ ] Model Operations 规格：模型能力目录、健康/延迟、成本、熔断、fallback、任务 lane、provider availability overlay 与 WebUI/审计视图统一
+- [ ] DailyLife 接线：`src/admin/daily-life.ts` 当前只有规则/模型 proposal 与单测，没有接入 `WorldStore.tick()`、日程或 runtime；需要明确生成、确认、写回和失败回退语义
+- [ ] Guild Plan 控制面：`DiscordGateway.applyGuildPlan()` 已有受限执行器，但 AdminServer 尚无 inventory/plan/confirmation/apply API；需补 RBAC、二次确认、审计、幂等和部分失败结果
+- [ ] 配置发布持久化与激活：当前 `Runtime` 使用 `InMemoryPublicationStateStore`，重启会丢失 revision/ACK/pending/rollback；需改为 SQLite 状态、接入配置激活/组件重建，并区分“发布记录”和“实际生效配置”
+- [ ] 世界/设备并发一致性：`VersionedJsonStore` 只在进程内按文件串行，`WorldStore`/`DeviceStore` 的 2 秒 cache 会造成多实例旧读；SQLite 迁移前需补跨实例冲突和 stale cache 策略
 - [ ] `docs/IMMERSION.md` 规定的「角色互询」（好感≥70 + `shared` 标签 + opt-in + 内部私有通道 + 只回抽象答案）——有规格、无实现；现有 cross-chat 是管理员驱动的公开多角色对聊，不等同
 - [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 Promise 超时强制终止（AbortSignal + 副作用生命周期令牌）、`chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot、全局配置变更后动态重建组件
 
