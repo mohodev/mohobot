@@ -78,5 +78,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'POST',pattern:/^\/api\/config\/publish$/,permission:'config.publish',action:'config.publish',risk:'dangerous',confirmation:true},
 {method:'POST',pattern:/^\/api\/config\/ack$/,permission:'config.publish',action:'config.ack',risk:'impact',confirmation:true},
 {method:'POST',pattern:/^\/api\/config\/rollback$/,permission:'config.publish',action:'config.rollback',risk:'dangerous',confirmation:true},
+{method:'GET',pattern:/^\/api\/config\/activation-receipts$/,permission:'config.publish',action:'config.activation.receipts',risk:'read',confirmation:false},
+{method:'POST',pattern:/^\/api\/config\/activation-receipt$/,permission:'config.publish',action:'config.activation.receipt.record',risk:'impact',confirmation:true},
 ]as const;
 export function routePolicy(method:string,path:string):RoutePolicy|undefined{return ROUTE_POLICIES.find(p=>p.method===method&&p.pattern.test(path));}

@@ -47,6 +47,7 @@ export interface CommandContext {
 /** Everything a plugin is allowed to touch. No raw discord.js, no raw DB. */
 export interface PluginContext {
   readonly pluginId: string;
+  readonly lifecycle: PluginLifecycle;
   readonly logger: Logger;
   readonly events: EventBus;
   /** Storage namespaced to this plugin. */
@@ -95,6 +96,12 @@ export interface PluginContext {
   readonly getProvider?: () => AIProvider | undefined;
 }
 
+export interface PluginLifecycle {
+  readonly signal: AbortSignal;
+  readonly token: symbol;
+  isActive(): boolean;
+}
+
 /**
  * Result of onMessage. Returning nothing means "no opinion".
  *  - stop: true      -> pipeline halts, AI is not called
@@ -119,7 +126,7 @@ export interface Plugin {
    */
   readonly triggers?: ReadonlyArray<string | RegExp>;
   onLoad?(ctx: PluginContext): void | Promise<void>;
-  onUnload?(): void | Promise<void>;
+  onUnload?(ctx?: PluginContext): void | Promise<void>;
   onMessage?(message: MohoMessage, ctx: PluginContext): MessageHookResult | void | Promise<MessageHookResult | void>;
   /** Called just before the AI request; may mutate the prompt array in place. */
   onBeforeAI?(input: { message: MohoMessage; messages: { role: string; content: string }[] }, ctx: PluginContext):

@@ -29,7 +29,9 @@ import { BotRuntime } from './bot/runtime.js';
 import { createStorage } from './storage/index.js';
 import type { Storage } from './storage/types.js';
 import { AdminServer } from './admin/server.js';
-import {ConfigPublicationStateMachine,InMemoryPublicationStateStore}from'./config/publication-state.js';
+import{ConfigPublicationStateMachine,InMemoryPublicationStateStore,type PublicationStateStore}from'./config/publication-state.js';
+import{SqlitePublicationStateStore}from'./config/sqlite-publication-store.js';
+import{ActivationReceiptLedger}from'./config/activation-receipt.js';
 import{ConfigPublicationAdminAdapter}from'./config/publication-admin.js';
 import{DebugChatFacade}from'./admin/debug-chat.js';
 import{CrossChatRunner}from'./characters/cross-chat.js';
@@ -171,8 +173,30 @@ export class Runtime {
 
     const adminToken = this.#config.global.admin.token.trim();
     if (adminToken && this.#storage) {
-      const publicationMachine=new ConfigPublicationStateMachine(new InMemoryPublicationStateStore());await publicationMachine.init();
-      const publicationAdmin=new ConfigPublicationAdminAdapter(publicationMachine);
+      const publicationStore:PublicationStateStore=this.#storage
+        ? new SqlitePublicationStateStore({storage:this.#storage,logger:this.#logger})
+        : new InMemoryPublicationStateStore();
+      await publicationStore.init();
+      const activationReceipts=new ActivationReceiptLedger({storage:this.#storage,logger:this.#logger});
+      await activationReceipts.init();
+      const publicationMachine=new ConfigPublicationStateMachine(publicationStore);
+      const publicationAdmin=new ConfigPublicationAdminAdapter(publicationMachine,{receipts:activationReceipts});
+      // Boot activation: whatever is already active in persisted publication
+      // state is what this process is running; record the receipt so the
+      // audit plane can tell "published" apart from "actually effective".
+      try{
+        for(const scope of await publicationStore.scopes()){
+          await publicationMachine.reconcile(scope,'runtime-boot');
+          const snapshot=await publicationMachine.get(scope);
+          const activeRevision=snapshot.state.activeRevision;
+          if(activeRevision===undefined)continue;
+          const receipt=await activationReceipts.forRevision(scope,activeRevision);
+          if(receipt)continue;
+          await activationReceipts.recordFromSnapshot(snapshot,{actor:'runtime-boot',now:publicationMachine.now(),detail:'runtime boot activation'});
+        }
+      }catch(error){
+        this.#logger.warn({err:error instanceof Error?error.message:String(error)},'publication boot activation receipt failed (continuing)');
+      }
       const botControl = new BotControlFacade({
         snapshots: () => [...this.#bots.values()].map((bot) => bot.snapshot()),
         restart: async (botId) => {

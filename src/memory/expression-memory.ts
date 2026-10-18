@@ -6,9 +6,16 @@ import type { MemoryAdapter, Storage, StoredRecord } from '../storage/types.js';
 export type ExpressionCategory = 'preference' | 'addressing' | 'communication-style' | 'boundary';
 export type ExpressionStatus = 'pending' | 'approved' | 'rejected' | 'superseded';
 
+/** Governance metadata attached by review workflows (recordVersion 2). */
+export interface ExpressionTombstone {
+  at: number;
+  reviewer?: string;
+  reason?: string;
+}
+
 export interface ExpressionMemoryRecord {
   kind: 'expression-memory';
-  recordVersion: 1;
+  recordVersion: 1 | 2;
   id: string;
   botId: string;
   userId: string;
@@ -21,6 +28,15 @@ export interface ExpressionMemoryRecord {
   createdAt: number;
   updatedAt: number;
   expiresAt?: number;
+  sourceMessageId?: string;
+  sourcePlatform?: string;
+  sourceCreatedAt?: number;
+  /** Reviewer principal that last approved/rejected/superseded this record. */
+  reviewer?: string;
+  /** Soft-delete marker; tombstoned records never enter recall. */
+  tombstone?: ExpressionTombstone;
+  /** Set when this record was replaced by another record. */
+  supersededBy?: string;
 }
 
 export interface ExpressionMemoryOptions {
@@ -30,13 +46,15 @@ export interface ExpressionMemoryOptions {
   recallLimit?: number;
   maxChars?: number;
   ttlDays?: number;
+  /** When true, captured expressions start as 'pending' and need explicit approval. Default false keeps prior behavior. */
+  requireApproval?: boolean;
   now?: () => number;
 }
 
 const PREFIX = 'expression-memory:';
 const DEFAULT_TTL_DAYS = 90;
 const MAX_TEXT = 120;
-const SENSITIVE = /(?:密码|口令|token|secret|密钥|api[_ -]?key|bearer|authorization|jwt|私钥|身份证|银行卡|手机号|电话|邮箱|email|住址|地址|oauth|cookie|discord\.gg|https?:\/\/|<system>|system prompt|ignore (?:all|previous) instructions)/iu;
+export const SENSITIVE = /(?:密码|口令|token|secret|密钥|api[_ -]?key|bearer|authorization|jwt|私钥|身份证|银行卡|手机号|电话|邮箱|email|住址|地址|oauth|cookie|discord\.gg|https?:\/\/|<system>|system prompt|ignore (?:all|previous) instructions)/iu;
 const PATTERNS: Array<{ category: ExpressionCategory; pattern: RegExp; prefix: string }> = [
   { category: 'preference', pattern: /^(?:我)?喜欢([^。！？，,]{1,50})/u, prefix: '用户偏好' },
   { category: 'preference', pattern: /^(?:我)?不喜欢([^。！？，,]{1,50})/u, prefix: '用户不喜欢' },
@@ -61,17 +79,35 @@ function fingerprint(botId: string, userId: string, category: string, text: stri
   return createHash('sha256').update(`${botId}\0${userId}\0${category}\0${normalize(text)}`).digest('hex').slice(0, 32);
 }
 
-function validRecord(value: unknown): value is ExpressionMemoryRecord {
+export function validRecord(value: unknown): value is ExpressionMemoryRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const x = value as Partial<ExpressionMemoryRecord>;
-  return x.kind === 'expression-memory' && x.recordVersion === 1 && typeof x.id === 'string' &&
+  const versionOk = x.recordVersion === 1 || x.recordVersion === 2;
+  return x.kind === 'expression-memory' && versionOk && typeof x.id === 'string' &&
     typeof x.botId === 'string' && typeof x.userId === 'string' && typeof x.channelId === 'string' &&
     ['preference', 'addressing', 'communication-style', 'boundary'].includes(String(x.category)) &&
     typeof x.text === 'string' && x.text.length > 0 && x.text.length <= MAX_TEXT &&
     typeof x.normalized === 'string' && ['pending', 'approved', 'rejected', 'superseded'].includes(String(x.status)) &&
     typeof x.confidence === 'number' && Number.isFinite(x.confidence) && x.confidence >= 0 && x.confidence <= 1 &&
     Number.isFinite(x.createdAt) && Number.isFinite(x.updatedAt) &&
-    (x.expiresAt === undefined || Number.isFinite(x.expiresAt));
+    (x.expiresAt === undefined || Number.isFinite(x.expiresAt)) &&
+    (x.sourceMessageId === undefined || typeof x.sourceMessageId === 'string') &&
+    (x.sourcePlatform === undefined || typeof x.sourcePlatform === 'string') &&
+    (x.sourceCreatedAt === undefined || Number.isFinite(x.sourceCreatedAt)) &&
+    (x.reviewer === undefined || typeof x.reviewer === 'string') &&
+    (x.supersededBy === undefined || typeof x.supersededBy === 'string') &&
+    (x.tombstone === undefined || (
+      typeof x.tombstone === 'object' && x.tombstone !== null && !Array.isArray(x.tombstone) &&
+      Number.isFinite((x.tombstone as ExpressionTombstone).at) &&
+      ((x.tombstone as ExpressionTombstone).reviewer === undefined || typeof (x.tombstone as ExpressionTombstone).reviewer === 'string') &&
+      ((x.tombstone as ExpressionTombstone).reason === undefined || typeof (x.tombstone as ExpressionTombstone).reason === 'string')
+    ));
+}
+
+/** A record is only recallable when approved, not tombstoned, and not expired. */
+export function isRecallable(record: ExpressionMemoryRecord, now: number): boolean {
+  return record.status === 'approved' && record.tombstone === undefined &&
+    (record.expiresAt === undefined || record.expiresAt > now);
 }
 
 export function buildExpressionBlock(records: readonly ExpressionMemoryRecord[], maxChars = 800): ChatMessage | undefined {
@@ -98,6 +134,7 @@ export class ExpressionMemoryAdapter implements MemoryAdapter {
   readonly #recallLimit: number;
   readonly #maxChars: number;
   readonly #ttlDays: number;
+  readonly #requireApproval: boolean;
   readonly #now: () => number;
 
   constructor(options: ExpressionMemoryOptions) {
@@ -106,8 +143,11 @@ export class ExpressionMemoryAdapter implements MemoryAdapter {
     this.#recallLimit = Math.max(1, Math.min(20, options.recallLimit ?? 3));
     this.#maxChars = Math.max(100, Math.min(4000, options.maxChars ?? 800));
     this.#ttlDays = Math.max(0, Math.min(3650, options.ttlDays ?? DEFAULT_TTL_DAYS));
+    this.#requireApproval = options.requireApproval ?? false;
     this.#now = options.now ?? Date.now;
   }
+
+  get requireApproval(): boolean { return this.#requireApproval; }
 
   async remember(input: Parameters<MemoryAdapter['remember']>[0]): Promise<void> {
     const userText = clean(input.user.content);
@@ -121,11 +161,12 @@ export class ExpressionMemoryAdapter implements MemoryAdapter {
       const id = fingerprint(input.botId, input.userId, candidate.category, text);
       const key = this.#key(input.botId, input.userId, id);
       const previous = await this.#storage.get<unknown>(key);
-      if (validRecord(previous) && previous.status === 'approved') continue;
+      // Approved records are stable; tombstoned records must not be resurrected by replay.
+      if (validRecord(previous) && (previous.status === 'approved' || previous.tombstone !== undefined)) continue;
       const record: ExpressionMemoryRecord = {
-        kind: 'expression-memory', recordVersion: 1, id, botId: input.botId, userId: input.userId,
+        kind: 'expression-memory', recordVersion: 2, id, botId: input.botId, userId: input.userId,
         channelId: input.channelId, category: candidate.category, text, normalized: normalize(text),
-        status: 'approved', confidence: 0.9, createdAt: validRecord(previous) ? previous.createdAt : now,
+        status: this.#requireApproval ? 'pending' : 'approved', confidence: 0.9, createdAt: validRecord(previous) ? previous.createdAt : now,
         updatedAt: now, ...(this.#ttlDays > 0 ? { expiresAt: now + this.#ttlDays * 86400_000 } : {}),
       };
       await this.#storage.save(key, record, this.#ttlDays > 0 ? this.#ttlDays * 86400 : undefined);
@@ -136,7 +177,7 @@ export class ExpressionMemoryAdapter implements MemoryAdapter {
     const rows = await this.#storage.query<unknown>({ prefix: `${PREFIX}${input.botId}:${input.userId}:`, limit: 200 });
     const now = this.#now();
     const records = rows.map((row) => row.value).filter(validRecord)
-      .filter((record) => record.status === 'approved' && (record.expiresAt === undefined || record.expiresAt > now))
+      .filter((record) => isRecallable(record, now))
       .filter((record) => record.channelId === input.channelId)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, this.#recallLimit);
@@ -153,3 +194,5 @@ export class ExpressionMemoryAdapter implements MemoryAdapter {
 
   #key(botId: string, userId: string, id: string): string { return `${PREFIX}${botId}:${userId}:${id}`; }
 }
+
+export { PREFIX as EXPRESSION_MEMORY_PREFIX };

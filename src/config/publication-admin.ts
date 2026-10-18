@@ -1,9 +1,15 @@
-import type{AdminPrincipal}from'../admin/rbac.js';import{ConfigPublicationStateMachine,type PublicationOutcome,type PublicationRollout}from'./publication-state.js';
+import type{AdminPrincipal}from'../admin/rbac.js';import{ActivationReceiptLedger}from'./activation-receipt.js';import{ConfigPublicationStateMachine,type PublicationOutcome,type PublicationRollout}from'./publication-state.js';
+
+export interface ConfigPublicationAdminAdapterOptions{receipts?:ActivationReceiptLedger}
 /** Thin control-plane adapter; actor identity always comes from the authenticated principal. */
 export class ConfigPublicationAdminAdapter{
- constructor(readonly machine:ConfigPublicationStateMachine){}
- async get(scope='global'){await this.machine.reconcile(scope);return{snapshot:await this.machine.get(scope),history:await this.machine.history(scope,50),transitions:await this.machine.transitions(scope,100)}}
+ constructor(readonly machine:ConfigPublicationStateMachine,readonly options:ConfigPublicationAdminAdapterOptions={}){}
+ async get(scope='global'){await this.machine.reconcile(scope);const snapshot=await this.machine.get(scope);const effective=this.options.receipts?await this.options.receipts.status(scope,snapshot):undefined;return{snapshot,history:await this.machine.history(scope,50),transitions:await this.machine.transitions(scope,100),...(effective?{effective}:{})}}
  publish(input:Record<string,unknown>,principal:AdminPrincipal){return this.machine.publish({scope:typeof input.scope==='string'?input.scope:'global',expectedRevision:Number(input.expectedRevision),expectedStateVersion:input.expectedStateVersion===undefined?undefined:Number(input.expectedStateVersion),payload:input.payload,payloadSchemaVersion:input.payloadSchemaVersion===undefined?undefined:Number(input.payloadSchemaVersion),actor:principal.id,rollout:input.rollout as PublicationRollout|undefined})}
  acknowledge(input:{scope?:string;revision:number;nodeId:string;digest:string;outcome:PublicationOutcome;detail?:string},principal:AdminPrincipal){return this.machine.acknowledge({scope:input.scope??'global',revision:input.revision,nodeId:input.nodeId,digest:input.digest,outcome:input.outcome,detail:input.detail,actor:principal.id})}
  rollback(input:{scope?:string;expectedStateVersion:number;toRevision?:number;reason?:string},principal:AdminPrincipal){return this.machine.rollback({scope:input.scope??'global',expectedStateVersion:input.expectedStateVersion,toRevision:input.toRevision,reason:input.reason,actor:principal.id})}
+ #receipts(){if(!this.options.receipts)throw new Error('activation receipts unavailable');return this.options.receipts}
+ /** Record an activation receipt for the current active revision: "published" becomes "actually effective". */
+ async recordActivation(input:Record<string,unknown>,principal:AdminPrincipal){const scope=typeof input.scope==='string'&&input.scope.trim()?input.scope.trim():'global';await this.machine.reconcile(scope);const snapshot=await this.machine.get(scope);const receipt=await this.#receipts().recordFromSnapshot(snapshot,{actor:principal.id,now:this.machine.now(),...(typeof input.detail==='string'&&input.detail?{detail:input.detail}:{})});return{receipt,snapshot}}
+ async activationReceipts(scope?:string){const ledger=this.#receipts();const items=await ledger.list(scope);if(scope===undefined)return{items};const snapshot=await this.machine.get(scope);return{items,effective:await ledger.status(scope,snapshot)}}
 }

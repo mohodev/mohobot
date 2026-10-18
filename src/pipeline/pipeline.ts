@@ -36,6 +36,7 @@ import { privacyGate } from './privacy-gate.js';
 import { PublicRelationshipStore } from './public-relationships.js';
 import { DeviceStore } from '../admin/device.js';
 import { WorldStore } from '../admin/world.js';
+import type { Storage } from '../storage/types.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
@@ -131,6 +132,7 @@ export interface PipelineDeps {
   traces?: ChatTraceStore;
   /** Root for World/Device state. Defaults to MOHO_ROOT/process cwd for compatibility. */
   stateRoot?: string;
+  storage?: Storage;
   /** Explicit public-only relation facts; never derived from affinity or DMs. */
   publicRelationships?: PublicRelationshipStore;
   reflection?: Pick<ProfileReflectionWorker, 'reflect'>;

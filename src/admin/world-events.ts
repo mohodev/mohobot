@@ -1,5 +1,22 @@
+import { createHash } from 'node:crypto';
+
 export type ScheduledEventKind = 'trip' | 'concert' | 'rehearsal' | 'rest' | 'news';
 export type EventTrust = 'candidate' | 'confirmed' | 'rejected';
+export type WorldSourceKind = 'calendar' | 'daily-life' | 'external' | 'internal' | 'manual';
+export type WorldEventStatus = EventTrust | 'active' | 'phase-applied' | 'completed' | 'expired';
+export interface WorldTimeInterval { start: string; end: string; timezone?: string; }
+
+function canonical(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`;
+  throw new Error('unsupported world payload');
+}
+
+export function payloadHash(payload: unknown): string { return createHash('sha256').update(canonical(payload)).digest('hex'); }
+export function stableWorldId(input: { sourceKind: WorldSourceKind; sourceId: string; time: WorldTimeInterval; scope: string; payload: unknown; phase: string }): string {
+  return `world:${createHash('sha256').update(canonical(input)).digest('hex').slice(0, 32)}`;
+}
 export interface ScheduledWorldEvent {
   id: string; kind: ScheduledEventKind; title: string; startsAt: string; endsAt: string;
   location: string; timezone: string; sourceUrl?: string; sourceName?: string;

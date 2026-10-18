@@ -65,6 +65,7 @@ interface LoadedPlugin {
   plugin: Plugin;
   context: PluginContext;
   commands: Map<string, PluginCommand>;
+  lifecycle: { controller: AbortController; token: symbol; active: boolean };
 }
 
 const noopStorage: ScopedStorage = {
@@ -195,7 +196,6 @@ export class PluginManager {
     }
 
     const commands = new Map<string, PluginCommand>();
-    const context = this.#makeContext(id, commands, manifest);
     const stagedEntry: LoadedPlugin = {
       record: {
         id,
@@ -206,15 +206,18 @@ export class PluginManager {
         loadedAt: Date.now(),
       },
       plugin: staged,
-      context,
+      context: undefined as never,
       commands,
+      lifecycle: { controller: new AbortController(), token: Symbol(id), active: true },
     };
+    stagedEntry.context = this.#makeContext(id, commands, manifest, stagedEntry.lifecycle);
 
     try {
       await this.#withTimeout(
-        Promise.resolve(staged.onLoad?.(context)),
+        Promise.resolve(staged.onLoad?.(stagedEntry.context)),
         this.#opts.hookTimeoutMs,
         `${id}.onLoad`,
+        () => stagedEntry.lifecycle.controller.abort(),
       );
     } catch (error) {
       // onLoad may already have registered commands or global extensions.
@@ -361,7 +364,13 @@ export class PluginManager {
   /** The single choke point where plugin failures are contained. */
   async #callHook<T>(entry: LoadedPlugin, phase: string, fn: () => Promise<T>): Promise<T | undefined> {
     try {
-      const result = await this.#withTimeout(fn(), this.#opts.hookTimeoutMs, `${entry.record.id}.${phase}`);
+      const result = await this.#withTimeout(
+        fn(),
+        this.#opts.hookTimeoutMs,
+        `${entry.record.id}.${phase}`,
+        () => entry.lifecycle.controller.abort(),
+      );
+      if (!entry.lifecycle.active || entry.lifecycle.controller.signal.aborted) return undefined;
       entry.record.errors = 0; // consecutive-error counter
       return result;
     } catch (error) {
@@ -381,11 +390,14 @@ export class PluginManager {
   }
 
   async #teardown(entry: LoadedPlugin): Promise<void> {
+    entry.lifecycle.active = false;
+    entry.lifecycle.controller.abort();
     try {
       await this.#withTimeout(
-        Promise.resolve(entry.plugin.onUnload?.()),
+        Promise.resolve(entry.plugin.onUnload?.(entry.context)),
         this.#opts.hookTimeoutMs,
         `${entry.record.id}.onUnload`,
+        () => entry.lifecycle.controller.abort(),
       );
     } catch (error) {
       this.#logger.warn(
@@ -409,16 +421,20 @@ export class PluginManager {
     entry.record.state = 'unloaded';
   }
 
-  #makeContext(id: string, commands: Map<string, PluginCommand>, manifest: PluginManifest): PluginContext {
+  #makeContext(id: string, commands: Map<string, PluginCommand>, manifest: PluginManifest, lifecycle: LoadedPlugin['lifecycle']): PluginContext {
+    const isActive = () => lifecycle.active && !lifecycle.controller.signal.aborted;
     return {
       pluginId: id,
+      lifecycle: Object.freeze({ signal: lifecycle.controller.signal, token: lifecycle.token, isActive }),
       logger: this.#logger.child({ plugin: id }),
       events: this.#opts.events,
       storage: this.#opts.storageFor?.(id) ?? noopStorage,
       send: async (out) => {
+        if (!isActive()) return;
         await this.#opts.send(out);
       },
       registerCommand: (command) => {
+        if (!isActive()) return;
         if (!command?.name) return;
         commands.set(command.name.toLowerCase(), command);
       },
@@ -428,27 +444,29 @@ export class PluginManager {
       botConfig: this.#opts.botConfig,
       // Registry proxy that stamps every entry with this plugin's id as the
       // source, so #teardown can reap them precisely on unload/reload.
-      registry: this.#scopedRegistries(id),
+      registry: this.#scopedRegistries(id, isActive),
       pipeline: this.#opts.pipelineHandle
         ? (typeof this.#opts.pipelineHandle === 'function'
-            ? { handle: (message: MohoMessage) => (this.#opts.pipelineHandle as (m: MohoMessage) => Promise<void>)(message) }
+            ? { handle: async (message: MohoMessage) => { if (isActive()) await (this.#opts.pipelineHandle as (m: MohoMessage) => Promise<void>)(message); } }
             : { handle: (this.#opts.pipelineHandle as { handle(m: MohoMessage): Promise<void> }).handle.bind(this.#opts.pipelineHandle),
-                traces: (this.#opts.pipelineHandle as { traces?(): import('../pipeline/chat-trace.js').ChatTrace[] }).traces })
+                traces: () => isActive() ? ((this.#opts.pipelineHandle as { traces?(): import('../pipeline/chat-trace.js').ChatTrace[] }).traces?.() ?? []) : [] })
         : undefined,
-      sessions: this.#opts.sessions,
-      getProvider: this.#opts.getProvider,
+      sessions: isActive() ? this.#opts.sessions : undefined,
+      getProvider: () => isActive() ? this.#opts.getProvider?.() : undefined,
     };
   }
 
   /** Registries whose `register` calls are auto-tagged with the plugin id. */
-  #scopedRegistries(id: string): Registries {
+  #scopedRegistries(id: string, isActive: () => boolean): Registries {
     const source = `plugin:${this.#opts.botConfig.id}:${id}`;
     const wrap = <T>(registry: Registry<T>): Registry<T> =>
       new Proxy(registry, {
         get(target, prop, receiver) {
           if (prop === 'register') {
-            return (name: string, factory: T, options: RegisterOptions = {}) =>
-              target.register(name, factory, { ...options, source });
+            return (name: string, factory: T, options: RegisterOptions = {}) => {
+              if (isActive()) target.register(name, factory, { ...options, source });
+              return target;
+            };
           }
           const value = Reflect.get(target, prop, receiver);
           return typeof value === 'function' ? value.bind(target) : value;
@@ -510,13 +528,16 @@ export class PluginManager {
     this.#opts.events.emit('plugin:error', { pluginId: id, error: msg, phase });
   }
 
-  async #withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  async #withTimeout<T>(promise: Promise<T>, ms: number, label: string, onTimeout?: () => void): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         promise,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+          timer = setTimeout(() => {
+            onTimeout?.();
+            reject(new Error(`${label} timed out after ${ms}ms`));
+          }, ms);
           timer.unref?.();
         }),
       ]);

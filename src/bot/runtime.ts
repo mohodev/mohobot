@@ -405,6 +405,7 @@ export class BotRuntime implements Managed {
       config: cfg,
       provider: this.#provider,
       sessions: this.#sessions,
+      storage: this.#deps.storage,
       plugins: this.#plugins,
       events: this.#deps.events,
       logger: this.#logger,

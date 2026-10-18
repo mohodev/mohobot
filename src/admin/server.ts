@@ -42,6 +42,8 @@ export interface ConfigPublicationAdapter {
   publish(input: Record<string, unknown>, principal: AdminPrincipal): Promise<unknown>;
   acknowledge?(input: any,principal:AdminPrincipal):Promise<unknown>;
   rollback?(input:any,principal:AdminPrincipal):Promise<unknown>;
+  recordActivation?(input: Record<string, unknown>, principal: AdminPrincipal): Promise<unknown>;
+  activationReceipts?(scope: string | undefined): Promise<unknown>;
 }
 
 export interface AdminServerOptions {
@@ -361,6 +363,8 @@ export class AdminServer {
     }
     if(method==='POST'&&pathname==='/api/config/ack'){if(!this.#opts.configPublication?.acknowledge)throw new HttpError(409,'config acknowledgement unavailable');return this.#ok({publication:await this.#opts.configPublication.acknowledge(input,auth.principal)});}
     if(method==='POST'&&pathname==='/api/config/rollback'){if(!this.#opts.configPublication?.rollback)throw new HttpError(409,'config rollback unavailable');return this.#ok({publication:await this.#opts.configPublication.rollback(input,auth.principal)});}
+    if(method==='GET'&&pathname==='/api/config/activation-receipts'){if(!this.#opts.configPublication?.activationReceipts)throw new HttpError(409,'config activation receipts unavailable');const scope=url.searchParams.get('scope');return this.#ok({receipts:await this.#opts.configPublication.activationReceipts(scope===null||scope.trim()===''?undefined:scope)});}
+    if(method==='POST'&&pathname==='/api/config/activation-receipt'){if(!this.#opts.configPublication?.recordActivation)throw new HttpError(409,'config activation receipt unavailable');return this.#ok({receipt:await this.#opts.configPublication.recordActivation(input,auth.principal)});}
     if (method === 'GET' && pathname === '/api/admin/users') return this.#ok({ users: await this.#auth.listUsers() });
     if (method === 'POST' && pathname === '/api/admin/users') {
       const role = this.#assignableRole(auth.principal, input.role);
