@@ -19,6 +19,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'GET',pattern:/^\/api\/world\/trace$/,permission:'world.read',action:'world.trace.read',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/tasks\/future$/,permission:'tasks.read',action:'future-tasks.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/tasks\/future\/schedule$/,permission:'tasks.control',action:'future-tasks.schedule',risk:'impact',confirmation:true},
+ {method:'POST',pattern:/^\/api\/tasks\/future\/[^/]+\/reconcile$/,permission:'tasks.control',action:'future-tasks.reconcile',risk:'impact',confirmation:true},
 {method:'GET',pattern:/^\/api\/providers$/,permission:'providers.read',action:'providers.list',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/extensions$/,permission:'extensions.read',action:'extensions.list',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/providers\/[^/]+\/probe$/,permission:'providers.probe',action:'providers.probe',risk:'reversible',confirmation:false},

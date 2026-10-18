@@ -45,6 +45,7 @@ import type{GuildPlanner}from'./guild-plan.js';
 import{listAudits as listDisclosureAudits}from'../social/disclosure.js';
 import { FutureTaskStore } from '../tasks/future-task.js';
 import { listPersistentDomains, queryPersistentTraces } from './world-isolation.js';
+import { DiscordDeliveryOutbox } from '../discord/outbox.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -598,13 +599,32 @@ export class AdminServer {
     if(method==='POST'&&pathname==='/api/tasks/future/schedule'){
       const type=typeof input.type==='string'?input.type:'';const owner=auth.principal.id;
       if(!type||!input.payload||typeof input.payload!=='object'||Array.isArray(input.payload))throw new HttpError(400,'type and object payload required');
-      if(type!=='world.tick'||typeof (input.payload as Record<string,unknown>).botId!=='string')throw new HttpError(400,'unsupported task type or invalid botId');
-      if(!this.#opts.snapshots().some((snapshot)=>snapshot.id===(input.payload as Record<string,unknown>).botId))throw new HttpError(404,'bot not found');
-      const task=await this.#futureTasks.schedule({type,payload:input.payload as Record<string,unknown>,owner,scheduledAt:typeof input.scheduledAt==='number'?input.scheduledAt:undefined,maxRetries:typeof input.maxRetries==='number'?input.maxRetries:undefined,timeoutMs:typeof input.timeoutMs==='number'?input.timeoutMs:undefined});
-      return{status:201,body:{ok:true,task}};
-    }
-     if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#worldFor(stateBotId()).schedule({ ...input, trust: 'candidate' }) } };
-     if (method === 'POST' && pathname === '/api/world/schedule/dry-run') return this.#ok({ world: await this.#worldFor(stateBotId()).dryRun(input, typeof input.at === 'number' ? input.at : Date.now()) });
+       const payload=input.payload as Record<string,unknown>;
+       if(type==='world.tick') {
+         if(typeof payload.botId!=='string')throw new HttpError(400,'invalid botId');
+       } else if(type==='discord.deliver') {
+         if(Object.keys(payload).some((key)=>!['botId','channelId','dedupeKey','content'].includes(key))||typeof payload.botId!=='string'||typeof payload.channelId!=='string'||!/^\d{1,32}$/.test(payload.channelId)||typeof payload.dedupeKey!=='string'||!/^[\w:.\-]{1,160}$/.test(payload.dedupeKey)||typeof payload.content!=='string'||payload.content.length===0||payload.content.length>2000)throw new HttpError(400,'invalid discord.deliver payload');
+       } else throw new HttpError(400,'unsupported task type');
+       if(!this.#opts.snapshots().some((snapshot)=>snapshot.id===payload.botId))throw new HttpError(404,'bot not found');
+       const task=await this.#futureTasks.schedule({type,payload,owner,scheduledAt:typeof input.scheduledAt==='number'?input.scheduledAt:undefined,maxRetries:typeof input.maxRetries==='number'?input.maxRetries:undefined,timeoutMs:typeof input.timeoutMs==='number'?input.timeoutMs:undefined});
+       return{status:201,body:{ok:true,task}};
+     }
+     const reconcileMatch=pathname.match(/^\/api\/tasks\/future\/([^/]+)\/reconcile$/);
+     if(method==='POST'&&reconcileMatch){
+       const task=await this.#futureTasks.get(decodeURIComponent(reconcileMatch[1]!));
+       if(!task)throw new HttpError(404,'task not found');
+       if(task.owner!==auth.principal.id&&!['admin','developer'].includes(auth.principal.role))throw new HttpError(404,'task not found');
+       if(task.status!=='uncertain')throw new HttpError(409,'task is not uncertain');
+       if(task.type!=='discord.deliver')throw new HttpError(409,'task type is not reconcilable');
+       const key=task.payload.dedupeKey;
+       if(typeof key!=='string')throw new HttpError(400,'invalid dedupeKey');
+       const record=await new DiscordDeliveryOutbox(this.#opts.storage).get(key);
+       const outcome=record?.status==='delivered'?'delivered':record?.status==='rejected'?'rejected':'unknown';
+       const updated=await this.#futureTasks.reconcile(task.id,outcome,record?.error??'outbox record does not establish delivery');
+       return this.#ok({task:updated,record});
+     }
+    if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#worldFor(stateBotId()).schedule({ ...input, trust: 'candidate' }) } };
+    if (method === 'POST' && pathname === '/api/world/schedule/dry-run') return this.#ok({ world: await this.#worldFor(stateBotId()).dryRun(input, typeof input.at === 'number' ? input.at : Date.now()) });
     if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split('/')[4] ?? '');
       const trust = String(input.trust ?? 'candidate');

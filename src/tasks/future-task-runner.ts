@@ -122,8 +122,19 @@ export class FutureTaskRunner {
         timeoutMs,
         task.id,
       );
-      await this.#store.complete(task.id, result);
-      this.#log.debug({ taskId: task.id, type: task.type, durationMs: Date.now() - started }, 'task completed');
+      const deliveryStatus = result && typeof result === 'object' && 'status' in result ? (result as { status?: unknown }).status : undefined;
+      if (deliveryStatus === 'unknown') {
+        const error = result as { error?: unknown };
+        await this.#store.uncertain(task.id, typeof error.error === 'string' ? error.error : 'delivery result unknown');
+        this.#log.warn({ taskId: task.id, type: task.type, durationMs: Date.now() - started }, 'task delivery uncertain');
+      } else if (deliveryStatus === 'rejected') {
+        const error = result as { error?: unknown };
+        await this.#store.fail(task.id, typeof error.error === 'string' ? error.error : 'delivery rejected');
+        this.#log.warn({ taskId: task.id, type: task.type, durationMs: Date.now() - started }, 'task delivery rejected');
+      } else {
+        await this.#store.complete(task.id, result);
+        this.#log.debug({ taskId: task.id, type: task.type, durationMs: Date.now() - started }, 'task completed');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try {
