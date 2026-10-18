@@ -72,7 +72,23 @@ export interface DashboardOverview {
   bots: BotModelSummary[];
   providers: ProviderSummary[];
   totals: { bots: number; running: number; models: number; availableModels: number };
+  events: ModelOperationEvent[];
 }
+
+export interface ModelOperationEvent {
+  at: number;
+  kind: 'lane' | 'fallback' | 'circuit';
+  lane?: TaskLaneType;
+  model?: string;
+  detail: string;
+}
+
+const recentEvents: ModelOperationEvent[] = [];
+export function recordModelOperationEvent(event: Omit<ModelOperationEvent, 'at'>): void {
+  recentEvents.push({ ...event, at: Date.now() });
+  if (recentEvents.length > 100) recentEvents.splice(0, recentEvents.length - 100);
+}
+export function recentModelOperationEvents(): ModelOperationEvent[] { return recentEvents.slice(-50).reverse(); }
 
 export interface ProviderSummary {
   provider: string;
@@ -154,6 +170,7 @@ export class ModelOperationsDashboard {
         models: allModels.size,
         availableModels: availableModels.size,
       },
+      events: recentModelOperationEvents(),
     };
   }
 
