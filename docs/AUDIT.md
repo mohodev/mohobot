@@ -46,7 +46,7 @@
 - `chat_log` 需要配置化保留周期、容量上限、用户删除与查询权限。
 - Runtime 热重载只重启已存在 Bot；新增/删除 Bot 仍要求进程重启。
 - 全局配置（存储、日志级别、Supervisor、监听路径）改变后未动态重建相关组件。
-- ~~管理 WebUI、角色、世界模拟、行为引擎、MCP、真实长期记忆仍未实现~~ → **2026-10-17 更新：已实现**。管理 WebUI（`src/admin/server.ts` + `webui/`，RBAC + 二次确认 + 审计）、角色 CRUD/批量导入/互聊（`src/characters/`）、世界模拟（`src/admin/world.ts`）、行为引擎（`behavior-dry-run.ts`/`day-planner.ts`/`event-intelligence.ts`）、可检索长期记忆（`src/memory/semantic-memory.ts`）、MCP 权限+审计+transport + 模型工具桥接（`src/mcp/` + `src/ai/mcp-tools.ts`，默认关闭，config 驱动）均已落地。模型调用固定使用低权限 `viewer` 角色，并继续经过 MCP 权限门与审计。
+- ~~管理 WebUI、角色、世界模拟、行为引擎、MCP、真实长期记忆仍未实现~~ → **2026-10-18 更新：基础能力已实现，完整世界模拟仍在路线中**。管理 WebUI（`src/admin/server.ts` + `webui/`，RBAC + 二次确认 + 审计）、角色 CRUD/批量导入/互聊（`src/characters/`）、行为引擎（`behavior-dry-run.ts`/`day-planner.ts`/`event-intelligence.ts`）、可检索长期记忆（`src/memory/semantic-memory.ts`）、MCP 权限+审计+transport + 模型工具桥接（`src/mcp/` + `src/ai/mcp-tools.ts`，默认关闭，config 驱动）均已落地。世界域目前完成 `WorldStore`、确认日程、阶段 tick 和基础 mood 状态；SQLite 迁移、持续事件演化、Future Task 执行、回放和多域隔离仍未完成。模型调用固定使用低权限 `viewer` 角色，并继续经过 MCP 权限门与审计。
 
 ## 安全原则
 

@@ -1,4 +1,4 @@
-# 遗留清单（2026-10-17 更新）
+# 遗留清单（2026-10-18 更新）
 
 ## 全部完成 ✅
 - [x] 终极闭环：Discord 群里 @墨染荷韵 说话 → `GET /api/ops/discord-chat-log` 出现 in+out 记录
@@ -15,6 +15,7 @@
 - [x] Operator Agent Phase 4：agent loop（ReAct，`?op agent <goal>`，最多 8 步，写操作暂存）
 - [x] Phase 5 部分：审计 API（`GET /api/ops/operator-audit`）
 - [x] 已知 bug 修复：`<@id>` mention 残留；好感度数字滞后（cooldown/interval 默认调优）
+- [x] 第一批拟人化基础：Expression Memory（规则抽取、隔离、TTL、去重、安全过滤）+ Talk Governor（默认关闭的主动发言预算/冷却）
 
 ## Operator Agent Phase 5 ✅（2026-10-17 全部收口）
 
@@ -45,8 +46,20 @@
 - [x] LLM 工具调用进回复 pipeline（通用路径）— `src/ai/tools.ts`（`ChatToolRegistry` + `executeToolCall`）+ provider tools 支持（非流式）+ pipeline 有界工具循环（`ai.tools.enabled` 默认关，allowlist + maxRounds）+ 内置 `search_song`；移植自 upstream `llm_tools.py`
 - [x] 回复产物过滤器 — `src/pipeline/reply-filter.ts`，移植自 upstream `reply_filter.py`（FORMAT/DROP/VOICE 三类，流式安全、比较式不误伤、嵌套 drop、超长救援），`ai.replyFilter` 默认开
 - [x] 把 **MCP 工具**桥接进 `ChatToolRegistry` — `src/ai/mcp-tools.ts` 将 MCP server 工具注册到模型工具表；模型调用继续经过 MCP 权限门与审计，模型调用者固定为低权限 `viewer`；`src/ai/mcp-tools.test.ts` 覆盖 schema、调用、拒绝与审计
+- [x] Expression Memory 基础闭环 — `src/memory/expression-memory.ts`：低风险显式表达规则抽取、approved-only recall、频道/用户/Bot 隔离、TTL、fingerprint 去重、敏感信息与 prompt injection 过滤；默认不启用，尚无 LLM 审核/管理 UI
+- [x] Talk Governor 基础层 — `src/pipeline/talk-governor.ts`：默认关闭，仅治理主动群聊插话，按频道预算/冷却/连续发言退避；direct summon、房间问题和 peer banter 默认不受影响
+- [ ] Expression Memory 完整治理：pending/approved/rejected 审核流、黑话/表达学习、来源消息删除联动、批量删除/回收站/导出、向量召回和 WebUI 管理
+- [ ] 消息级 Planner：本地隐私/权限/设备 gate 之后，增加有界的 `ignore|reply` 结构化决策；不能绕过 direct summon、repeat guard、ReplyPlan 和工具权限
+- [ ] Talk Governor 第二阶段：IANA 时区 quiet hours、topic relevance、Focus lease、主动消息队列，以及 Future Task 出站二次治理
+- [ ] Future Tasks：SQLite 持久化任务/执行记录、原子 claim、lease/recovery、owner 隔离、重试/超时/uncertain 状态；再接模型工具、管理 API 和 Discord 投递
+- [ ] 记忆治理：按用户/频道/来源批量删除、tombstone/回收站、删除审计、派生 embedding 清理、脱敏导出与 dry-run 导入
+- [ ] 世界模拟 Phase 0：把当前 `WorldStore`/`world-tick`/`world-events`/`day-planner` 收敛为可测试的状态机和事件模型，补齐事件来源、信任、时间区间、阶段幂等和回放测试
+- [ ] 世界模拟 Phase 1：将 `WorldStore` 从 `VersionedJsonStore` 迁移到 SQLite（当前架构声明 SQLite-only，但世界/设备状态仍是 JSON 文件），保留迁移备份和旧数据兼容
+- [ ] 世界模拟 Phase 2：确认事件 → 持久化 Future Task/内部事件 → 状态演化 → 行为/情绪/发言决策；避免 `world-tick` 重复生成事件或重复扣除状态
+- [ ] 世界模拟 Phase 3：角色日程、地点/活动、天气/情报候选、关系事件和长期世界记忆的来源链、置信度、过期与管理员确认
+- [ ] 世界模拟 Phase 4：多 Bot/多频道世界域隔离或共享策略、事件抢占/恢复、可观测 trace、管理员 dry-run 和完整端到端回放
 - [ ] `docs/IMMERSION.md` 规定的「角色互询」（好感≥70 + `shared` 标签 + opt-in + 内部私有通道 + 只回抽象答案）——有规格、无实现；现有 cross-chat 是管理员驱动的公开多角色对聊，不等同
 - [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 Promise 超时强制终止（AbortSignal + 副作用生命周期令牌）、`chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot、全局配置变更后动态重建组件
 
-## 当前无遗留计划项
-README「路线图」六阶段均已落地（对应实现见上）。以上「剩余」为明确评估过的可选增强，不是待办阻塞项。
+## 当前状态
+README 原路线图中的管理面、行为引擎和世界状态基础层已落地；但“完整世界模拟系统”仍是分阶段路线，当前只完成了状态、确认日程、tick 阶段和规则日计划的基础能力。上方标记为 `[ ]` 的项目是明确记录的后续工作，不代表当前发布阻塞。

@@ -12,7 +12,7 @@
 | 角色管理 | 已实现 | CRUD：`GET/POST /api/characters`、`GET/PUT /api/characters/:id` + `CharacterCatalog`；批量导入：`POST /api/characters/import`（校验/去重/dryRun/冲突策略）；角色页 UI 含新建/编辑/批量导入 |
 | 短期记忆 | 已实现 | `GET/DELETE /api/ops/sessions`、`GET /api/ops/chat-log`、`/api/ops/discord-chat-log`；删除需二次确认并审计 |
 | 中长期记忆 | 已实现 | `SemanticMemoryAdapter`（`src/memory/semantic-memory.ts`）+ `/api/memory`（列表/读取/删除，scope 隔离，删除为 dangerous 需确认） |
-| 世界模拟器 | 已实现 | `WorldStore`（`src/admin/world.ts`）+ `/api/world`（状态/schedule/trust 确认/tick/events/day-plan） |
+| 世界模拟器 | 基础已实现，完整系统进行中 | `WorldStore`（`src/admin/world.ts`）+ `/api/world`（状态/schedule/trust 确认/tick/events/day-plan）；当前仍缺 SQLite 迁移、持续事件演化、Future Task 执行、回放和多世界域隔离 |
 | 行为引擎 | 已实现 | `POST /api/behavior/dry-run` + `src/admin/behavior-dry-run.ts`、`day-planner.ts`、`event-intelligence.ts` |
 | 日志查看器 | 已实现 | `GET /api/logs`（level/component/after/limit 分页）+ `LogBuffer`（`src/core/log-buffer.ts`） |
 | 插件管理器 | 已实现 | `GET /api/bots/:id/plugins` + `POST .../plugins/:id/reload`（`plugin.reload` 权限 + 二次确认）；WebUI「插件管理」页 |
@@ -31,6 +31,6 @@
 3. **受控操作** ✅ — 重启 Bot、重载插件、删会话、任务暂停/恢复；RBAC + 二次确认 + 审计日志。
 4. **角色域模型** ✅ — Schema/存储/API/UI + 批量导入（`POST /api/characters/import`）+ 角色互聊（`POST /api/characters/cross-chat`）均已落地。
 5. **长期记忆与测试聊天** ✅ — `/api/memory` 隔离与删除审计、`/api/debug/chat` 均已交付。
-6. **MCP/行为/世界模拟** — 行为 ✅、世界模拟 ✅；MCP ✅（`src/mcp/`：权限+审计+stdio/http transport + `McpManager`，管理面 API + WebUI 页，默认关闭、最小权限；`src/ai/mcp-tools.ts` 已桥接模型 pipeline）。
+6. **MCP/行为/世界模拟** — 行为 ✅；MCP ✅（`src/mcp/`：权限+审计+stdio/http transport + `McpManager`，管理面 API + WebUI 页，默认关闭、最小权限；`src/ai/mcp-tools.ts` 已桥接模型 pipeline）；世界模拟基础层 ✅，完整持续模拟仍按 `REMAINING_WORK.md` 分阶段推进。
 
 验收标准：每个功能必须同时具备后端实现、前端交互、权限边界、错误处理和自动化测试；只有页面文字不算完成。
