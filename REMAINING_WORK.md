@@ -17,6 +17,7 @@
 - [x] 已知 bug 修复：`<@id>` mention 残留；好感度数字滞后（cooldown/interval 默认调优）
 - [x] 第一批拟人化基础：Expression Memory（规则抽取、隔离、TTL、去重、安全过滤）+ Talk Governor（默认关闭的主动发言预算/冷却）
 - [x] 第一批接线整合：WorldStore/DeviceStore SQLite 迁移、删除联动 Runtime 接线、GuildPlanner 控制面、不可信数据全链路接入、配置发布激活接线
+- [x] 第二批治理能力：Expression Memory 完整治理 API（批量删除/回收站/恢复/脱敏导出/7 个管理 API）、Talk Governor SQLite 持久化、消息级 Planner、DailyLife 接入 World tick、Social Disclosure 完整调用链
 
 ## Operator Agent Phase 5 ✅（2026-10-17 全部收口）
 
@@ -49,9 +50,9 @@
 - [x] 把 **MCP 工具**桥接进 `ChatToolRegistry` — `src/ai/mcp-tools.ts` 将 MCP server 工具注册到模型工具表；模型调用继续经过 MCP 权限门与审计，模型调用者固定为低权限 `viewer`；`src/ai/mcp-tools.test.ts` 覆盖 schema、调用、拒绝与审计
 - [x] Expression Memory 基础闭环 — `src/memory/expression-memory.ts`：低风险显式表达规则抽取、approved-only recall、频道/用户/Bot 隔离、TTL、fingerprint 去重、敏感信息与 prompt injection 过滤；默认不启用，尚无 LLM 审核/管理 UI
 - [x] Talk Governor 基础层 — `src/pipeline/talk-governor.ts`：默认关闭，仅治理主动群聊插话，按频道预算/冷却/连续发言退避；direct summon、房间问题和 peer banter 默认不受影响
-- [ ] Expression Memory 完整治理：pending/approved/rejected 审核流已实现（`expression-memory-governance.ts`），仍缺黑话/表达学习、批量删除/回收站/导出、向量召回和 WebUI 管理
-- [ ] 消息级 Planner：本地隐私/权限/设备 gate 之后，增加有界的 `ignore|reply` 结构化决策；不能绕过 direct summon、repeat guard、ReplyPlan 和工具权限
-- [ ] Talk Governor 第二阶段：IANA 时区 quiet hours、topic relevance、Focus lease 已实现（`talk-governor-state.ts`/`topic-relevance.ts`，内存 store）；仍缺 SQLite 持久化 state store、主动消息队列和 Future Task 出站二次治理
+- [x] Expression Memory 完整治理：审核流 + 批量删除 + 回收站/恢复 + 脱敏导出 + 7 个管理 API（route-policy + RBAC）；仍缺黑话/表达学习和向量召回
+- [x] 消息级 Planner：`MessagePlanner` 默认关闭，单次 LLM 决策 `reply/ignore`；direct summon/DM/admin 永不 ignore；失败 fallback 到 reply
+- [x] Talk Governor 第二阶段：quiet hours + topic relevance + focus lease + SQLite 持久化 state store；仍缺主动消息队列和 Future Task 出站二次治理
 - [ ] Future Tasks：SQLite 持久化任务/执行记录、原子 claim、lease/recovery、owner 隔离、重试/超时/uncertain 状态；再接模型工具、管理 API 和 Discord 投递
 - [ ] 记忆治理：按用户/频道/来源批量删除、tombstone/回收站、删除审计、派生 embedding 清理、脱敏导出与 dry-run 导入
 - [x] MessageSync 删除联动：`MemoryDeletionCoordinator` 接入 Runtime；Expression Memory 注册为 deletion sink（`expression-deletion-sink.ts`）；tombstone 后 late edit/append 不复活；semantic memory sink 留 TODO
@@ -69,19 +70,19 @@
 - [x] 模型运营基础已存在 — model catalog、health coordinator、multi-router、circuit breaker、fallback、usage/cost 统计；仍缺一份统一 Model Operations 规格和跨 Bot/provider 的运营视图
 - [x] OpenCode/ACP/MCP/Operator 已形成独立执行平面 + 统一权限矩阵（`authorization-matrix.ts`）+ 端到端越权回归测试
 - [ ] Expression/Jargon 学习拆分：当前 Expression Memory 仅是用户偏好规则记忆，尚未实现群体表达样本、黑话含义、source author、sharing group、candidate 审核和向量召回
-- [ ] DailyLifeSimulator 接入 World tick：无活动日生成日常活动，写回地点/活动/energy/stress，并通过 Future Tasks/事件机制驱动后续状态
-- [ ] Social Disclosure 实际调用链：使用 `mayConsultPeer()` 生成仅含抽象 shared facts 的内部询问，禁止私聊 transcript/diary/relationship notes 泄露，并写 disclosure audit
+- [x] DailyLifeSimulator 接入 World tick：无活动日自动生成日常活动（规则回退，不调 LLM），写回 location/activity/mood，appliedPhases 防重复
+- [x] Social Disclosure 完整调用链：`consultPeer()` gate → shared-only prompt → provider call → answer → disclosure audit 持久化；`GET /api/social/disclosure-audit` API
 - [x] Guild Workspace Planner 执行层：`GuildPlanner` 控制面完成；inventory/plan/apply API + route-policy（`guild.read`/`guild.manage`）+ RBAC + 二次确认 + Runtime 注入；仍缺回滚和审计持久化
 - [x] 统一不可信数据协议：`wrapUntrusted`/provenance 全链路接入 pipeline（user turns + memory recall）、AI tools、MCP bridge、media OCR/VLM；端到端注入回归测试覆盖 6 种来源
 - [ ] 记忆回收与导出：message tombstone 联动 semantic/expression memory 来源删除，批量删除、recycle bin、恢复、删除审计、脱敏 JSONL 导出和 dry-run 导入
 - [ ] Discord 投递不确定状态：Gateway 暴露 `delivered/rejected/unknown` 结果，Future Tasks 对 unknown 提供 reconcile，不承诺 exactly-once
 - [ ] Model Operations 规格：模型能力目录、健康/延迟、成本、熔断、fallback、任务 lane、provider availability overlay 与 WebUI/审计视图统一
-- [ ] DailyLife 接线：`src/admin/daily-life.ts` 当前只有规则/模型 proposal 与单测，没有接入 `WorldStore.tick()` 或 runtime；需要明确生成、确认、写回和失败回退语义
+- [x] DailyLife 接线：已接入 `WorldStore.tick()` — 无活动日自动 propose + 规则回退 + 写回 + best-effort 失败不阻断
 - [x] Guild Plan 控制面：AdminServer 已有 inventory/plan/apply API + route-policy + RBAC + 二次确认 + 幂等 key + 部分失败结果
 - [x] 配置发布持久化与激活：Runtime 已使用 `SqlitePublicationStateStore`；重启恢复 revision/ACK/pending/rollback；`onActivated` hook 触发 config reload + 组件重建；activation receipt 区分"已发布"与"实际生效"
 - [ ] 世界/设备并发一致性：WorldStore/DeviceStore 已迁移 SQLite（WAL 模式），仍有 2 秒 TtlCache；多实例部署需补跨进程 stale cache 策略
-- [ ] `docs/IMMERSION.md` 规定的「角色互询」（好感≥70 + `shared` 标签 + opt-in + 内部私有通道 + 只回抽象答案）——有规格、无实现；现有 cross-chat 是管理员驱动的公开多角色对聊，不等同
+- [x] 角色互询已实现：`consultPeer()` 完整链路（gate + shared-only prompt + 抽象回答 + audit）；与 cross-chat 的管理员驱动公开对聊分离
 - [ ] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；仍缺 `chat_log` 保留期/容量/查询权限配置化、热重载新增/删除 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
 
-## 当前状态（2026-10-18 第一批接线后）
-World/Device 已迁移 SQLite；删除联动、GuildPlanner 控制面、不可信数据全链路、配置发布激活均已接线并验证。Expression Memory 治理模型和 Talk Governor Phase 2 基础能力已实现但仍需补 SQLite 持久化和 WebUI。146 测试文件 993 测试全部通过。上方标记为 `[ ]` 的项目是明确记录的后续工作。
+## 当前状态（2026-10-18 第二批治理后）
+第一批接线（SQLite 迁移、删除联动、Guild 控制面、不可信数据、配置激活）和第二批治理（Expression Memory 完整 API、Talk Governor SQLite、消息级 Planner、DailyLife 接入、Social Disclosure）均已完成。150 测试文件 1051 测试全部通过。上方标记为 `[ ]` 的项目是明确记录的后续工作。
