@@ -31,6 +31,7 @@ import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
 import { decideSocially } from './social-decision.js';
+import { TalkGovernor } from './talk-governor.js';
 import { privacyGate } from './privacy-gate.js';
 import { PublicRelationshipStore } from './public-relationships.js';
 import { DeviceStore } from '../admin/device.js';
@@ -332,6 +333,7 @@ export class MessagePipeline {
   /** Live generation per session key; a newer direct summon aborts it (interrupt & merge). */
   readonly #active = new Map<string, AbortController>();
   readonly #recentReplies = new Map<string, number[]>();
+  readonly #talkGovernor: TalkGovernor;
   readonly #stats: PipelineStats = { handled: 0, replied: 0, skipped: 0, aiFailures: 0, rateLimited: 0 };
 
   constructor(deps: PipelineDeps) {
@@ -345,6 +347,7 @@ export class MessagePipeline {
     this.#archiver = deps.contextArchiver;
     this.#repeats = new RepeatGuard({ maxRepeats: deps.config.repeatGuard.maxRepeats, windowMs: deps.config.repeatGuard.windowMs });
     this.#limiter = new RateLimiter(deps.config.rateLimit.windowMs, deps.config.rateLimit.max);
+    this.#talkGovernor = new TalkGovernor(deps.config.social.talkGovernor);
   }
 
   stats(): PipelineStats {
@@ -620,6 +623,13 @@ export class MessagePipeline {
         proactiveChance: cfg.social.proactiveChance,
       },
     );
+    const talk = this.#talkGovernor.decide(message, social);
+    if (!talk.allowed) {
+      this.#stats.skipped += 1;
+      this.#trace(trace, 'ignored', { reason: `talk-governor:${talk.reason}`, channelId: talk.channelId });
+      log.debug({ reason: talk.reason, traceId: trace.id }, 'talk governor skipped model call');
+      return;
+    }
     if (social.action === 'ignore') {
       this.#stats.skipped += 1;
       this.#trace(trace, 'ignored', { reason: social.reason, energy: world.mood.energy ?? 0.65, stress: world.mood.stress ?? 0.2 });
@@ -839,6 +849,7 @@ export class MessagePipeline {
       return;
     }
     this.#trace(trace, 'delivered', { protocol: 'reply-plan', segments: plan.segments.length });
+    if (talk.reason === 'allowed') this.#talkGovernor.commit(talk.channelId);
     this.#noteReply(message.channel.id);    this.#archiveContext(message, prompt, reply, trace.id);
     try {
       const sessions = this.#deps.sessions;

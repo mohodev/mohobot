@@ -227,6 +227,16 @@ export const BotConfigSchema = z.object({
       proactiveParticipation: z.boolean().default(false),
       /** Odds per observed message when proactiveParticipation is on. */
       proactiveChance: z.number().min(0).max(1).default(0.16),
+      talkGovernor: z.object({
+        enabled: z.boolean().default(false),
+        hourlyBudget: z.number().int().min(0).max(100).default(6),
+        cooldownMs: z.number().int().min(0).max(3_600_000).default(30_000),
+        consecutiveLimit: z.number().int().min(0).max(20).default(2),
+        maxBackoffMs: z.number().int().min(0).max(86_400_000).default(600_000),
+        backoffFactor: z.number().min(1).max(8).default(2),
+        governRoomQuestions: z.boolean().default(false),
+        governPeerBanter: z.boolean().default(false),
+      }).default({}),
     })
     .default({}),
   /**

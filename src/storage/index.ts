@@ -10,6 +10,7 @@ import { registries, type MemoryFactory, type StorageFactory } from '../core/reg
 import { SqliteStorage } from './sqlite.js';
 import { nullMemoryAdapter, type QueryFilter, type ScopedStorage, type Storage, type StoredRecord } from './types.js';
 import { SemanticMemoryAdapter } from '../memory/semantic-memory.js';
+import { ExpressionMemoryAdapter } from '../memory/expression-memory.js';
 
 export * from './types.js';
 export * from './sqlite.js';
@@ -25,6 +26,7 @@ export interface CreateStorageOptions {
 export const SQLITE_DRIVER = 'sqlite';
 export const NULL_MEMORY_ADAPTER = 'null';
 export const SEMANTIC_MEMORY_ADAPTER = 'semantic';
+export const EXPRESSION_MEMORY_ADAPTER = 'expression';
 
 const sqliteFactory: StorageFactory = (cfg, deps) => {
   const raw = typeof cfg.path === 'string' && cfg.path.trim().length > 0 ? cfg.path.trim() : './data/mohobot.db';
@@ -46,6 +48,18 @@ const semanticMemoryFactory: MemoryFactory = (deps) => {
   const configuredScopes=deps.options['allowedScopes'];const safeScopes=Array.isArray(configuredScopes)?configuredScopes.filter((scope):scope is 'private'|'relationship'|'shared'=>scope==='private'||scope==='relationship'||scope==='shared'):undefined;
   const allowedScopes=safeScopes?()=>safeScopes:undefined;
   return new SemanticMemoryAdapter({ storage: deps.storage, logger: deps.logger, recallLimit, candidateLimit, embeddingBatchSize,channelDomain,allowedScopes });
+};
+
+const expressionMemoryFactory: MemoryFactory = (deps) => {
+  if (!deps.storage) throw new Error('expression memory requires a storage driver');
+  const options = deps.options;
+  return new ExpressionMemoryAdapter({
+    storage: deps.storage,
+    logger: deps.logger,
+    recallLimit: typeof options.recallLimit === 'number' ? options.recallLimit : undefined,
+    maxChars: typeof options.maxChars === 'number' ? options.maxChars : undefined,
+    ttlDays: typeof options.ttlDays === 'number' ? options.ttlDays : undefined,
+  });
 };
 
 /**
@@ -70,6 +84,12 @@ export function registerBuiltinStorage(): void {
     registries.memories.register(SEMANTIC_MEMORY_ADAPTER, semanticMemoryFactory, {
       source: 'builtin',
       description: 'storage-backed semantic memory with optional derived vectors',
+    });
+  }
+  if (!registries.memories.has(EXPRESSION_MEMORY_ADAPTER)) {
+    registries.memories.register(EXPRESSION_MEMORY_ADAPTER, expressionMemoryFactory, {
+      description: 'deterministic, channel-local approved expression preferences',
+      source: 'builtin',
     });
   }
 }

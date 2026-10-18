@@ -26,6 +26,7 @@ export function expectedRecordType(key: string): string | null {
   // Post-v1 modules may add typed prefixes without changing the immutable v1
   // migration checksum. Their envelope remains the source of fine-grained kind.
   if (key.startsWith('knowledge:')) return 'knowledge-record';
+  if (key.startsWith('expression-memory:')) return 'expression-memory';
   return RECORD_TYPE_RULES.find(([prefix]) => key.startsWith(prefix))?.[1] ?? null;
 }
 
