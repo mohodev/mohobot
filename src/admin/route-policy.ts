@@ -90,6 +90,7 @@ export const ROUTE_POLICIES:readonly RoutePolicy[]=[
 {method:'POST',pattern:/^\/api\/memory\/semantic\/import-dry-run$/,permission:'memory.read',action:'semantic-memory.import-dry-run',risk:'read',confirmation:false},
 {method:'GET',pattern:/^\/api\/world(?:\/day-plan)?$/,permission:'world.read',action:'world.read',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/world\/schedule$/,permission:'world.write',action:'world.schedule',risk:'reversible',confirmation:false},
+{method:'POST',pattern:/^\/api\/world\/schedule\/dry-run$/,permission:'world.read',action:'world.schedule.dry-run',risk:'read',confirmation:false},
 {method:'POST',pattern:/^\/api\/world\/schedule\/[^/]+\/trust$/,permission:'world.confirm',action:'world.schedule.confirm',risk:'impact',confirmation:true},
 {method:'POST',pattern:/^\/api\/world\/(tick|events)$/,permission:'world.write',action:'world.write',risk:'reversible',confirmation:false},
 {method:'GET',pattern:/^\/api\/device$/,permission:'device.read',action:'device.read',risk:'read',confirmation:false},

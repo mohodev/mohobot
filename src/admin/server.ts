@@ -44,7 +44,7 @@ import{parseAffinityAdjust,parseDevicePatch}from'./input-validation.js';
 import type{GuildPlanner}from'./guild-plan.js';
 import{listAudits as listDisclosureAudits}from'../social/disclosure.js';
 import { FutureTaskStore } from '../tasks/future-task.js';
-import { listDomains, queryTraces } from './world-isolation.js';
+import { listPersistentDomains, queryPersistentTraces } from './world-isolation.js';
 
 export interface ConfigPublicationAdapter {
   get(): Promise<unknown>;
@@ -587,8 +587,8 @@ export class AdminServer {
     const bindings=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings$/);if(bindings){const baseId=decodeURIComponent(bindings[1]!);if(method==='GET')return this.#ok({bindings:await this.#knowledge.bindings(baseId)});if(method==='POST')return this.#ok({binding:await this.#knowledge.bind({baseId,targetType:input.targetType as 'bot'|'character',targetId:String(input.targetId??'')})});}
     const binding=pathname.match(/^\/api\/knowledge-bases\/([^/]+)\/bindings\/([^/]+)\/([^/]+)$/);if(method==='DELETE'&&binding){if(!await this.#knowledge.unbind(decodeURIComponent(binding[1]!),decodeURIComponent(binding[2]!) as 'bot'|'character',decodeURIComponent(binding[3]!)))throw new HttpError(404,'binding not found');return this.#ok({deleted:true});}
     if (method === 'GET' && pathname === '/api/world') return this.#ok({ world: await this.#worldFor(stateBotId()).get() });
-    if(method==='GET'&&pathname==='/api/world/schedule'){const world=await this.#worldFor(this.#stateBotId(stringParam(url,'botId'))).get();return this.#ok({schedule:world.schedule,domains:listDomains()});}
-    if(method==='GET'&&pathname==='/api/world/trace')return this.#ok({traces:queryTraces({botId:stringParam(url,'botId'),domainId:stringParam(url,'domainId'),limit:intParam(url,'limit')})});
+     if(method==='GET'&&pathname==='/api/world/schedule'){const world=await this.#worldFor(this.#stateBotId(stringParam(url,'botId'))).get();return this.#ok({schedule:world.schedule,domains:await listPersistentDomains()});}
+     if(method==='GET'&&pathname==='/api/world/trace')return this.#ok({traces:await queryPersistentTraces({botId:stringParam(url,'botId'),domainId:stringParam(url,'domainId'),limit:intParam(url,'limit')})});
     if(method==='GET'&&pathname==='/api/tasks/future'){
       const status=stringParam(url,'status');if(status&&!['pending','claimed','completed','failed','expired','uncertain'].includes(status))throw new HttpError(400,'invalid task status');
       const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>500))throw new HttpError(400,'invalid limit');
@@ -603,7 +603,8 @@ export class AdminServer {
       const task=await this.#futureTasks.schedule({type,payload:input.payload as Record<string,unknown>,owner,scheduledAt:typeof input.scheduledAt==='number'?input.scheduledAt:undefined,maxRetries:typeof input.maxRetries==='number'?input.maxRetries:undefined,timeoutMs:typeof input.timeoutMs==='number'?input.timeoutMs:undefined});
       return{status:201,body:{ok:true,task}};
     }
-    if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#worldFor(stateBotId()).schedule({ ...input, trust: 'candidate' }) } };
+     if (method === 'POST' && pathname === '/api/world/schedule') return { status: 201, body: { ok: true, world: await this.#worldFor(stateBotId()).schedule({ ...input, trust: 'candidate' }) } };
+     if (method === 'POST' && pathname === '/api/world/schedule/dry-run') return this.#ok({ world: await this.#worldFor(stateBotId()).dryRun(input, typeof input.at === 'number' ? input.at : Date.now()) });
     if (method === 'POST' && /^\/api\/world\/schedule\/[^/]+\/trust$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split('/')[4] ?? '');
       const trust = String(input.trust ?? 'candidate');

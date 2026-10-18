@@ -9,7 +9,7 @@ import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
 import type { Storage } from '../storage/types.js';
-import { getWorldForBot, recordTrace } from './world-isolation.js';
+import { configureWorldIsolation, getWorldForBot, recordTrace } from './world-isolation.js';
 
 export interface WorldState {
   clock: string;
@@ -48,6 +48,7 @@ export class WorldStore {
     });
     this.#key = `world:${botId ?? 'default'}`;
     this.#botId = botId ?? 'default';
+    configureWorldIsolation(this.#storage);
     this.#legacyFile = botId
       ? path.join(rootDir, 'data', 'bots', botId, 'world', 'state.json')
       : path.join(rootDir, 'data', 'world', 'state.json');
@@ -89,7 +90,16 @@ export class WorldStore {
 
   async schedule(input: Partial<ScheduledWorldEvent>): Promise<WorldState> { const event=validateScheduledEvent(input);return this.#update((state)=>{state.schedule=[...state.schedule.filter((item)=>item.id!==event.id),event].sort((a,b)=>Date.parse(a.startsAt)-Date.parse(b.startsAt)).slice(-500);}); }
 
-  async confirmScheduled(id: string, trust: ScheduledWorldEvent['trust']): Promise<WorldState> { return this.#update((state)=>{const event=state.schedule.find((item)=>item.id===id);if(!event)throw new Error('scheduled event not found');event.trust=trust;}); }
+  async confirmScheduled(id: string, trust: ScheduledWorldEvent['trust']): Promise<WorldState> { return this.#update((state)=>{const event=state.schedule.find((item)=>item.id===id);if(!event)throw new Error('scheduled event not found');event.trust=trust;if(trust==='confirmed'){for(const other of state.schedule){if(other.id===id||other.trust!=='confirmed'||!overlaps(event,other))continue;other.trust='rejected';const domain=getWorldForBot(this.#botId);recordTrace({domainId:domain.id,botId:this.#botId,at:new Date().toISOString(),kind:'schedule',before:{eventId:other.id,trust:'confirmed'},after:{eventId:other.id,trust:'rejected'},detail:`preempted by later confirmation ${id}`});}}}); }
+
+  /** Later confirmation wins deterministically; the older overlapping event is rejected and traced. */
+  async dryRun(input: Partial<ScheduledWorldEvent>, at: number): Promise<WorldState> {
+    const state = await this.get();
+    const event = validateScheduledEvent({ ...input, trust: 'confirmed' });
+    const copy = structuredClone(state);
+    copy.schedule = [...copy.schedule.filter((item) => item.id !== event.id), event];
+    return evolveAt(copy, at);
+  }
 
   async tick(at = Date.now()): Promise<WorldState> {
     const state = await this.get();
@@ -150,6 +160,21 @@ export class WorldStore {
     this.#ready ??= this.#storage.init();
     await this.#ready;
   }
+}
+
+function overlaps(a: ScheduledWorldEvent, b: ScheduledWorldEvent): boolean {
+  return Date.parse(a.startsAt) < Date.parse(b.endsAt) && Date.parse(b.startsAt) < Date.parse(a.endsAt);
+}
+
+function evolveAt(state: WorldState, at: number): WorldState {
+  const active = activeScheduledEvent(state.schedule, at);
+  state.clock = new Date(at).toISOString();
+  if (!active) return normalizeWorld(state);
+  const start = Date.parse(active.startsAt), end = Date.parse(active.endsAt), progress = (at - start) / (end - start);
+  const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
+  Object.assign(state, evolveWorld(state, active, phase as EvolutionPhase).state);
+  state.activity = active.title;
+  return normalizeWorld(state);
 }
 
 function clampMood(n: number): number { return Math.max(0, Math.min(1, n)); }
