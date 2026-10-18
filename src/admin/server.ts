@@ -16,6 +16,7 @@ import { runtimeMetrics } from '../core/runtime-metrics.js';
 import{MemoryAdminService}from'../memory/admin-service.js';
 import{JargonMemory}from'../memory/jargon-memory.js';
 import{ExpressionMemoryGovernance}from'../memory/expression-memory-governance.js';
+import{SemanticMemoryGovernance}from'../memory/semantic-memory-governance.js';
 import type{ExpressionStatus}from'../memory/expression-memory.js';
 import{KnowledgeBaseStore}from'../knowledge/store.js';
 import type { Storage } from '../storage/types.js';
@@ -156,6 +157,7 @@ export class AdminServer {
   readonly #catalog: ModelCatalogStore;
   readonly #memories:MemoryAdminService;
   readonly #expressionGov:ExpressionMemoryGovernance;
+  readonly #semanticGov:SemanticMemoryGovernance;
   readonly #jargon:JargonMemory;
   readonly #knowledge:KnowledgeBaseStore;
   readonly #modelDashboard:ModelOperationsDashboard;
@@ -186,6 +188,7 @@ export class AdminServer {
     this.#catalog = new ModelCatalogStore(opts.rootDir);
     this.#memories=new MemoryAdminService(opts.storage);
     this.#expressionGov=new ExpressionMemoryGovernance({storage:opts.storage,logger:opts.logger});
+    this.#semanticGov=new SemanticMemoryGovernance(opts.storage,opts.logger);
     this.#jargon=new JargonMemory({storage:opts.storage,logger:opts.logger});
     this.#knowledge=new KnowledgeBaseStore(opts.storage);
     this.#modelDashboard=new ModelOperationsDashboard({snapshots:opts.snapshots,usage:{totals:(botId,days)=>opts.snapshots().find((snapshot)=>snapshot.id===botId)?.usage?.totals(botId,days)??Promise.resolve([])}});
@@ -492,6 +495,30 @@ export class AdminServer {
       if(statusRaw&&!['pending','approved','rejected','superseded'].includes(statusRaw))throw new HttpError(400,'invalid status');
       const records=await this.#expressionGov.list(botId,userId??undefined,statusRaw as ExpressionStatus|undefined);
       return this.#ok({records});
+    }
+    if(method==='POST'&&pathname==='/api/memory/semantic/bulk-delete'){
+      const botId=String(input.botId??'');if(!botId)throw new HttpError(400,'botId required');
+      const fields=['userId','channelId','sourceMessageId'] as const;
+      for(const field of fields)if(input[field]!==undefined&&(typeof input[field]!=='string'||!input[field]))throw new HttpError(400,`${field} must be a non-empty string`);
+      if(!fields.some((field)=>typeof input[field]==='string'))throw new HttpError(400,'at least one deletion filter required');
+      const count=await this.#semanticGov.bulkDelete({botId,userId:input.userId as string|undefined,channelId:input.channelId as string|undefined,sourceMessageId:input.sourceMessageId as string|undefined},auth.principal.id,typeof input.reason==='string'?input.reason:undefined);
+      return this.#ok({deleted:count});
+    }
+    if(method==='GET'&&pathname==='/api/memory/semantic/recycle-bin'){
+      const botId=url.searchParams.get('botId');if(!botId)throw new HttpError(400,'botId required');
+      return this.#ok({records:await this.#semanticGov.recycleBin(botId,intParam(url,'limit'))});
+    }
+    if(method==='POST'&&pathname==='/api/memory/semantic/restore'){
+      const botId=String(input.botId??''),userId=String(input.userId??''),id=String(input.id??'');if(!botId||!userId||!id)throw new HttpError(400,'botId, userId, and id required');
+      return this.#ok({outcome:await this.#semanticGov.restore(botId,userId,id,auth.principal.id)});
+    }
+    if(method==='GET'&&pathname==='/api/memory/semantic/export'){
+      const botId=url.searchParams.get('botId');if(!botId)throw new HttpError(400,'botId required');
+      return this.#ok({data:await this.#semanticGov.exportSanitized(botId)});
+    }
+    if(method==='POST'&&pathname==='/api/memory/semantic/import-dry-run'){
+      if(typeof input.data!=='string')throw new HttpError(400,'data must be a JSONL string');
+      return this.#ok({result:this.#semanticGov.dryRunImport(input.data)});
     }
     if(method==='POST'&&pathname==='/api/memory/expressions/approve'){
       const botId=String(input.botId??'');const userId=String(input.userId??'');const id=String(input.id??'');

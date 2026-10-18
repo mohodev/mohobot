@@ -48,6 +48,7 @@ import { OpenAICompatibleOcrProvider, OpenAICompatibleVisionProvider } from '../
 import { ContextArchiver } from '../context-archiver/index.js';
 import { MemoryDeletionCoordinator } from '../memory/deletion-coordinator.js';
 import { ExpressionDeletionSink } from '../memory/expression-deletion-sink.js';
+import { SemanticDeletionSink } from '../memory/semantic-deletion-sink.js';
 import { SqliteTalkGovernorStateStore } from '../pipeline/talk-governor-sqlite-store.js';
 import { JargonMemory } from '../memory/jargon-memory.js';
 
@@ -392,8 +393,7 @@ export class BotRuntime implements Managed {
         storage: this.#deps.storage,
         logger: this.#logger,
       }));
-      // TODO: register semantic memory deletion sink when a `forgetSourceMessage`
-      // interface is available on the semantic memory adapter.
+      deletionCoordinator.register(new SemanticDeletionSink({ storage: this.#deps.storage, logger: this.#logger }));
     }
     this.#deletionCoordinator = deletionCoordinator;
     // LLM function/tool-calling registry. Tools are offered to the model in the
