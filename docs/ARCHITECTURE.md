@@ -32,6 +32,8 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 - 上游 429、日志与延迟统计未来可建议下调预算，但不能自动修改生产配置；需管理员确认。
 - 背景任务被优先限流，用户直接消息、视觉和管理读取保留能力。
 
+模型运营平面还包括 model catalog、health coordinator、circuit breaker、fallback、availability overlay 和 usage/cost 统计；这些组件目前分散在 `src/ai/`，统一运营视图和跨 Bot/provider 管理契约仍在路线中。
+
 ## 统一发言管线
 
 ```text
@@ -40,6 +42,8 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 ```
 
 模型输出只能得到 `ReplyPlan`：`ignore` 或受限 segments；发送器处理 Discord 限制、禁止 mass mention、分段和失败降级。
+
+输入侧的用户文本、附件观察、OCR/VLM、MCP 返回、工具结果和长期记忆均属于不可信数据；它们不得因为被放入 system/data block 就获得 instruction 权限。当前各模块已有局部标记和防护，统一协议与全链路回归测试仍在路线中。
 
 ## 拟人化状态域
 
