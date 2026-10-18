@@ -565,10 +565,11 @@ export class AdminServer {
     if(method==='GET'&&pathname==='/api/tasks/future'){
       const status=stringParam(url,'status');if(status&&!['pending','claimed','completed','failed','expired','uncertain'].includes(status))throw new HttpError(400,'invalid task status');
       const limit=intParam(url,'limit');if(limit!==undefined&&(limit<1||limit>500))throw new HttpError(400,'invalid limit');
-      return this.#ok({tasks:await this.#futureTasks.list({status:status as any,owner:stringParam(url,'owner'),type:stringParam(url,'type'),limit})});
+      const globalRead=auth.principal.role==='admin'||auth.principal.role==='developer';
+      return this.#ok({tasks:await this.#futureTasks.list({status:status as any,owner:globalRead?stringParam(url,'owner'):auth.principal.id,type:stringParam(url,'type'),limit})});
     }
     if(method==='POST'&&pathname==='/api/tasks/future/schedule'){
-      const type=typeof input.type==='string'?input.type:'';const owner=typeof input.owner==='string'?input.owner:auth.principal.id;
+      const type=typeof input.type==='string'?input.type:'';const owner=auth.principal.id;
       if(!type||!input.payload||typeof input.payload!=='object'||Array.isArray(input.payload))throw new HttpError(400,'type and object payload required');
       if(type!=='world.tick'||typeof (input.payload as Record<string,unknown>).botId!=='string')throw new HttpError(400,'unsupported task type or invalid botId');
       if(!this.#opts.snapshots().some((snapshot)=>snapshot.id===(input.payload as Record<string,unknown>).botId))throw new HttpError(404,'bot not found');

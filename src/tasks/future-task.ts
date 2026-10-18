@@ -84,6 +84,7 @@ export class FutureTaskStore {
   constructor(private readonly storage: Storage) {}
 
   async schedule(input: ScheduleInput): Promise<FutureTask> {
+    if (!this.storage.compareAndSet) throw new Error('storage driver must support atomic compareAndSet');
     const id = input.id ?? randomUUID();
     assertId(id, 'task id');
     if (!/^[a-z][a-z0-9._-]{0,119}$/.test(input.type)) throw new Error('invalid task type');
@@ -111,28 +112,20 @@ export class FutureTaskStore {
       timeoutMs: input.timeoutMs ?? 30_000,
       owner: input.owner,
     };
-    if (this.storage.compareAndSet) {
-      if (!await this.storage.compareAndSet(taskKey(id), undefined, task)) throw new Error('task already exists');
-    } else await this.storage.save(taskKey(id), task);
+    if (!await this.storage.compareAndSet(taskKey(id), undefined, task)) throw new Error('task already exists');
     return task;
   }
 
   async claim(taskId: string, workerId: string): Promise<FutureTask | undefined> {
     assertId(taskId, 'task id');
-    const task = envelope(await this.storage.get(taskKey(taskId)));
-    if (!task || task.status !== 'pending') return undefined;
-    if (task.scheduledAt > Date.now()) return undefined;
+    if (!this.storage.compareAndSet) throw new Error('storage driver must support atomic compareAndSet');
+    const expected = envelope(await this.storage.get(taskKey(taskId)));
+    if (!expected || expected.status !== 'pending') return undefined;
+    if (expected.scheduledAt > Date.now()) return undefined;
 
-    task.status = 'claimed';
-    task.claimedBy = workerId;
-    task.claimedAt = Date.now();
-    if (this.storage.compareAndSet) {
-      const current = await this.storage.get<unknown>(taskKey(taskId));
-      const expected = envelope(current);
-      if (!expected || expected.status !== 'pending') return undefined;
-      if (!await this.storage.compareAndSet(taskKey(taskId), expected, task)) return undefined;
-    } else await this.storage.save(taskKey(taskId), task);
-    return task;
+    const claimed: FutureTask = { ...expected, status: 'claimed', claimedBy: workerId, claimedAt: Date.now() };
+    if (!await this.storage.compareAndSet(taskKey(taskId), expected, claimed)) return undefined;
+    return claimed;
   }
 
   async complete(taskId: string, result?: unknown): Promise<FutureTask> {

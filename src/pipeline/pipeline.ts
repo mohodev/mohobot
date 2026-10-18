@@ -377,7 +377,7 @@ export class MessagePipeline {
   #traceById(id:string,stage:Parameters<ChatTraceStore['add']>[1],detail?:Parameters<ChatTraceStore['add']>[2]):void { this.#traces.addById(id,stage,detail); }
 
   /** Admin-only Discord chat log; recorder itself ignores non-discord platforms and never throws. */
-  #chatLog(direction: 'in' | 'out', message: MohoMessage, content: string, outcome: 'received' | 'delivered' | 'delivery_failed', traceId?: string): void {
+  #chatLog(direction: 'in' | 'out', message: MohoMessage, content: string, outcome: 'received' | 'delivered' | 'delivery_failed' | 'unknown', traceId?: string): void {
     try {
       discordChatLog.record({ platform: message.platform, direction, botId: message.botId, channelId: message.channel.id, userId: direction === 'in' ? message.author.id : this.#deps.config.id, content, outcome, traceId });
     } catch { /* logging must never break the pipeline */ }
@@ -790,7 +790,7 @@ export class MessagePipeline {
       { role: 'system', content: personaText },
       { role: 'system', content: anchor },
       { role: 'system', content: worldContext },
-      ...(this.#deps.jargonMemory ? [buildJargonBlock(await this.#deps.jargonMemory.recall(message.channel.id, message.channel.guildId, cfg.jargonMemory.recallLimit))].filter((x): x is NonNullable<typeof x> => Boolean(x)) : []),
+      ...(this.#deps.jargonMemory ? [buildJargonBlock(await this.#deps.jargonMemory.recall(message.channel.id, message.channel.guildId, cfg.jargonMemory.recallLimit))].filter((x): x is NonNullable<typeof x> => Boolean(x)).map((m) => ({ ...m, content: formatUntrustedData(markUntrusted('memory', m.content)) })) : []),
       ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
       ...recalledMemories,
       ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
@@ -1500,7 +1500,7 @@ export class MessagePipeline {
         this.#logger.warn({ err: error instanceof Error ? error.message : String(error), channel: message.channel.id }, 'outbound chat log write failed');
       }
       const deliveryStatus = delivery && typeof delivery === 'object' ? delivery.status : 'delivered';
-      this.#chatLog('out', message, safeContent, deliveryStatus === 'delivered' ? 'delivered' : 'delivery_failed', traceId);
+      this.#chatLog('out', message, safeContent, deliveryStatus === 'delivered' ? 'delivered' : deliveryStatus === 'unknown' ? 'unknown' : 'delivery_failed', traceId);
       if (traceId) this.#traceById(traceId, deliveryStatus === 'delivered' ? 'delivered' : deliveryStatus === 'unknown' ? 'delivery_unknown' : 'delivery_failed', delivery && typeof delivery === 'object' && delivery.messageId ? { messageId: delivery.messageId } : undefined);
       return deliveryStatus === 'delivered';
     } catch (error) {

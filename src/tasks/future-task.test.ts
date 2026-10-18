@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MemoryStorage } from '../storage/memory.js';
 import { createNullLogger } from '../core/logger.js';
 import { FutureTaskStore } from './future-task.js';
+import type { Storage } from '../storage/types.js';
 
 function store() {
   const s = new MemoryStorage({ logger: createNullLogger() });
@@ -55,6 +56,24 @@ describe('FutureTaskStore', () => {
     const task = await tasks.schedule({ type: 'test', payload: {}, owner: 'bot-1' });
     const claims = await Promise.all([tasks.claim(task.id, 'worker-a'), tasks.claim(task.id, 'worker-b')]);
     expect(claims.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('uses the exact pending snapshot as its compare-and-set expectation', async () => {
+    const { storage, tasks } = store();
+    await storage.init();
+    const task = await tasks.schedule({ type: 'test', payload: {}, owner: 'bot-1' });
+    const original = storage.compareAndSet!.bind(storage);
+    let calls = 0;
+    storage.compareAndSet = async <T>(key: string, expected: T | undefined, value: T) => {
+      calls += 1;
+      if (calls === 1) {
+        const current = await storage.get<any>(key);
+        await original(key, current, { ...current, retryCount: 1 });
+      }
+      return original(key, expected, value);
+    };
+    expect(await tasks.claim(task.id, 'worker')).toBeUndefined();
+    expect((await tasks.get(task.id))?.retryCount).toBe(1);
   });
 
   it('does not claim future-scheduled tasks', async () => {
