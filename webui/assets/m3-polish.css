@@ -1,0 +1,151 @@
+/* ==========================================================================
+   m3-polish.css — deeper Material 3 component fidelity for MohoBot WebUI.
+   Pure CSS, zero JS/HTML changes required.
+   Layers on top of app.css: checkbox, switch, select chevron, code blocks,
+   scrollbars, selection, reduced-motion.
+   Order matters: generic checkbox first, .toggle switch overrides after.
+   ========================================================================== */
+
+/* ---------- M3 checkbox (generic) ---------- */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0 8px 0 0;
+  vertical-align: -4px;
+  border: 2px solid var(--md-on-surface-variant);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--md-dur-short) var(--md-ease),
+              border-color var(--md-dur-short) var(--md-ease);
+}
+input[type="checkbox"]:checked {
+  background: var(--md-primary);
+  border-color: var(--md-primary);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--md-on-primary);
+  -webkit-mask: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGhlaWdodD0iMjAiIHZpZXdCb3g9IjAgLTk2MCA5NjAgOTYwIiB3aWR0aD0iMjAiPjxwYXRoIGQ9Ik0zODItMjQwIDE1NC00NjhsNTctNTcgMTcxIDE3MSAzNjctMzY3IDU3IDU3LTQyNCA0MjRaIi8+PC9zdmc+") center/contain no-repeat;
+  mask: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGhlaWdodD0iMjAiIHZpZXdCb3g9IjAgLTk2MCA5NjAgOTYwIiB3aWR0aD0iMjAiPjxwYXRoIGQ9Ik0zODItMjQwIDE1NC00NjhsNTctNTcgMTcxIDE3MSAzNjctMzY3IDU3IDU3LTQyNCA0MjRaIi8+PC9zdmc+") center/contain no-repeat;
+}
+
+/* ---------- M3 switch (checkbox inside .toggle) — overrides above ---------- */
+.toggle input[type="checkbox"] {
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  min-height: 32px;
+  height: 32px;
+  margin: 0;
+  vertical-align: middle;
+  border: 2px solid var(--md-outline);
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-highest);
+}
+.toggle input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--md-outline);
+  transition: left var(--md-dur-med) var(--md-ease),
+              width var(--md-dur-med) var(--md-ease),
+              height var(--md-dur-med) var(--md-ease),
+              background var(--md-dur-short) var(--md-ease);
+}
+.toggle input[type="checkbox"]:hover::before { background: var(--md-on-surface-variant); }
+.toggle input[type="checkbox"]:checked {
+  background: var(--md-primary);
+  border-color: var(--md-primary);
+}
+.toggle input[type="checkbox"]:checked::before {
+  left: 26px;
+  width: 24px;
+  height: 24px;
+  background: var(--md-on-primary);
+}
+/* neutralize the generic checkbox checkmark on switches */
+.toggle input[type="checkbox"]:checked::after { display: none; }
+.toggle input[type="checkbox"]:disabled { opacity: .38; cursor: not-allowed; }
+
+/* ---------- M3 select: chevron + no native arrow ---------- */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 44px;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgLTk2MCA5NjAgOTYwIiB3aWR0aD0iMjQiPjxwYXRoIGQ9Ik00ODAtMzYwIDMxMi01MjhsNTYtNTYgMTEyIDExMiAxMTItMTEyIDU2IDU2LTE2OCAxNjhaIiBmaWxsPSIjOEM5MTk5Ii8+PC9zdmc+");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 20px;
+  cursor: pointer;
+}
+select option {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+}
+
+/* ---------- code / pre blocks ---------- */
+code {
+  font-family: var(--md-mono);
+  font-size: 12.5px;
+  background: var(--md-surface-container-highest);
+  border-radius: var(--md-shape-xs);
+  padding: 2px 6px;
+}
+pre {
+  font-family: var(--md-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  background: var(--md-surface-container-lowest);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-shape-md);
+  padding: 16px;
+  overflow: auto;
+  color: var(--md-on-surface);
+}
+pre code { background: transparent; padding: 0; }
+
+/* ---------- M3-flavored scrollbars ---------- */
+* { scrollbar-width: thin; scrollbar-color: var(--md-outline) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--md-outline);
+  border-radius: var(--md-shape-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--md-on-surface-variant); background-clip: padding-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- selection ---------- */
+::selection {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+/* ---------- links ---------- */
+a { color: var(--md-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---------- respect reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* ---------- section rhythm ---------- */
+.summary-grid { margin-bottom: 16px; }

@@ -214,7 +214,10 @@ export class Runtime {
     }
 
     const adminToken = this.#config.global.admin.token.trim();
-    if (adminToken && this.#storage) {
+    // The admin server starts whenever persistent storage is available. With no
+    // master token it comes up in first-run setup mode: only /api/setup/* and
+    // the static WebUI are reachable until initialization completes.
+    if (this.#storage) {
       const publicationStore:PublicationStateStore=this.#storage
         ? new SqlitePublicationStateStore({storage:this.#storage,logger:this.#logger})
         : new InMemoryPublicationStateStore();
@@ -312,8 +315,9 @@ export class Runtime {
         guildPlanner,
       });
       await this.#admin.start();
+      if (!adminToken) this.#logger.info({ host: this.#config.global.admin.host, port: this.#config.global.admin.port }, 'admin WebUI in first-run setup mode; open the console to initialize the deployment');
     } else {
-      this.#logger.info(adminToken ? 'admin WebUI disabled; persistent storage is required' : 'admin WebUI disabled; set MOHO_ADMIN_TOKEN in data/.env.local to enable it');
+      this.#logger.info('admin WebUI disabled; persistent storage is required');
     }
 
     this.#installSignalHandlers();

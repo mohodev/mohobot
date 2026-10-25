@@ -1,1 +1,144 @@
-.section-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:16px}.section-head h2,.tool-section h2,.tool-section h3{margin:0 0 6px}.tool-section{background:var(--surface,#181b21);border:1px solid var(--border,#303640);border-radius:7px;padding:18px;margin-bottom:16px}.table-wrap{overflow:auto;border:1px solid var(--border,#303640);border-radius:7px;background:var(--surface,#181b21)}.table-wrap table{min-width:680px}.tabs-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}.tabs-strip button{border-radius:6px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.tool-section label{display:grid;gap:6px;margin:10px 0}.tool-section textarea,.tool-section input{width:100%}.notice.success{background:#18382a;border-color:#2d7450;color:#a5efc7}.notice.warn{background:#3b321d;border-color:#6d5a29;color:#f2d887}.log-view{border:1px solid var(--border,#303640);border-radius:7px;background:#11141a;max-height:620px;overflow:auto}.log-line{display:grid;grid-template-columns:86px 68px minmax(100px,180px) 1fr;gap:10px;padding:9px 12px;border-bottom:1px solid #252a33;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}.log-line:last-child{border-bottom:0}.log-line time,.log-line span{color:var(--muted)}.log-line strong{color:#cdd6e3;font-weight:600}.log-line code{white-space:pre-wrap;overflow-wrap:anywhere}.level-error span{color:#ff9ea5}.level-warn span{color:#f2d887}.level-info span{color:#8fb4ff}@media(max-width:760px){.form-grid{grid-template-columns:1fr}.section-head{align-items:start;flex-direction:column}.table-wrap table{min-width:580px}.tabs-strip{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}.tabs-strip button{flex:0 0 auto}.log-line{grid-template-columns:72px 54px 1fr}.log-line strong{display:none}}
+/* ==========================================================================
+   MohoBot WebUI — ops.css (Material 3, AstrBot-tuned)
+   Ops-specific surfaces: tool sections, tabs strip, log viewer, forms.
+   Light-first tokens; dark via prefers-color-scheme.
+   ========================================================================== */
+
+:root {
+  --md-warn: #FFC107;
+  --md-on-warn: #4D3800;
+  --md-warn-container: #FFF8E1;
+  --md-on-warn-container: #4D3800;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --md-warn: #FAAD14;
+    --md-on-warn: #3D2E00;
+    --md-warn-container: #3D351A;
+    --md-on-warn-container: #FFE9B3;
+  }
+}
+:root[data-theme="dark"] {
+  --md-warn: #FAAD14;
+  --md-on-warn: #3D2E00;
+  --md-warn-container: #3D351A;
+  --md-on-warn-container: #FFE9B3;
+}
+
+/* ---------- section heads ---------- */
+.section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.section-head h2, .tool-section h2, .tool-section h3 { margin: 0 0 6px; }
+
+/* ---------- tool sections (borderless elevated card) ---------- */
+.tool-section {
+  background: var(--md-surface-container-lowest);
+  border: none;
+  border-radius: var(--md-shape-md);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--md-elev-1);
+}
+.tool-section h2 { font-size: 18px; font-weight: 600; }
+.tool-section h3 { font-size: 15px; font-weight: 600; color: var(--md-on-surface-variant); }
+.tool-section label { display: grid; gap: 6px; margin: 10px 0; }
+.tool-section textarea, .tool-section input { width: 100%; }
+
+/* ---------- data tables (ops) ---------- */
+.table-wrap { overflow: auto; }
+.table-wrap table { min-width: 680px; }
+
+/* ---------- tabs strip (filter chips) ---------- */
+.tabs-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.tabs-strip button {
+  min-height: 36px;
+  padding: 0 18px;
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-shape-full);
+  background: var(--md-surface-container-lowest);
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+  font-size: 13px;
+}
+.tabs-strip button:hover::after { opacity: .06; }
+.tabs-strip button.active,
+.tabs-strip button[aria-selected="true"] {
+  background: var(--md-primary-container);
+  border-color: transparent;
+  color: var(--md-primary);
+  font-weight: 600;
+}
+.tabs-strip button.active::after { opacity: 0; }
+
+/* ---------- forms ---------- */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* ---------- notices (success / warn tonal) ---------- */
+.notice.success {
+  background: var(--md-success-container);
+  border-left-color: var(--md-success);
+  color: var(--md-on-success-container);
+}
+.notice.warn {
+  background: var(--md-warn-container);
+  border-left-color: var(--md-warn);
+  color: var(--md-on-warn-container);
+}
+
+/* ---------- log viewer ---------- */
+.log-view {
+  border: none;
+  border-radius: var(--md-shape-md);
+  background: var(--md-surface-container-lowest);
+  box-shadow: var(--md-elev-1);
+  max-height: 620px;
+  overflow: auto;
+}
+.log-line {
+  display: grid;
+  grid-template-columns: 86px 68px minmax(100px, 180px) 1fr;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--md-outline-variant);
+  font: 12px/1.5 var(--md-mono);
+  color: var(--md-on-surface-variant);
+}
+.log-line:last-child { border-bottom: 0; }
+.log-line time, .log-line span { color: var(--md-on-surface-variant); }
+.log-line strong { color: var(--md-on-surface); font-weight: 600; }
+.log-line code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--md-on-surface);
+  background: transparent;
+  padding: 0;
+}
+
+.level-error span, .level-error code { color: var(--md-error); }
+.level-warn span, .level-warn code { color: var(--md-warn); }
+.level-info span, .level-info code { color: var(--md-primary); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 760px) {
+  .form-grid { grid-template-columns: 1fr; }
+  .section-head { align-items: flex-start; flex-direction: column; }
+  .table-wrap table { min-width: 580px; }
+  .tabs-strip { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+  .tabs-strip button { flex: 0 0 auto; }
+  .log-line { grid-template-columns: 72px 54px 1fr; }
+  .log-line strong { display: none; }
+}

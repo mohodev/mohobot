@@ -17,6 +17,8 @@ npm start
 
 首次启动向导会创建 `data/.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖，根目录遗留的 `.env*` 与 `config/` 会被自动迁移到 `data/`。管理 WebUI 默认在 `127.0.0.1:3210`，使用 `MOHO_ADMIN_TOKEN` 登录。
 
+**也可以完全跳过 CLI**：`npm start` 后在浏览器打开管理 WebUI。未初始化的部署会直接进入「首次部署」向导——创建第一个管理员账号（developer 角色）即自动完成 setup（生成部署主密钥写入 `data/.env.local`、初始化 SQLite），主密钥仅在向导完成页显示一次，请妥善保存。已有部署不受影响；`GET /api/setup/status` 可随时查询初始化状态。
+
 没有凭据也能离线跑通完整自然语言管线：
 
 ```bash

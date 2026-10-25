@@ -85,7 +85,7 @@ function showConsole(me) {
   };
   loginView.hidden = true;
   consoleView.hidden = false;
-  document.querySelector('#account-name').textContent = identity.principal.username || identity.principal.id || '管理员';
+  document.querySelector('#account-name').textContent = me.auth?.user?.username || identity.principal.username || identity.principal.id || '管理员';
   document.querySelector('#account-role').textContent = identity.principal.role || '未知';
   document.querySelectorAll('#navigation [data-permission]').forEach((button) => { button.hidden = !has(button.dataset.permission); });
   const requested=location.hash.replace(/^#\/?/,'');
@@ -397,4 +397,75 @@ async function activate(button) {
 document.querySelectorAll('#navigation button').forEach((button) => button.addEventListener('click', () => activate(button)));
 window.addEventListener('hashchange',()=>{const tab=location.hash.replace(/^#\/?/,'');const button=[...document.querySelectorAll('#navigation button')].find(x=>x.dataset.tab===tab&&!x.hidden);if(button)activate(button);});
 
-await authenticate();
+const setupView = document.querySelector('#setup-view');
+const setupForm = document.querySelector('#setup-form');
+const setupError = document.querySelector('#setup-error');
+const setupFields = document.querySelector('#setup-fields');
+const setupSubmit = document.querySelector('#setup-submit');
+const setupEnter = document.querySelector('#setup-enter');
+const setupTokenPanel = document.querySelector('#setup-token-panel');
+
+setupForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  setupError.hidden = true;
+  const username = document.querySelector('#setup-username').value.trim();
+  const password = document.querySelector('#setup-password').value;
+  const password2 = document.querySelector('#setup-password2').value;
+  if (password !== password2) { setupError.textContent = '两次输入的密码不一致。'; setupError.hidden = false; return; }
+  if (password.length < 10) { setupError.textContent = '密码至少 10 位。'; setupError.hidden = false; return; }
+  setupSubmit.disabled = true;
+  try {
+    const result = await fetch('/api/setup/init', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: body({ username, password }) });
+    const payload = await result.json().catch(() => ({}));
+    if (!result.ok) throw new ApiError(String(payload.error || '初始化失败'), result.status, payload);
+    const sessionToken = valueOf(payload, ['token', 'sessionToken', 'accessToken']);
+    if (!sessionToken) throw new ApiError('初始化响应没有 Session Token', 500, payload);
+    token = sessionToken;
+    sessionStorage.setItem(SESSION_KEY, sessionToken);
+    setupFields.hidden = true;
+    setupSubmit.hidden = true;
+    setupTokenPanel.hidden = false;
+    document.querySelector('#setup-master-token').value = payload.masterToken || '';
+    setupEnter.hidden = false;
+    setupForm.querySelector('.muted').textContent = '初始化完成。部署主密钥只显示这一次——它是丢失账号密码后的最终找回凭据，请立即保存。';
+  } catch (error) {
+    setupError.textContent = error.message;
+    setupError.hidden = false;
+  } finally { setupSubmit.disabled = false; }
+});
+
+setupEnter.addEventListener('click', async () => {
+  setupView.hidden = true;
+  await authenticate();
+});
+
+async function boot() {
+  try {
+    const response = await fetch('/api/setup/status', { headers: { accept: 'application/json' } });
+    if (response.ok) {
+      const state = await response.json().catch(() => ({}));
+      if (state.initialized === false) {
+        loginView.hidden = true;
+        consoleView.hidden = true;
+        setupView.hidden = false;
+        return;
+      }
+    }
+  } catch { /* server without setup support: fall through to login */ }
+  await authenticate();
+}
+
+const THEME_KEY = 'moho-theme';
+const themeToggle = document.querySelector('#theme-toggle');
+{
+  const saved = sessionStorage.getItem(THEME_KEY) || '';
+  if (saved === 'dark' || saved === 'light') document.documentElement.dataset.theme = saved;
+}
+themeToggle.addEventListener('click', () => {
+  const effective = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const next = effective === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  sessionStorage.setItem(THEME_KEY, next);
+});
+
+await boot();

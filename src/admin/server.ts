@@ -26,6 +26,7 @@ import { ModelOperationsDashboard } from '../ai/model-operations.js';
 import { ADMIN_ACTIONS, healthSnapshot, type AuditEntry } from './actions.js';
 import { AffinityStore } from './affinity.js';
 import { AdminAuthError, AdminAuthService, type AuthenticatedAdmin } from './auth-service.js';
+import { SetupControl, SetupError } from './setup-control.js';
 import { ConfirmationStore } from './confirmation.js';
 import { RuleDayPlanner } from './day-planner.js';
 import { DeviceStore } from './device.js';
@@ -92,7 +93,8 @@ const ROLES = new Set<AdminRole>(['viewer', 'operator', 'admin', 'developer']);
 function securityHeaders(): Record<string, string> {
   return {
     'cache-control': 'no-store',
-    'content-security-policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'",
+    // img-src allows data: so CSS mask-image icon sprites (m3-icons.css) load.
+    'content-security-policy': "default-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'",
     'cross-origin-opener-policy': 'same-origin',
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
     'referrer-policy': 'no-referrer',
@@ -163,7 +165,10 @@ export class AdminServer {
   readonly #knowledge:KnowledgeBaseStore;
   readonly #modelDashboard:ModelOperationsDashboard;
   readonly #futureTasks:FutureTaskStore;
+  readonly #setup: SetupControl;
   #server?: http.Server;
+  /** Deployment master token; swapped in-place when setup initializes the deployment. */
+  #token: string;
 
   /** Select a bot-owned state store. Legacy no-bot deployments retain their old path. */
   #stateBotId(raw: unknown): string | undefined {
@@ -194,6 +199,8 @@ export class AdminServer {
     this.#knowledge=new KnowledgeBaseStore(opts.storage);
     this.#modelDashboard=new ModelOperationsDashboard({snapshots:opts.snapshots,usage:{totals:(botId,days)=>opts.snapshots().find((snapshot)=>snapshot.id===botId)?.usage?.totals(botId,days)??Promise.resolve([])}});
     this.#futureTasks=new FutureTaskStore(opts.storage);
+    this.#token = opts.token;
+    this.#setup = new SetupControl({ rootDir: opts.rootDir, auth: this.#auth, token: () => this.#token });
   }
 
   get port(): number | undefined {
@@ -233,6 +240,8 @@ export class AdminServer {
         return await this.#bootstrap(req, res, method, pathname);
       }
       if (method === 'POST' && pathname === '/api/auth/login') return await this.#login(res, input, method, pathname);
+      if (method === 'GET' && pathname === '/api/setup/status') return await this.#setupStatus(res);
+      if (method === 'POST' && pathname === '/api/setup/init') return await this.#setupInit(res, input, method, pathname);
 
       const token = bearer(req);
       const authenticated = await this.#auth.authenticate(token);
@@ -278,11 +287,11 @@ export class AdminServer {
 
   async #bootstrap(req: IncomingMessage, res: ServerResponse, method: string, pathname: string): Promise<void> {
     const supplied = bearer(req) || (typeof req.headers['x-admin-token'] === 'string' ? req.headers['x-admin-token'] : '');
-    if (!this.#opts.token || !supplied || !timingSafeStringEqual(supplied, this.#opts.token)) {
+    if (!this.#token || !supplied || !timingSafeStringEqual(supplied, this.#token)) {
       await this.#audit(undefined, method, pathname, 401, 'denied', 'invalid master token');
       return json(res, 401, { ok: false, error: 'unauthorized' });
     }
-    const initialPassword = crypto.createHash('sha256').update(`bootstrap:${this.#opts.token}`).digest('base64url');
+    const initialPassword = crypto.createHash('sha256').update(`bootstrap:${this.#token}`).digest('base64url');
     const result = await this.#auth.bootstrapSession({ username: BOOTSTRAP_USERNAME, initialPassword });
     await this.#audit(result.auth, method, pathname, 201, 'allowed', 'bootstrap session exchanged');
     json(res, 201, { ok: true, token: result.token, auth: result.auth });
@@ -297,6 +306,31 @@ export class AdminServer {
       const status = error instanceof AdminAuthError && error.code === 'locked' ? 409 : 401;
       await this.#audit(undefined, method, pathname, status, 'denied', error instanceof AdminAuthError ? error.code : 'login failed');
       json(res, status, { ok: false, error: status === 409 ? 'account locked' : 'invalid credentials' });
+    }
+  }
+
+  async #setupStatus(res: ServerResponse): Promise<void> {
+    const status = await this.#setup.status();
+    json(res, 200, { ok: true, ...status });
+  }
+
+  async #setupInit(res: ServerResponse, input: Record<string, unknown>, method: string, pathname: string): Promise<void> {
+    try {
+      const result = await this.#setup.init(input);
+      // Hot-swap the deployment master token so the bootstrap exchange keeps
+      // working for this process without a restart; on disk it lives in
+      // data/.env.local and is picked up fresh on the next boot.
+      this.#token = result.masterToken;
+      await this.#audit(result.auth, method, pathname, 201, 'allowed', 'deployment initialized through setup');
+      json(res, 201, { ok: true, token: result.token, auth: result.auth, masterToken: result.masterToken });
+    } catch (error) {
+      if (error instanceof SetupError) {
+        const status = error.code === 'already_initialized' ? 409 : error.code === 'invalid_input' ? 400 : 500;
+        await this.#audit(undefined, method, pathname, status, 'denied', `setup init refused: ${error.code}`);
+        json(res, status, { ok: false, error: error.message });
+        return;
+      }
+      throw error;
     }
   }
 
