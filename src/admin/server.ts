@@ -95,7 +95,7 @@ const ROLES = new Set<AdminRole>(['viewer', 'operator', 'admin', 'developer']);
 function securityHeaders(): Record<string, string> {
   return {
     'cache-control': 'no-store',
-    // img-src allows data: so CSS mask-image icon sprites (m3-icons.css) load.
+    // img-src allows data: for inline SVG/data-URI images in the React bundle.
     'content-security-policy': "default-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'",
     'cross-origin-opener-policy': 'same-origin',
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
@@ -427,7 +427,11 @@ export class AdminServer {
   #ok(value: Record<string, unknown>): ApiResult { return { status: 200, body: { ok: true, ...value } }; }
 
   async #static(res: ServerResponse, pathname: string): Promise<void> {
-    const relative = pathname === '/' ? 'index.html' : pathname === '/dashboard' || pathname === '/dashboard/' ? 'dashboard/index.html' : pathname.replace(/^\/+/, '');
+    // The React control center is the primary console, built into the webui
+    // root. `/dashboard/` remains an alias so older bookmarks keep resolving.
+    const relative = pathname === '/' || pathname === '/dashboard' || pathname === '/dashboard/'
+      ? 'index.html'
+      : pathname.replace(/^\/+/, '');
     const root = path.resolve(this.#opts.rootDir, 'webui');
     const file = path.resolve(root, relative);
     if (!file.startsWith(`${root}${path.sep}`) && file !== path.join(root, 'index.html')) return json(res, 403, { error: 'forbidden' });

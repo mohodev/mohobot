@@ -1,15 +1,16 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Brain, Download, Eye, RefreshCw, RotateCcw, Search, ShieldAlert, Trash2, Upload,
+  Brain, CircleAlert, Download, Eye, Lock, RefreshCw, RotateCcw, Search, Share2, ShieldAlert,
+  Trash2, Upload, Users,
 } from 'lucide-react';
 import { ApiError, api, body, confirmedRequest } from '../lib/api';
 import type { MemoryRecord, PageProps } from '../lib/types';
 import { useAsync } from '../lib/hooks';
-import { formatDateTime, formatNumber, prettyJson } from '../lib/format';
+import { formatBytes, formatDateTime, formatNumber, prettyJson } from '../lib/format';
 import {
-  Button, DataState, Descriptions, Field, Modal, Notice, PageTitle, Panel, Pill, Select, Table, Tabs,
-  TextArea, TextInput,
+  Button, Collapsible, DataState, Descriptions, EmptyState, Field, Modal, Notice, PageTitle, Panel,
+  Pill, Select, StatCard, Table, Tabs, TextArea, TextInput,
 } from '../components/ui';
 
 type ScopeValue = '' | 'private' | 'relationship' | 'shared';
@@ -38,6 +39,7 @@ const SCOPE_META: Record<string, { label: string; tone: 'success' | 'warning' | 
 };
 
 const LIMIT_OPTIONS = [20, 50, 100, 200];
+const IMPORT_PREVIEW_LIMIT = 20;
 
 function isCancelled(cause: unknown): boolean {
   return cause instanceof ApiError && cause.statusCode === 0;
@@ -49,6 +51,13 @@ function messageOf(cause: unknown): string {
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+/** Renders a scalar as text, falling back to an em dash for empty/absent values. */
+function textOf(value: unknown, fallback = '—'): string {
+  if (typeof value === 'string' && value) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return fallback;
 }
 
 /** Storage key used by the detail/delete routes; falls back to the record id. */
@@ -69,6 +78,15 @@ function recordSummary(memory: MemoryRecord): string {
   if (typeof memory.textLength === 'number') parts.push(`${formatNumber(memory.textLength)} 字节`);
   if (typeof memory.textHash === 'string' && memory.textHash) parts.push(memory.textHash.slice(0, 12));
   return parts.length ? parts.join(' · ') : '—';
+}
+
+/** Best-effort UTF-8 byte length for the export size hint. */
+function byteLength(text: string): number {
+  try {
+    return new TextEncoder().encode(text).length;
+  } catch {
+    return text.length;
+  }
 }
 
 /** Builds the `/api/memory` query string; exported for the filter test. */
@@ -103,6 +121,32 @@ export function Memory({ permissions }: PageProps) {
     return Array.isArray(result.memories) ? result.memories : [];
   }, [query], '读取语义记忆失败');
   const memories = listState.data ?? [];
+
+  const filtersDirty = useMemo(() => (
+    draft.scope !== filters.scope
+    || draft.botId.trim() !== filters.botId.trim()
+    || draft.userId.trim() !== filters.userId.trim()
+    || draft.limit !== filters.limit
+  ), [draft, filters]);
+
+  const scopeCounts = useMemo(() => {
+    let privateCount = 0;
+    let relationshipCount = 0;
+    let sharedCount = 0;
+    let otherCount = 0;
+    for (const memory of memories) {
+      const scope = typeof memory.scope === 'string' ? memory.scope : '';
+      if (scope === 'private') privateCount += 1;
+      else if (scope === 'relationship') relationshipCount += 1;
+      else if (scope === 'shared') sharedCount += 1;
+      else otherCount += 1;
+    }
+    return { private: privateCount, relationship: relationshipCount, shared: sharedCount, other: otherCount };
+  }, [memories]);
+
+  const percentOf = useCallback((count: number) => (
+    `${memories.length ? Math.round((count / memories.length) * 100) : 0}%`
+  ), [memories.length]);
 
   const [busyKey, setBusyKey] = useState('');
   const [actionError, setActionError] = useState('');
@@ -173,6 +217,12 @@ export function Memory({ permissions }: PageProps) {
     return typeof result.data === 'string' ? result.data : '';
   }, [canRead, govBotId, govTab, exportTick], '读取导出数据失败');
 
+  const exportText = exportState.data ?? '';
+  const exportStats = useMemo(() => ({
+    lines: exportText ? exportText.split('\n').filter((line) => line.trim()).length : 0,
+    bytes: byteLength(exportText),
+  }), [exportText]);
+
   const [importText, setImportText] = useState('');
   const [importResult, setImportResult] = useState<DryRunResult | null>(null);
   const [importBusy, setImportBusy] = useState(false);
@@ -195,15 +245,22 @@ export function Memory({ permissions }: PageProps) {
     }
   }, [importText]);
 
+  const clearImport = useCallback(() => {
+    setImportText('');
+    setImportResult(null);
+    setGovError('');
+  }, []);
+
   const [bulk, setBulk] = useState({ userId: '', channelId: '', sourceMessageId: '', reason: '' });
-  const [bulkDeleted, setBulkDeleted] = useState<number | null>(null);
 
   const runBulkDelete = useCallback(async () => {
     const botId = govBotId.trim();
+    if (!botId) { setGovError('请先填写治理目标 Bot ID。'); return; }
     const payload: Record<string, string> = { botId };
     if (bulk.userId.trim()) payload.userId = bulk.userId.trim();
     if (bulk.channelId.trim()) payload.channelId = bulk.channelId.trim();
     if (bulk.sourceMessageId.trim()) payload.sourceMessageId = bulk.sourceMessageId.trim();
+    if (bulk.reason.trim()) payload.reason = bulk.reason.trim();
     if (!payload.userId && !payload.channelId && !payload.sourceMessageId) {
       setGovError('批量删除至少需要一个筛选条件（userId / channelId / sourceMessageId）。');
       return;
@@ -211,7 +268,6 @@ export function Memory({ permissions }: PageProps) {
     setGovBusy('bulk');
     setGovError('');
     setGovNotice('');
-    setBulkDeleted(null);
     try {
       const result = await confirmedRequest<{ deleted?: number }>(
         '/memory/semantic/bulk-delete',
@@ -219,8 +275,8 @@ export function Memory({ permissions }: PageProps) {
         payload,
         `批量删除 Bot ${botId} 下符合条件的语义记忆`,
       );
-      setBulkDeleted(typeof result.deleted === 'number' ? result.deleted : 0);
-      setGovNotice(`已删除 ${formatNumber(typeof result.deleted === 'number' ? result.deleted : 0)} 条记忆（进入回收站）。`);
+      const deleted = typeof result.deleted === 'number' ? result.deleted : 0;
+      setGovNotice(`已删除 ${formatNumber(deleted)} 条记忆（进入回收站）。`);
       setRecycleTick((value) => value + 1);
     } catch (cause) {
       if (!isCancelled(cause)) setGovError(messageOf(cause));
@@ -254,7 +310,7 @@ export function Memory({ permissions }: PageProps) {
   }, [govBotId]);
 
   const downloadExport = useCallback(() => {
-    const text = exportState.data ?? '';
+    const text = exportText;
     if (!text || typeof URL.createObjectURL !== 'function') return;
     const blob = new Blob([text], { type: 'application/x-ndjson' });
     const url = URL.createObjectURL(blob);
@@ -263,21 +319,24 @@ export function Memory({ permissions }: PageProps) {
     anchor.download = `semantic-memory-${govBotId.trim() || 'bot'}.jsonl`;
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [exportState.data, govBotId]);
+  }, [exportText, govBotId]);
 
-  const detailItems: Array<{ label: string; value: ReactNode }> = detail ? [
+  const identityItems: Array<{ label: string; value: ReactNode }> = detail ? [
     { label: '记录键', value: <span className="mono prewrap">{recordKey(detail) || '—'}</span> },
-    { label: '记录 ID', value: <span className="mono">{detail.id ?? '—'}</span> },
-    { label: 'Bot', value: detail.botId ?? '—' },
-    { label: '用户', value: detail.userId ?? '—' },
-    { label: '频道', value: detail.channelId ?? '—' },
+    { label: '记录 ID', value: <span className="mono">{textOf(detail.id)}</span> },
+    { label: 'Bot', value: <span className="mono">{textOf(detail.botId)}</span> },
+    { label: '用户', value: <span className="mono">{textOf(detail.userId)}</span> },
+    { label: '频道', value: <span className="mono">{textOf(detail.channelId)}</span> },
     { label: '范围', value: <ScopePill scope={detail.scope} /> },
-    { label: '类型', value: typeof detail.kind === 'string' && detail.kind ? detail.kind : '—' },
+  ] : [];
+
+  const metadataItems: Array<{ label: string; value: ReactNode }> = detail ? [
+    { label: '类型', value: textOf(detail.kind) },
     { label: '更新时间', value: formatDateTime(recordUpdatedAt(detail)) },
     { label: '文本长度', value: typeof detail.textLength === 'number' ? `${formatNumber(detail.textLength)} 字节` : '—' },
-    { label: '文本哈希', value: <span className="mono">{typeof detail.textHash === 'string' ? detail.textHash : '—'}</span> },
+    { label: '文本哈希', value: <span className="mono">{textOf(detail.textHash)}</span> },
     { label: '向量', value: detail.hasEmbedding ? <Pill tone="success">已生成</Pill> : <Pill tone="neutral">无</Pill> },
-    { label: '嵌入模型', value: typeof detail.embeddingModel === 'string' && detail.embeddingModel ? detail.embeddingModel : '—' },
+    { label: '嵌入模型', value: textOf(detail.embeddingModel) },
   ] : [];
 
   return (
@@ -295,6 +354,21 @@ export function Memory({ permissions }: PageProps) {
       </Notice>
 
       {actionError && <Notice tone="danger" icon={<ShieldAlert size={17} />}>{actionError}</Notice>}
+
+      {!listState.loading && !listState.error && memories.length > 0 && (
+        <div className="stat-grid">
+          <StatCard label="私密" value={formatNumber(scopeCounts.private)} note={`占当前结果 ${percentOf(scopeCounts.private)}`} icon={<Lock size={17} />} />
+          <StatCard label="关系" value={formatNumber(scopeCounts.relationship)} note={`占当前结果 ${percentOf(scopeCounts.relationship)}`} icon={<Users size={17} />} />
+          <StatCard label="共享" value={formatNumber(scopeCounts.shared)} note={`占当前结果 ${percentOf(scopeCounts.shared)}`} icon={<Share2 size={17} />} />
+          <StatCard
+            label="未标注"
+            value={formatNumber(scopeCounts.other)}
+            note={scopeCounts.other > 0 ? '范围字段缺失或非标准值' : '全部记录均带标准范围'}
+            icon={<CircleAlert size={17} />}
+            tone={scopeCounts.other > 0 ? 'warning' : undefined}
+          />
+        </div>
+      )}
 
       <Panel
         title="记忆列表"
@@ -333,6 +407,7 @@ export function Memory({ permissions }: PageProps) {
           </Select>
           <Button variant="primary" onClick={() => setFilters(draft)}><Search size={15} /> 查询</Button>
           <Button onClick={() => { setDraft(EMPTY_FILTERS); setFilters(EMPTY_FILTERS); }}>重置</Button>
+          {filtersDirty && <span className="muted-text">筛选条件有未应用的更改</span>}
         </div>
 
         <DataState
@@ -361,18 +436,19 @@ export function Memory({ permissions }: PageProps) {
                   <tr
                     key={key || `row-${index}`}
                     className="selectable-row"
+                    title={key || undefined}
                     onClick={() => openDetail(memory)}
                   >
-                    <td>{typeof memory.kind === 'string' && memory.kind ? memory.kind : '—'}</td>
+                    <td className="mono">{textOf(memory.kind)}</td>
                     <td>
-                      <div className="table-primary">{memory.botId ?? '—'}</div>
-                      <small className="muted-text mono">{memory.userId ?? '—'}</small>
+                      <div className="table-primary mono">{textOf(memory.botId)}</div>
+                      <small className="muted-text mono">{textOf(memory.userId)}</small>
                     </td>
                     <td>
                       <ScopePill scope={memory.scope} />
-                      <small className="muted-text mono">{memory.channelId ?? '—'}</small>
+                      <small className="muted-text mono">{textOf(memory.channelId)}</small>
                     </td>
-                    <td className="truncate-cell">{recordSummary(memory)}</td>
+                    <td className="truncate-cell" title={recordSummary(memory)}>{recordSummary(memory)}</td>
                     <td className="nowrap">{formatDateTime(recordUpdatedAt(memory))}</td>
                     <td>
                       <div className="table-actions">
@@ -409,13 +485,15 @@ export function Memory({ permissions }: PageProps) {
         description="回收站、脱敏导出、导入试运行与按主体批量删除。"
         action={<Brain size={16} />}
       >
-        <div className="filter-row">
-          <TextInput
-            aria-label="治理 Bot"
-            placeholder="治理目标 Bot ID（例如 main）"
-            value={govBotId}
-            onChange={(event) => setGovBotId(event.target.value)}
-          />
+        <div className="form-inline">
+          <Field label="治理目标 Bot" hint="回收站 / 导出 / 批量删除都以该 Bot 为范围；留空则仅显示提示。">
+            <TextInput
+              aria-label="治理 Bot"
+              placeholder="治理目标 Bot ID（例如 main）"
+              value={govBotId}
+              onChange={(event) => setGovBotId(event.target.value)}
+            />
+          </Field>
         </div>
 
         {!canRead && (
@@ -444,7 +522,7 @@ export function Memory({ permissions }: PageProps) {
             error={recycle.error}
             empty={!govBotId.trim() || recycleRecords.length === 0}
             emptyTitle={govBotId.trim() ? '回收站为空' : '请先填写治理目标 Bot ID'}
-            emptyDetail={govBotId.trim() ? '该 Bot 暂无可恢复的已删除记忆。' : undefined}
+            emptyDetail={govBotId.trim() ? '该 Bot 暂无可恢复的已删除记忆。' : '填写 Bot 后自动读取该 Bot 的已删除记忆。'}
             onRetry={() => setRecycleTick((value) => value + 1)}
           >
             <Table minWidth={820}>
@@ -458,9 +536,9 @@ export function Memory({ permissions }: PageProps) {
                   return (
                     <tr key={`${id}-${index}`}>
                       <td className="mono">{id}</td>
-                      <td className="mono">{record.userId ?? '—'}</td>
+                      <td className="mono">{textOf(record.userId)}</td>
                       <td><ScopePill scope={record.scope} /></td>
-                      <td className="truncate-cell">{typeof tomb.reason === 'string' && tomb.reason ? tomb.reason : '—'}</td>
+                      <td className="truncate-cell" title={textOf(tomb.reason, '')}>{textOf(tomb.reason)}</td>
                       <td className="nowrap">{formatDateTime(tomb.at)}</td>
                       <td>
                         <div className="table-actions">
@@ -493,18 +571,27 @@ export function Memory({ permissions }: PageProps) {
                 <Button onClick={() => setExportTick((value) => value + 1)} busy={exportState.loading}>
                   <RefreshCw size={15} /> 重载
                 </Button>
-                <Button variant="primary" disabled={!exportState.data} onClick={downloadExport}>
+                <Button variant="primary" disabled={!exportText} onClick={downloadExport}>
                   <Download size={15} /> 下载 JSONL
                 </Button>
               </div>
             </div>
-            {!govBotId.trim() && <Notice tone="info">请先填写治理目标 Bot ID 后再读取导出数据。</Notice>}
-            {exportState.error && <Notice tone="danger" icon={<ShieldAlert size={17} />}>{exportState.error}</Notice>}
-            {govBotId.trim() && !exportState.loading && !exportState.error && (
-              exportState.data
-                ? <pre className="json-view">{exportState.data}</pre>
-                : <Notice tone="warning">该 Bot 没有可导出的记忆行。</Notice>
-            )}
+            <DataState
+              loading={exportState.loading}
+              error={exportState.error}
+              empty={!exportText}
+              emptyTitle={govBotId.trim() ? '该 Bot 没有可导出的记忆行' : '请先填写治理目标 Bot ID'}
+              emptyDetail={govBotId.trim() ? '导出接口会跳过没有有效记录的行。' : '在治理面板顶部填写目标 Bot 后自动读取。'}
+              onRetry={() => setExportTick((value) => value + 1)}
+            >
+              <div className="col">
+                <div className="row row-wrap">
+                  <Pill tone="neutral">{formatNumber(exportStats.lines)} 行</Pill>
+                  <Pill tone="neutral">{formatBytes(exportStats.bytes)}</Pill>
+                </div>
+                <pre className="json-view">{exportText}</pre>
+              </div>
+            </DataState>
           </div>
         )}
 
@@ -527,16 +614,35 @@ export function Memory({ permissions }: PageProps) {
               >
                 <Upload size={15} /> 试运行校验
               </Button>
+              <Button variant="ghost" disabled={importBusy || (!importText && !importResult)} onClick={clearImport}>
+                清空
+              </Button>
             </div>
+            {!importResult && !importBusy && (
+              <EmptyState
+                title="尚未试运行"
+                detail="粘贴脱敏 JSONL 后点击“试运行校验”，仅解析与校验，不会写入存储。"
+              />
+            )}
             {importResult && (
               <>
+                <Notice tone={(importResult.invalid ?? 0) > 0 ? 'warning' : 'info'}>
+                  {(importResult.invalid ?? 0) > 0
+                    ? `校验完成：${formatNumber(importResult.valid ?? 0)} 条有效，${formatNumber(importResult.invalid ?? 0)} 条无效，需修正后重试。`
+                    : `校验通过：${formatNumber(importResult.valid ?? 0)} 条记录均可导入。`}
+                </Notice>
                 <Descriptions columns={3} items={[
                   { label: '解析行数', value: formatNumber(importResult.lines ?? 0) },
                   { label: '有效记录', value: formatNumber(importResult.valid ?? 0) },
                   { label: '无效记录', value: formatNumber(importResult.invalid ?? 0) },
                 ]} />
                 {importResult.records && importResult.records.length > 0 && (
-                  <pre className="json-view">{prettyJson(importResult.records.slice(0, 20))}</pre>
+                  <Collapsible
+                    title="有效记录预览"
+                    meta={<span className="muted-text">前 {formatNumber(Math.min(importResult.records.length, IMPORT_PREVIEW_LIMIT))} / {formatNumber(importResult.records.length)} 条</span>}
+                  >
+                    <pre className="json-view">{prettyJson(importResult.records.slice(0, IMPORT_PREVIEW_LIMIT))}</pre>
+                  </Collapsible>
                 )}
               </>
             )}
@@ -548,6 +654,13 @@ export function Memory({ permissions }: PageProps) {
             <Notice tone="warning" icon={<ShieldAlert size={17} />}>
               批量删除会为所有匹配记录写入墓碑（可在回收站恢复），需要 memory.delete 权限与二次确认。
             </Notice>
+            <div className="row row-wrap">
+              <span className="muted-text">
+                目标 Bot：
+                <span className="mono">{govBotId.trim() || '未填写'}</span>
+                （在治理面板顶部填写）
+              </span>
+            </div>
             <div className="form-grid">
               <Field label="用户 ID" hint="至少填写 userId / channelId / sourceMessageId 之一。">
                 <TextInput aria-label="批量用户 ID" value={bulk.userId} onChange={(event) => setBulk({ ...bulk, userId: event.target.value })} />
@@ -558,7 +671,7 @@ export function Memory({ permissions }: PageProps) {
               <Field label="来源消息 ID">
                 <TextInput aria-label="批量来源消息 ID" value={bulk.sourceMessageId} onChange={(event) => setBulk({ ...bulk, sourceMessageId: event.target.value })} />
               </Field>
-              <Field label="原因（可选）">
+              <Field label="原因（可选）" hint="写入墓碑的 reason，便于审计追溯。">
                 <TextInput aria-label="批量删除原因" value={bulk.reason} onChange={(event) => setBulk({ ...bulk, reason: event.target.value })} />
               </Field>
             </div>
@@ -571,9 +684,6 @@ export function Memory({ permissions }: PageProps) {
                 <span className="muted-text">当前账号缺少 memory.delete 权限，批量删除不可用。</span>
               )}
             </div>
-            {bulkDeleted !== null && (
-              <Notice tone="info">本次共删除 {formatNumber(bulkDeleted)} 条记忆（已进入回收站）。</Notice>
-            )}
           </div>
         )}
       </Panel>
@@ -590,24 +700,33 @@ export function Memory({ permissions }: PageProps) {
           </Button>
         ) : undefined}
       >
-        {detailState.loading && <p className="muted-text">正在读取记忆详情…</p>}
-        {!detailState.loading && detailState.error && (
-          <Notice tone="danger" icon={<ShieldAlert size={17} />}>{detailState.error}</Notice>
-        )}
-        {!detailState.loading && !detailState.error && detail && (
-          <>
-            <Descriptions columns={2} items={detailItems} />
-            <Field label="正文">
-              <pre className="prewrap mono">{typeof detail.text === 'string' && detail.text ? detail.text : '（无正文）'}</pre>
-            </Field>
-            <Descriptions columns={2} items={[
-              { label: '用户输入', value: <span className="prewrap mono">{detail.user ? prettyJson(detail.user) : '—'}</span> },
-              { label: '助手回复', value: <span className="prewrap mono">{detail.assistant ? prettyJson(detail.assistant) : '—'}</span> },
-            ]} />
-          </>
-        )}
-        {!detailState.loading && !detailState.error && !detail && <p className="muted-text">未找到该记忆记录。</p>}
-        {!canDelete && detail && <p className="muted-text">当前账号缺少 memory.delete 权限，仅可查看。</p>}
+        <DataState
+          loading={detailState.loading}
+          error={detailState.error}
+          empty={!detail}
+          emptyTitle="未找到该记忆记录"
+          onRetry={() => detailState.reload()}
+        >
+          {detail && (
+            <div className="col">
+              <Descriptions columns={2} items={identityItems} />
+              <Descriptions columns={2} items={metadataItems} />
+              <Field label="正文">
+                <pre className="prewrap mono">{typeof detail.text === 'string' && detail.text ? detail.text : '（无正文）'}</pre>
+              </Field>
+              <Collapsible
+                title="原始对话载荷"
+                meta={<span className="muted-text">{detail.user ? '含用户输入' : '无用户输入'}{detail.assistant ? ' / 含助手回复' : ''}</span>}
+              >
+                <Descriptions columns={2} items={[
+                  { label: '用户输入', value: <span className="prewrap mono">{detail.user ? prettyJson(detail.user) : '—'}</span> },
+                  { label: '助手回复', value: <span className="prewrap mono">{detail.assistant ? prettyJson(detail.assistant) : '—'}</span> },
+                ]} />
+              </Collapsible>
+              {!canDelete && <p className="muted-text">当前账号缺少 memory.delete 权限，仅可查看。</p>}
+            </div>
+          )}
+        </DataState>
       </Modal>
     </>
   );

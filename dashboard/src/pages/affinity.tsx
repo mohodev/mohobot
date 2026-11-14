@@ -1,5 +1,14 @@
 import { useMemo, useState } from 'react';
-import { RefreshCw, Search, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp, Users } from 'lucide-react';
+import {
+  AlertTriangle,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+  Users,
+} from 'lucide-react';
 import { api, ApiError, body, confirmedRequest } from '../lib/api';
 import type { AffinityRecord, PageProps } from '../lib/types';
 import { useAsync, useDebouncedValue, useToggle } from '../lib/hooks';
@@ -12,6 +21,8 @@ import {
   Notice,
   PageTitle,
   Panel,
+  Pill,
+  Select,
   StatCard,
   Table,
   TextArea,
@@ -33,10 +44,36 @@ const REASON_LABEL: Record<string, string> = {
   manual: '手动调整',
 };
 
+/**
+ * Tone for the reason pill. Colour is reserved for meaning: warm/positive
+ * reasons read as success, conflict as danger, being ignored as a warning, and
+ * the neutral server bookkeeping reason (`manual`) stays untinted.
+ */
+const REASON_TONE: Record<string, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
+  helpful: 'success',
+  kind: 'success',
+  'shared-interest': 'info',
+  conflict: 'danger',
+  ignored: 'warning',
+  manual: 'neutral',
+};
+
 /** Bounds enforced by `parseAffinityAdjust` on the server. */
 const DELTA_MIN = -10;
 const DELTA_MAX = 10;
 const NOTE_MAX = 500;
+
+/** One-tap adjustments for the common case, so operators rarely type a number. */
+const DELTA_PRESETS = [-5, -1, 1, 5];
+
+type SortKey = 'score-desc' | 'score-asc' | 'interactions-desc' | 'updated-desc';
+
+const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
+  { value: 'score-desc', label: '好感度（高 → 低）' },
+  { value: 'score-asc', label: '好感度（低 → 高）' },
+  { value: 'interactions-desc', label: '互动次数（多 → 少）' },
+  { value: 'updated-desc', label: '最近更新（新 → 旧）' },
+];
 
 interface Draft {
   botId: string;
@@ -47,17 +84,38 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { botId: '', userId: '', delta: '', note: '' };
 
-function reasonLabel(reason: string): string {
-  return REASON_LABEL[reason] ?? reason;
+function reasonLabel(reason: unknown): string {
+  const key = String(reason ?? '');
+  if (!key) return '未知';
+  return REASON_LABEL[key] ?? key;
+}
+
+function reasonTone(reason: unknown): 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
+  return REASON_TONE[String(reason ?? '')] ?? 'neutral';
 }
 
 /** Magnitude of the score mapped onto the shared `.meter` track (0..100%). */
-function meterWidth(score: number): number {
-  return Math.max(0, Math.min(100, Math.abs(score)));
+function meterWidth(score: unknown): number {
+  const value = Number(score);
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.abs(value)));
 }
 
-function meterClass(score: number): string {
-  return score < 0 ? 'meter meter-danger' : 'meter';
+function meterClass(score: unknown): string {
+  return Number(score) < 0 ? 'meter meter-danger' : 'meter';
+}
+
+/** Numeric score tint: positive reads as success, negative as danger. */
+function scoreClass(score: unknown): string {
+  const value = Number(score);
+  if (!Number.isFinite(value) || value === 0) return 'mono';
+  return value > 0 ? 'mono text-success' : 'mono text-danger';
+}
+
+/** Epoch millis without throwing on an unparseable timestamp. */
+function timeOf(value: unknown): number {
+  const time = new Date(String(value ?? '')).getTime();
+  return Number.isFinite(time) ? time : 0;
 }
 
 interface AffinityResponse {
@@ -75,6 +133,7 @@ export function Affinity({ permissions }: PageProps) {
   }, [botId], '读取好感度数据失败');
 
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<SortKey>('score-desc');
   const [modalOpen, toggleModal] = useToggle(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [submitting, setSubmitting] = useState(false);
@@ -83,26 +142,46 @@ export function Affinity({ permissions }: PageProps) {
 
   const canWrite = permissions.includes('memory.write');
 
-  // Server already returns score-descending rows; re-sort defensively so the UI
-  // order never depends on transport quirks.
-  const rows = useMemo(
-    () => [...(state.data?.rows ?? [])].sort((a, b) => b.score - a.score),
-    [state.data],
-  );
+  // The server already returns score-descending rows; the local sort keeps the
+  // view order deterministic and lets operators re-rank by the other columns.
+  const rows = useMemo(() => {
+    const base = [...(state.data?.rows ?? [])];
+    switch (sort) {
+      case 'score-asc':
+        base.sort((a, b) => Number(a.score ?? 0) - Number(b.score ?? 0));
+        break;
+      case 'interactions-desc':
+        base.sort((a, b) => Number(b.interactions ?? 0) - Number(a.interactions ?? 0));
+        break;
+      case 'updated-desc':
+        base.sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt));
+        break;
+      default:
+        base.sort((a, b) => Number(b.score ?? 0) - Number(a.score ?? 0));
+    }
+    return base;
+  }, [state.data, sort]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
-    return rows.filter((row) => row.userId.toLowerCase().includes(needle));
+    return rows.filter((row) => String(row.userId ?? '').toLowerCase().includes(needle));
   }, [rows, query]);
 
   const averages = useMemo(() => {
     const count = rows.length;
-    const total = rows.reduce((sum, row) => sum + Number(row.score ?? 0), 0);
-    const positive = rows.filter((row) => row.score > 0).length;
-    const negative = rows.filter((row) => row.score < 0).length;
+    const total = rows.reduce((sum, row) => sum + (Number(row.score) || 0), 0);
+    const positive = rows.filter((row) => Number(row.score) > 0).length;
+    const negative = rows.filter((row) => Number(row.score) < 0).length;
     return { count, average: count ? total / count : 0, positive, negative };
   }, [rows]);
+
+  // Partial-data guard: rows the API sent without a usable score or user id are
+  // surfaced instead of silently rendering em dashes.
+  const incomplete = useMemo(
+    () => rows.filter((row) => !row.userId || !Number.isFinite(Number(row.score))).length,
+    [rows],
+  );
 
   function openAdjust(row?: AffinityRecord): void {
     setDraft({
@@ -170,6 +249,10 @@ export function Affinity({ permissions }: PageProps) {
   }
 
   const filterNote = botId ? `botId = ${botId}` : '全部 bot';
+  const emptyTitle = rows.length === 0 ? '暂无好感度记录' : '没有匹配的用户';
+  const emptyDetail = rows.length === 0
+    ? (botId ? `没有匹配 botId = ${botId} 的记录。` : '该系统尚未记录任何用户好感度。')
+    : '请调整搜索关键字。';
 
   return (
     <>
@@ -180,27 +263,69 @@ export function Affinity({ permissions }: PageProps) {
         actions={
           <div className="toolbar">
             {canWrite && (
-              <Button variant="primary" onClick={() => openAdjust()}><SlidersHorizontal size={15} /> 调整好感度</Button>
+              <Button variant="primary" onClick={() => openAdjust()}>
+                <SlidersHorizontal size={15} /> 调整好感度
+              </Button>
             )}
-            <Button onClick={state.reload} busy={state.loading}><RefreshCw size={15} /> 刷新</Button>
+            <Button onClick={state.reload} busy={state.loading}>
+              <RefreshCw size={15} /> 刷新
+            </Button>
           </div>
         }
       />
 
       {notice && <Notice tone="info">{notice}</Notice>}
-      {!canWrite && <Notice tone="warning">当前账号缺少 memory.write 权限，好感度页面为只读。</Notice>}
+      {!canWrite && (
+        <Notice tone="warning">当前账号缺少 memory.write 权限，好感度页面为只读。</Notice>
+      )}
 
       <DataState loading={state.loading && !state.data} error={state.error} onRetry={state.reload}>
         <div className="stat-grid">
-          <StatCard label="用户总数" value={formatNumber(averages.count)} note={filterNote} icon={<Users size={17} />} />
-          <StatCard label="平均好感度" value={formatNumber(averages.average, 2)} note="全部记录的平均分" icon={<Sparkles size={17} />} />
-          <StatCard label="正向关系" value={formatNumber(averages.positive)} note="score > 0" icon={<TrendingUp size={17} />} tone={averages.positive > 0 ? 'success' : undefined} />
-          <StatCard label="负向关系" value={formatNumber(averages.negative)} note="score < 0" icon={<TrendingDown size={17} />} tone={averages.negative > 0 ? 'danger' : undefined} />
+          <StatCard
+            label="记录数"
+            value={formatNumber(averages.count)}
+            note={filterNote}
+            icon={<Users size={15} />}
+          />
+          <StatCard
+            label="平均好感度"
+            value={formatNumber(averages.average, 2)}
+            note="全部记录的平均分"
+            icon={<Sparkles size={15} />}
+          />
+          <StatCard
+            label="正向关系"
+            value={formatNumber(averages.positive)}
+            note="score > 0"
+            icon={<TrendingUp size={15} />}
+            tone={averages.positive > 0 ? 'success' : undefined}
+          />
+          <StatCard
+            label="负向关系"
+            value={formatNumber(averages.negative)}
+            note="score < 0"
+            icon={<TrendingDown size={15} />}
+            tone={averages.negative > 0 ? 'danger' : undefined}
+          />
         </div>
 
         <Panel
           title="好感度记录"
           description={`共 ${rows.length} 条记录 · 当前显示 ${filtered.length} 条`}
+          action={rows.length > 0 ? (
+            <div className="panel-actions">
+              <span className="muted-text nowrap">排序</span>
+              <Select
+                aria-label="排序方式"
+                value={sort}
+                onChange={(event) => setSort(event.target.value as SortKey)}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </Select>
+            </div>
+          ) : undefined}
         >
           <div className="filter-row">
             <label className="search-field">
@@ -219,75 +344,87 @@ export function Affinity({ permissions }: PageProps) {
               aria-label="按 botId 过滤"
               onChange={(event) => setBotIdInput(event.target.value)}
             />
+            {botId && (
+              <Button variant="ghost" onClick={() => setBotIdInput('')}>清除 botId</Button>
+            )}
           </div>
 
+          {incomplete > 0 && (
+            <Notice tone="warning" icon={<AlertTriangle size={15} />}>
+              {incomplete} 条记录缺少分数或用户 ID，已按 “—” 显示。
+            </Notice>
+          )}
+
           <DataState
-            empty={rows.length === 0}
-            emptyTitle="暂无好感度记录"
-            emptyDetail={botId ? `没有匹配 botId = ${botId} 的记录。` : '该系统尚未记录任何用户好感度。'}
+            empty={filtered.length === 0}
+            emptyTitle={emptyTitle}
+            emptyDetail={emptyDetail}
+            onRetry={state.reload}
           >
-            <DataState
-              empty={filtered.length === 0}
-              emptyTitle="没有匹配的用户"
-              emptyDetail="请调整搜索关键字。"
-            >
-              <Table minWidth={880}>
-                <thead>
-                  <tr>
-                    <th>用户</th>
-                    <th>好感度</th>
-                    <th>互动次数</th>
-                    <th>最近原因</th>
-                    <th>更新时间</th>
-                    <th>备注</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((row) => {
-                    const key = `${row.botId}:${row.userId}`;
-                    const notes = row.notes ?? [];
-                    const lastNote = notes.length ? notes[notes.length - 1] : '';
-                    return (
-                      <tr key={key} className="selectable-row">
-                        <td>
-                          <div className="table-primary mono">{row.userId}</div>
-                          <small className="muted-text mono">{row.botId}</small>
-                        </td>
-                        <td>
-                          <div className="row row-between">
-                            <span className="mono">{formatNumber(row.score, 2)}</span>
-                          </div>
-                          <div className={meterClass(row.score)}>
-                            <span style={{ width: `${meterWidth(row.score)}%` }} />
-                          </div>
-                        </td>
-                        <td>{formatNumber(row.interactions ?? 0)}</td>
-                        <td>{reasonLabel(row.lastReason)}</td>
-                        <td title={formatDateTime(row.updatedAt)}>{formatRelative(row.updatedAt)}</td>
-                        <td className="truncate-cell">
-                          {lastNote || '—'}
-                          {notes.length > 1 && <div><small className="muted-text">共 {notes.length} 条备注</small></div>}
-                        </td>
-                        <td className="table-actions">
-                          {canWrite ? (
-                            <Button
-                              variant="ghost"
-                              aria-label={`调整 ${row.userId} 的好感度`}
-                              onClick={() => openAdjust(row)}
-                            >
-                              <SlidersHorizontal size={15} /> 调整
-                            </Button>
-                          ) : (
-                            <span className="muted-text">只读</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Table>
-            </DataState>
+            <Table minWidth={880}>
+              <thead>
+                <tr>
+                  <th>用户</th>
+                  <th>好感度</th>
+                  <th>互动次数</th>
+                  <th>最近原因</th>
+                  <th>更新时间</th>
+                  <th>备注</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((row) => {
+                  const key = `${row.botId}:${row.userId}`;
+                  const notes = Array.isArray(row.notes) ? row.notes : [];
+                  const lastNote = notes.length ? notes[notes.length - 1] : '';
+                  return (
+                    <tr
+                      key={key}
+                      className={canWrite ? 'selectable-row' : undefined}
+                      onClick={canWrite ? () => openAdjust(row) : undefined}
+                    >
+                      <td>
+                        <div className="table-primary mono">{row.userId || '—'}</div>
+                        <small className="muted-text mono">{row.botId || '—'}</small>
+                      </td>
+                      <td className="nowrap">
+                        <span className={scoreClass(row.score)}>{formatNumber(row.score, 2)}</span>
+                        <div className={meterClass(row.score)}>
+                          <span style={{ width: `${meterWidth(row.score)}%` }} />
+                        </div>
+                      </td>
+                      <td className="nowrap">{formatNumber(row.interactions ?? 0)}</td>
+                      <td>
+                        <Pill tone={reasonTone(row.lastReason)}>{reasonLabel(row.lastReason)}</Pill>
+                      </td>
+                      <td className="nowrap" title={formatDateTime(row.updatedAt)}>
+                        {formatRelative(row.updatedAt)}
+                      </td>
+                      <td className="truncate-cell" title={lastNote || undefined}>
+                        {lastNote || '—'}
+                        {notes.length > 1 && (
+                          <div><small className="muted-text">共 {notes.length} 条备注</small></div>
+                        )}
+                      </td>
+                      <td className="table-actions">
+                        {canWrite ? (
+                          <Button
+                            variant="ghost"
+                            aria-label={`调整 ${row.userId} 的好感度`}
+                            onClick={(event) => { event.stopPropagation(); openAdjust(row); }}
+                          >
+                            <SlidersHorizontal size={15} /> 调整
+                          </Button>
+                        ) : (
+                          <span className="muted-text">只读</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
           </DataState>
         </Panel>
       </DataState>
@@ -306,14 +443,14 @@ export function Affinity({ permissions }: PageProps) {
       >
         {formError && <Notice tone="danger">{formError}</Notice>}
         <div className="form-grid">
-          <Field label="botId">
+          <Field label="botId" hint="bot 实例 ID">
             <TextInput
               value={draft.botId}
               placeholder="bot 实例 ID"
               onChange={(event) => setDraft({ ...draft, botId: event.target.value })}
             />
           </Field>
-          <Field label="userId">
+          <Field label="userId" hint="目标用户 ID">
             <TextInput
               value={draft.userId}
               placeholder="目标用户 ID"
@@ -340,6 +477,18 @@ export function Affinity({ permissions }: PageProps) {
               onChange={(event) => setDraft({ ...draft, note: event.target.value })}
             />
           </Field>
+        </div>
+        <div className="row row-wrap mt-2">
+          <span className="muted-text nowrap">快捷增减</span>
+          {DELTA_PRESETS.map((value) => (
+            <Button
+              key={value}
+              variant="ghost"
+              onClick={() => setDraft((current) => ({ ...current, delta: String(value) }))}
+            >
+              {value > 0 ? `+${value}` : value}
+            </Button>
+          ))}
         </div>
       </Modal>
     </>

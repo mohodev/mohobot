@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, FlaskConical, MessageSquare, RefreshCw, Send, ShieldAlert, Sparkles } from 'lucide-react';
+import { Activity, FlaskConical, Gauge, RefreshCw, Send, ShieldAlert } from 'lucide-react';
 import { api, ApiError, body } from '../lib/api';
 import type { BotSnapshot, PageProps } from '../lib/types';
 import { useAsync } from '../lib/hooks';
 import { formatDateTime, formatDuration, formatNumber, prettyJson } from '../lib/format';
 import {
-  Button, DataState, Descriptions, Field, Notice, PageTitle, Panel, Pill, Select, Switch, Tabs, TextArea, TextInput,
+  Button, Collapsible, DataState, Descriptions, Field, Notice, PageTitle, Panel, Pill, Select,
+  StatCard, Switch, Table, Tabs, TextArea, TextInput,
 } from '../components/ui';
 
 /* ------------------------------------------------------------------ *
@@ -53,6 +54,8 @@ interface TranscriptTurn {
   tone?: 'success' | 'warning' | 'danger';
 }
 
+interface BotOption { id: string; label: string }
+
 const EMPTY_CAPABILITIES: DebugCapabilities = {
   bots: [],
   limits: { maxInputChars: 0, timeoutMs: 0, requestsPerMinute: 0 },
@@ -86,6 +89,36 @@ const OUTCOME_LABEL: Record<DebugChatTrace['outcome'], string> = {
   rate_limited: '限流',
   failed: '失败',
 };
+
+/** Bot snapshot ids are the canonical target list; capability ids are the fallback provider view. */
+function snapshotOptions(bots: BotSnapshot[]): BotOption[] {
+  return bots.map((bot) => ({ id: bot.id, label: bot.name ? `${bot.name} (${bot.id})` : bot.id }));
+}
+
+function capabilityOptions(bots: DebugBotCapability[]): BotOption[] {
+  return bots.map((bot) => ({ id: bot.id, label: `${bot.id} · ${bot.model}` }));
+}
+
+/**
+ * Resolves the selectable options once, honouring the existing precedence:
+ * the live `/api/bots` snapshot wins, the debug capability snapshot is the
+ * fallback. Shared by the chat and dry-run tabs so both offer the same targets.
+ */
+function useBotOptions(bots: BotSnapshot[], capabilities: DebugBotCapability[]): BotOption[] {
+  return useMemo(
+    () => (bots.length > 0 ? snapshotOptions(bots) : capabilityOptions(capabilities)),
+    [bots, capabilities],
+  );
+}
+
+/** Selects the first option once, without clobbering a later user choice. */
+function useAutoSelectFirst(botId: string, options: BotOption[], setBotId: (id: string) => void): void {
+  useEffect(() => {
+    if (botId || options.length === 0) return;
+    const first = options[0];
+    if (first) setBotId(first.id);
+  }, [botId, options, setBotId]);
+}
 
 export function Debug({ permissions }: PageProps) {
   const [tab, setTab] = useState<DebugTab>('chat');
@@ -123,6 +156,7 @@ export function Debug({ permissions }: PageProps) {
       {tab === 'chat' && (
         <ChatTab
           capabilities={capabilities}
+          limitsKnown={Boolean(caps.data)}
           bots={botSnapshots}
           loading={caps.loading && !caps.data}
           error={caps.error}
@@ -134,7 +168,9 @@ export function Debug({ permissions }: PageProps) {
       {tab === 'dryrun' && (
         <DryRunTab
           bots={botSnapshots}
-          botsLoading={bots.loading && !bots.data}
+          loading={bots.loading && !bots.data}
+          error={bots.error}
+          onRetry={bots.reload}
           canDryRun={canDryRun}
         />
       )}
@@ -154,8 +190,9 @@ export function Debug({ permissions }: PageProps) {
 
 /* ----------------------------- Chat tab ----------------------------- */
 
-function ChatTab({ capabilities, bots, loading, error, onRetry, canChat }: {
+function ChatTab({ capabilities, limitsKnown, bots, loading, error, onRetry, canChat }: {
   capabilities: DebugCapabilities;
+  limitsKnown: boolean;
   bots: BotSnapshot[];
   loading: boolean;
   error: string;
@@ -169,22 +206,16 @@ function ChatTab({ capabilities, bots, loading, error, onRetry, canChat }: {
   const [inlineError, setInlineError] = useState('');
   const nextId = useRef(1);
 
-  const options = useMemo(() => {
-    if (bots.length > 0) {
-      return bots.map((bot) => ({ id: bot.id, label: bot.name ? `${bot.name} (${bot.id})` : bot.id }));
-    }
-    return capabilities.bots.map((bot) => ({ id: bot.id, label: `${bot.id} · ${bot.model}` }));
-  }, [bots, capabilities.bots]);
-
-  useEffect(() => {
-    if (botId || options.length === 0) return;
-    const first = options[0];
-    if (first) setBotId(first.id);
-  }, [botId, options]);
+  const options = useBotOptions(bots, capabilities.bots);
+  useAutoSelectFirst(botId, options, setBotId);
 
   const maxChars = capabilities.limits.maxInputChars || 4000;
   const selected = capabilities.bots.find((bot) => bot.id === botId);
   const overLimit = content.length > maxChars;
+
+  const counterHint = limitsKnown
+    ? `${formatNumber(content.length)} / ${formatNumber(maxChars)} 字符，单账号 ${formatNumber(capabilities.limits.requestsPerMinute)} 次/分钟`
+    : `${formatNumber(content.length)} 字符`;
 
   async function send() {
     const trimmed = content.trim();
@@ -234,7 +265,14 @@ function ChatTab({ capabilities, bots, loading, error, onRetry, canChat }: {
         这是管理员调试通道，并非面向用户的聊天产品。回复来自隔离的调试上下文，不接入 Discord、私聊记忆、会话或世界/设备状态。
       </Notice>
 
-      <DataState loading={loading} error={error} onRetry={onRetry}>
+      <DataState
+        loading={loading}
+        error={error}
+        empty={options.length === 0}
+        emptyTitle="没有可调试的 Bot"
+        emptyDetail="GET /api/bots 与调试能力快照都未返回 Bot，请确认 Provider 与 Bot 已配置。"
+        onRetry={onRetry}
+      >
         <div className="detail-split">
           <Panel
             title="对话记录"
@@ -278,7 +316,7 @@ function ChatTab({ capabilities, bots, loading, error, onRetry, canChat }: {
             </Field>
             <Field
               label="调试内容"
-              hint={`${formatNumber(content.length)} / ${formatNumber(maxChars)} 字符，单账号 ${formatNumber(capabilities.limits.requestsPerMinute)} 次/分钟`}
+              hint={counterHint}
               error={overLimit ? '已超过输入上限' : undefined}
             >
               <TextArea
@@ -307,9 +345,11 @@ function ChatTab({ capabilities, bots, loading, error, onRetry, canChat }: {
 
 /* ---------------------------- Dry-run tab --------------------------- */
 
-function DryRunTab({ bots, botsLoading, canDryRun }: {
+function DryRunTab({ bots, loading, error, onRetry, canDryRun }: {
   bots: BotSnapshot[];
-  botsLoading: boolean;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
   canDryRun: boolean;
 }) {
   const [botId, setBotId] = useState('');
@@ -324,16 +364,8 @@ function DryRunTab({ bots, botsLoading, canDryRun }: {
   const [inlineError, setInlineError] = useState('');
   const [result, setResult] = useState<DryRunResult | null>(null);
 
-  const options = useMemo(() => bots.map((bot) => ({
-    id: bot.id,
-    label: bot.name ? `${bot.name} (${bot.id})` : bot.id,
-  })), [bots]);
-
-  useEffect(() => {
-    if (botId || options.length === 0) return;
-    const first = options[0];
-    if (first) setBotId(first.id);
-  }, [botId, options]);
+  const options = useMemo(() => snapshotOptions(bots), [bots]);
+  useAutoSelectFirst(botId, options, setBotId);
 
   const parsedReplies = Number(recentReplies);
   const repliesValid = Number.isSafeInteger(parsedReplies) && parsedReplies >= 0 && parsedReplies <= 100;
@@ -373,84 +405,103 @@ function DryRunTab({ bots, botsLoading, canDryRun }: {
   }
 
   return (
-    <DataState loading={botsLoading}>
+    <>
       <Notice tone="info" icon={<FlaskConical size={17} />}>
         Dry-run 只读取世界/设备/好感度快照后计算社交决策，不会写入任何状态，也不会真的回复消息。
       </Notice>
 
-      <div className="detail-split">
-        <Panel title="决策输入" description="字段与服务端 parseBehaviorDryRun 的校验一致。">
-          {!canDryRun && (
-            <Notice tone="warning" icon={<ShieldAlert size={17} />}>
-              只读：当前账号缺少 behavior.dry-run 权限，无法执行预览。
-            </Notice>
-          )}
-          <div className="form-grid">
-            <Field label="Bot">
-              <Select value={botId} onChange={(event) => setBotId(event.target.value)} disabled={!canDryRun}>
-                <option value="">请选择 Bot</option>
-                {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </Select>
-            </Field>
-            <Field label="userId">
-              <TextInput value={userId} onChange={(event) => setUserId(event.target.value)} disabled={!canDryRun} />
-            </Field>
-            <Field label="channelId" hint="例如 dm:debug-user 或频道 ID">
-              <TextInput value={channelId} onChange={(event) => setChannelId(event.target.value)} disabled={!canDryRun} />
-            </Field>
-            <Field label="guildId" hint="可选，留空则按私聊/无公会处理">
-              <TextInput value={guildId} onChange={(event) => setGuildId(event.target.value)} disabled={!canDryRun} />
-            </Field>
-            <Field label="recentReplies" error={repliesValid ? undefined : '必须是 0-100 的整数'}>
-              <TextInput
-                type="number"
-                min={0}
-                max={100}
-                value={recentReplies}
-                onChange={(event) => setRecentReplies(event.target.value)}
-                disabled={!canDryRun}
-              />
-            </Field>
-          </div>
-          <Field label="消息内容">
-            <TextArea value={content} onChange={(event) => setContent(event.target.value)} disabled={!canDryRun} rows={3} />
-          </Field>
-          <div className="row row-wrap mt-2">
-            <Switch checked={dm} onChange={setDm} disabled={!canDryRun} label="私聊（dm）" />
-            <Switch checked={mentionsBot} onChange={setMentionsBot} disabled={!canDryRun} label="@ 提及机器人" />
-          </div>
-          {inlineError && <div className="inline-error">{inlineError}</div>}
-          <div className="table-actions mt-3">
-            <Button variant="primary" onClick={() => void run()} busy={busy} disabled={!canDryRun}>
-              <Activity size={15} /> 运行 Dry-run
-            </Button>
-          </div>
-        </Panel>
-
-        <Panel title="决策结果" description="来自 POST /api/behavior/dry-run 的 result。">
-          {!result
-            ? <div className="muted-text">尚未运行。填写左侧输入并点击“运行 Dry-run”。</div>
-            : (
-              <>
-                <Descriptions columns={1} items={[
-                  { label: '决策', value: <Pill tone={result.decision.action === 'reply' ? 'success' : 'neutral'}>{result.decision.action === 'reply' ? '回复' : '忽略'}</Pill> },
-                  { label: '紧急度', value: result.decision.urgency },
-                  { label: '原因', value: <span className="mono">{result.decision.reason}</span> },
-                  { label: '能量 energy', value: formatNumber(result.inputs.energy, 2) },
-                  { label: '压力 stress', value: formatNumber(result.inputs.stress, 2) },
-                  { label: '设备延迟 deviceDelay', value: result.inputs.deviceDelay ? '是' : '否' },
-                  { label: '好感度 affinity', value: formatNumber(result.inputs.affinity, 2) },
-                  { label: '近期回复 recentReplies', value: formatNumber(result.inputs.recentReplies) },
-                ]} />
-                <details className="schema-details mt-3">
-                  <summary>原始 result JSON</summary>
-                  <pre className="json-view">{prettyJson(result)}</pre>
-                </details>
-              </>
+      <DataState
+        loading={loading}
+        error={error}
+        empty={options.length === 0}
+        emptyTitle="没有可预览的 Bot"
+        emptyDetail="GET /api/bots 未返回任何 Bot，无法构造 Dry-run 目标。"
+        onRetry={onRetry}
+      >
+        <div className="detail-split">
+          <Panel title="决策输入" description="字段与服务端 parseBehaviorDryRun 的校验一致。">
+            {!canDryRun && (
+              <Notice tone="warning" icon={<ShieldAlert size={17} />}>
+                只读：当前账号缺少 behavior.dry-run 权限，无法执行预览。
+              </Notice>
             )}
-        </Panel>
-      </div>
-    </DataState>
+            <div className="form-grid">
+              <Field label="Bot">
+                <Select value={botId} onChange={(event) => setBotId(event.target.value)} disabled={!canDryRun}>
+                  <option value="">请选择 Bot</option>
+                  {options.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </Select>
+              </Field>
+              <Field label="userId">
+                <TextInput value={userId} onChange={(event) => setUserId(event.target.value)} disabled={!canDryRun} />
+              </Field>
+              <Field label="channelId" hint="例如 dm:debug-user 或频道 ID">
+                <TextInput value={channelId} onChange={(event) => setChannelId(event.target.value)} disabled={!canDryRun} />
+              </Field>
+              <Field label="guildId" hint="可选，留空则按私聊/无公会处理">
+                <TextInput value={guildId} onChange={(event) => setGuildId(event.target.value)} disabled={!canDryRun} />
+              </Field>
+              <Field label="recentReplies" error={repliesValid ? undefined : '必须是 0-100 的整数'}>
+                <TextInput
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={recentReplies}
+                  onChange={(event) => setRecentReplies(event.target.value)}
+                  disabled={!canDryRun}
+                />
+              </Field>
+            </div>
+            <Field label="消息内容">
+              <TextArea value={content} onChange={(event) => setContent(event.target.value)} disabled={!canDryRun} rows={3} />
+            </Field>
+            <div className="row row-wrap mt-2">
+              <Switch checked={dm} onChange={setDm} disabled={!canDryRun} label="私聊（dm）" />
+              <Switch checked={mentionsBot} onChange={setMentionsBot} disabled={!canDryRun} label="@ 提及机器人" />
+            </div>
+            {inlineError && <div className="inline-error">{inlineError}</div>}
+            <div className="table-actions mt-3">
+              <Button variant="primary" onClick={() => void run()} busy={busy} disabled={!canDryRun}>
+                <Activity size={15} /> 运行 Dry-run
+              </Button>
+            </div>
+          </Panel>
+
+          <Panel title="决策结果" description="来自 POST /api/behavior/dry-run 的 result。">
+            {!result
+              ? <div className="muted-text">尚未运行。填写左侧输入并点击“运行 Dry-run”。</div>
+              : (
+                <>
+                  <div className="row-between">
+                    <div className="row">
+                      <Pill tone={result.decision.action === 'reply' ? 'success' : 'neutral'}>
+                        {result.decision.action === 'reply' ? '回复' : '忽略'}
+                      </Pill>
+                      <Pill tone="neutral">{result.decision.urgency}</Pill>
+                    </div>
+                    <small className="muted-text">决策 / 紧急度</small>
+                  </div>
+                  <p className="mt-2"><span className="muted-text">原因：</span><span className="mono">{result.decision.reason}</span></p>
+
+                  <Descriptions columns={2} items={[
+                    { label: '能量 energy', value: formatNumber(result.inputs.energy, 2) },
+                    { label: '压力 stress', value: formatNumber(result.inputs.stress, 2) },
+                    { label: '好感度 affinity', value: formatNumber(result.inputs.affinity, 2) },
+                    { label: '近期回复 recentReplies', value: formatNumber(result.inputs.recentReplies) },
+                    { label: '设备延迟 deviceDelay', value: result.inputs.deviceDelay ? '是' : '否' },
+                    { label: '私聊 dm', value: result.inputs.dm ? '是' : '否' },
+                    { label: '@ 提及 mentionsBot', value: result.inputs.mentionsBot ? '是' : '否' },
+                  ]} />
+
+                  <Collapsible title="原始 result JSON">
+                    <pre className="json-view">{prettyJson(result)}</pre>
+                  </Collapsible>
+                </>
+              )}
+          </Panel>
+        </div>
+      </DataState>
+    </>
   );
 }
 
@@ -466,15 +517,8 @@ function CapabilitiesTab({ capabilities, loading, error, onRetry, canChat }: {
   const available = capabilities.bots.filter((bot) => bot.available).length;
 
   return (
-    <DataState
-      loading={loading}
-      error={error}
-      empty={capabilities.bots.length === 0}
-      emptyTitle="没有可用的调试模型"
-      emptyDetail="调试能力快照未返回任何 Bot，请确认 Provider 已配置。"
-      onRetry={onRetry}
-    >
-      <Notice tone="info" icon={<Sparkles size={17} />}>
+    <>
+      <Notice tone="info" icon={<Gauge size={17} />}>
         只读快照：以下数据来自 GET /api/debug/chat/capabilities，不代表真实会话能力。
       </Notice>
 
@@ -484,37 +528,41 @@ function CapabilitiesTab({ capabilities, loading, error, onRetry, canChat }: {
         </Notice>
       )}
 
-      <div className="detail-split">
-        <Panel title="调试 Bot" description={`${capabilities.bots.length} 个候选，其中 ${available} 个可用`} flush>
-          <div className="table-scroll">
-            <table className="data-table">
-              <thead><tr><th>Bot</th><th>调试模型</th><th>可用性</th></tr></thead>
-              <tbody>
-                {capabilities.bots.map((bot) => (
-                  <tr key={bot.id}>
-                    <td><span className="mono">{bot.id}</span></td>
-                    <td><span className="mono">{bot.model}</span></td>
-                    <td>{bot.available ? <Pill tone="success">可用</Pill> : <Pill tone="danger">不可用</Pill>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
+      <DataState
+        loading={loading}
+        error={error}
+        empty={capabilities.bots.length === 0}
+        emptyTitle="没有可用的调试模型"
+        emptyDetail="调试能力快照未返回任何 Bot，请确认 Provider 已配置。"
+        onRetry={onRetry}
+      >
+        <div className="stat-grid">
+          <StatCard label="最大输入字符" value={formatNumber(capabilities.limits.maxInputChars)} note="单条调试消息上限" />
+          <StatCard label="单次超时" value={formatDuration(capabilities.limits.timeoutMs)} note="超时按失败记录 trace" />
+          <StatCard label="每分钟请求上限" value={formatNumber(capabilities.limits.requestsPerMinute)} note="按管理员账号限流" />
+          <StatCard
+            label="可用 Bot"
+            value={`${formatNumber(available)} / ${formatNumber(capabilities.bots.length)}`}
+            tone={available === 0 ? 'danger' : undefined}
+            note="调试聊天按账号限流，失败会记录 trace 且不写入会话"
+          />
+        </div>
 
-        <Panel title="调试限制" description="服务端调试通道的边界。">
-          <Descriptions columns={1} items={[
-            { label: '最大输入字符', value: formatNumber(capabilities.limits.maxInputChars) },
-            { label: '单次超时', value: formatDuration(capabilities.limits.timeoutMs) },
-            { label: '每分钟请求上限', value: formatNumber(capabilities.limits.requestsPerMinute) },
-            { label: '可用 Bot 数', value: `${formatNumber(available)} / ${formatNumber(capabilities.bots.length)}` },
-          ]} />
-          <div className="row mt-3">
-            <MessageSquare size={15} />
-            <span className="muted-text">调试聊天按账号限流，失败会记录 trace 且不写入会话。</span>
-          </div>
+        <Panel title="调试 Bot" description={`${capabilities.bots.length} 个候选，其中 ${available} 个可用。`}>
+          <Table minWidth={520}>
+            <thead><tr><th>Bot</th><th>调试模型</th><th>可用性</th></tr></thead>
+            <tbody>
+              {capabilities.bots.map((bot) => (
+                <tr key={bot.id}>
+                  <td className="table-primary mono">{bot.id}</td>
+                  <td className="mono">{bot.model}</td>
+                  <td>{bot.available ? <Pill tone="success">可用</Pill> : <Pill tone="danger">不可用</Pill>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
         </Panel>
-      </div>
-    </DataState>
+      </DataState>
+    </>
   );
 }

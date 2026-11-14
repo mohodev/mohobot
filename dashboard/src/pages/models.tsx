@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  AlertTriangle, Boxes, Cpu, HeartPulse, RefreshCw, Search, Sparkles,
+  Activity, AlertTriangle, Boxes, Cpu, HeartPulse, RefreshCw, Search, Zap,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import type { PageProps } from '../lib/types';
@@ -128,6 +128,7 @@ interface ModelsData {
 }
 
 type ModelsTab = 'catalog' | 'health' | 'ops';
+type EndpointFilter = 'all' | 'free';
 
 const TAB_VALUES: ModelsTab[] = ['catalog', 'health', 'ops'];
 
@@ -449,6 +450,120 @@ function contextLabel(value: number | undefined): string {
   return value === undefined ? '—' : formatNumber(value);
 }
 
+function endpointPill(value: boolean | undefined) {
+  if (value === undefined) return <span className="muted-text">—</span>;
+  return value ? <Pill tone="success">免费</Pill> : <Pill tone="neutral">付费</Pill>;
+}
+
+/* --------------------- shared health/catalog tables ---------------- *
+ * Every model-health surface (per-bot health, usage drill-down,
+ * provider drill-down) renders the same columns, so they share one
+ * table with optional Profile and 延迟 columns. The catalog and its
+ * task recommendations share one table with optional 能力/端点 columns.
+ * ------------------------------------------------------------------ */
+
+interface HealthRow {
+  key: string;
+  model: string;
+  availability: string;
+  circuit?: string;
+  latencyMs?: number;
+  failures: number;
+}
+
+function profileRows(bot: BotHealthView): HealthRow[] {
+  return bot.profiles.map((profile) => ({
+    key: profile.key,
+    model: profile.modelId,
+    availability: profile.availability,
+    circuit: profile.circuit,
+    latencyMs: profile.latencyMs,
+    failures: profile.consecutiveFailures,
+  }));
+}
+
+function operationRows(models: ModelOperationView[]): HealthRow[] {
+  return models.map((model) => ({
+    key: model.profileId,
+    model: model.modelId,
+    availability: model.availability,
+    circuit: model.circuit,
+    latencyMs: model.latencyMs,
+    failures: model.consecutiveFailures,
+  }));
+}
+
+function HealthTable({ rows, minWidth = 620, showProfile = false, showLatency = true }: {
+  rows: HealthRow[];
+  minWidth?: number;
+  showProfile?: boolean;
+  showLatency?: boolean;
+}) {
+  return (
+    <Table minWidth={minWidth}>
+      <thead>
+        <tr>
+          {showProfile && <th>Profile</th>}
+          <th>模型</th>
+          <th>可用性</th>
+          <th>熔断</th>
+          {showLatency && <th>延迟</th>}
+          <th>连续失败</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key}>
+            {showProfile && <td className="mono">{row.key}</td>}
+            <td className="mono truncate-cell" title={row.model}>{row.model}</td>
+            <td>{availabilityPill(row.availability)}</td>
+            <td>{row.circuit ? circuitPill(row.circuit) : '—'}</td>
+            {showLatency && <td className="nowrap">{row.latencyMs === undefined ? '—' : `${formatNumber(row.latencyMs)} ms`}</td>}
+            <td>{formatNumber(row.failures)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
+function CatalogTable({ models, minWidth, showCapabilities = true, showEndpoint = false }: {
+  models: CatalogModelView[];
+  minWidth: number;
+  showCapabilities?: boolean;
+  showEndpoint?: boolean;
+}) {
+  return (
+    <Table minWidth={minWidth}>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>供应商</th>
+          {showCapabilities && <th>能力</th>}
+          <th>上下文长度</th>
+          <th>模型 ID</th>
+          {showEndpoint && <th>端点</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {models.map((model) => (
+          <tr key={model.id}>
+            <td>
+              <div className="table-primary">{model.name}</div>
+              {model.description && <small className="muted-text">{model.description}</small>}
+            </td>
+            <td>{model.provider}</td>
+            {showCapabilities && <td>{model.capabilities.length ? model.capabilities.join('、') : '—'}</td>}
+            <td className="nowrap">{contextLabel(model.contextLength)}</td>
+            <td className="mono truncate-cell" title={model.id}>{model.id}</td>
+            {showEndpoint && <td>{endpointPill(model.freeEndpoint)}</td>}
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
 /* ------------------------------ page ------------------------------ */
 
 export function Models({}: PageProps) {
@@ -467,20 +582,25 @@ export function Models({}: PageProps) {
   const healthBots = data?.healthBots ?? [];
 
   const [query, setQuery] = useState('');
+  const [endpoint, setEndpoint] = useState<EndpointFilter>('all');
   const needle = query.trim().toLowerCase();
   const filteredModels = useMemo(() => {
-    if (!needle) return models;
-    return models.filter((model) => (
+    const scoped = endpoint === 'free' ? models.filter((model) => model.freeEndpoint === true) : models;
+    if (!needle) return scoped;
+    return scoped.filter((model) => (
       [model.name, model.id, model.provider, ...model.capabilities]
         .some((field) => field.toLowerCase().includes(needle))
     ));
-  }, [models, needle]);
+  }, [models, needle, endpoint]);
 
   const healthProfiles = useMemo(() => healthBots.flatMap((bot) => bot.profiles), [healthBots]);
   const availableProfiles = healthProfiles.filter((profile) => profile.availability === 'available').length;
+  const openCircuits = healthProfiles.filter((profile) => profile.circuit && profile.circuit !== 'closed').length;
   const configuredBots = healthBots.filter((bot) => bot.configured).length;
   const providerCount = dashboard?.providers.length
     ?? new Set(models.map((model) => model.provider)).size;
+
+  const fallbackEvents = dashboard?.events.filter((event) => event.kind === 'fallback').length;
 
   const usageState = useAsync(async () => {
     if (!selectedBot) return undefined;
@@ -493,6 +613,31 @@ export function Models({}: PageProps) {
   }, [selectedProvider], '读取供应商健康失败');
 
   const reload = () => state.reload();
+
+  const healthTone: 'success' | 'warning' | 'danger' | undefined =
+    healthProfiles.length === 0
+      ? undefined
+      : availableProfiles === healthProfiles.length
+        ? 'success'
+        : availableProfiles === 0
+          ? 'danger'
+          : 'warning';
+
+  const circuitAlertTone: 'success' | 'warning' | 'danger' | undefined =
+    healthProfiles.length === 0 ? undefined : openCircuits > 0 ? 'danger' : 'success';
+
+  const catalogNote = catalog?.totalModels !== undefined
+    ? `条目 ${formatNumber(catalog.models.length)} / 收录 ${formatNumber(catalog.totalModels)}`
+    : '来自模型目录快照';
+
+  const catalogDescription = catalog
+    ? [
+      `${formatNumber(catalog.models.length)} 个条目`,
+      catalog.freeEndpointCount !== undefined ? `免费端点 ${formatNumber(catalog.freeEndpointCount)}` : undefined,
+      `来源 ${catalog.source ?? '—'}`,
+      `抓取于 ${formatRelative(catalog.fetchedAt)}`,
+    ].filter(Boolean).join(' · ')
+    : '尚未加载目录快照。';
 
   return (
     <>
@@ -512,29 +657,37 @@ export function Models({}: PageProps) {
       <DataState loading={state.loading && !data} error={state.error} onRetry={reload}>
         <div className="stat-grid">
           <StatCard
-            label="目录模型数"
-            value={formatNumber(catalog?.models.length ?? 0)}
-            note={catalog?.totalModels !== undefined ? `条目 ${formatNumber(catalog.models.length)} / 收录 ${formatNumber(catalog.totalModels)}` : '来自模型目录快照'}
-            icon={<Cpu size={17} />}
+            label="模型可用"
+            value={healthProfiles.length ? `${availableProfiles}/${healthProfiles.length}` : (configuredBots ? '无探测' : '未配置')}
+            note={healthProfiles.length ? `已探测 ${formatNumber(healthProfiles.length)} 个模型` : '尚未返回健康探测'}
+            icon={<HeartPulse size={17} />}
+            tone={healthTone}
           />
           <StatCard
-            label="健康状态"
-            value={healthProfiles.length ? `${availableProfiles}/${healthProfiles.length}` : (configuredBots ? '无探测' : '未配置')}
-            note={healthProfiles.length ? '可用 / 已探测模型' : '尚未返回健康探测'}
-            icon={<HeartPulse size={17} />}
-            tone={healthProfiles.length === 0 ? undefined : availableProfiles === healthProfiles.length ? 'success' : availableProfiles === 0 ? 'danger' : 'warning'}
+            label="熔断中"
+            value={healthProfiles.length ? formatNumber(openCircuits) : '—'}
+            note={healthProfiles.length ? (openCircuits > 0 ? '存在断开 / 半开熔断' : '全部熔断闭合') : '尚无健康探测'}
+            icon={<Zap size={17} />}
+            tone={circuitAlertTone}
+          />
+          <StatCard
+            label="回退事件"
+            value={dashboard ? formatNumber(fallbackEvents ?? 0) : '—'}
+            note={dashboard ? `近 ${formatNumber(dashboard.events.length)} 条运营事件` : '暂无运营快照'}
+            icon={<Activity size={17} />}
+            tone={fallbackEvents ? 'warning' : undefined}
+          />
+          <StatCard
+            label="目录模型数"
+            value={formatNumber(catalog?.models.length ?? 0)}
+            note={catalogNote}
+            icon={<Cpu size={17} />}
           />
           <StatCard
             label="Provider 数"
             value={formatNumber(providerCount)}
             note={dashboard ? '运营看板聚合' : '目录去重统计'}
             icon={<Boxes size={17} />}
-          />
-          <StatCard
-            label="任务推荐数"
-            value={formatNumber(data?.recommendations.length ?? 0)}
-            note={task ? `任务 ${task}` : '选择任务后给出推荐'}
-            icon={<Sparkles size={17} />}
           />
         </div>
 
@@ -559,13 +712,9 @@ export function Models({}: PageProps) {
 
         {activeTab === 'catalog' && (
           <>
-            <Panel
-              title="模型目录"
-              description={catalog
-                ? `${formatNumber(catalog.models.length)} 个条目 · 来源 ${catalog.source ?? '—'} · 抓取于 ${formatRelative(catalog.fetchedAt)}`
-                : '尚未加载目录快照。'}
-              action={
-                <label className="search-field">
+            <Panel title="模型目录" description={catalogDescription}>
+              <div className="toolbar">
+                <label className="search-field grow">
                   <Search size={14} />
                   <TextInput
                     value={query}
@@ -574,39 +723,25 @@ export function Models({}: PageProps) {
                     aria-label="搜索模型目录"
                   />
                 </label>
-              }
-            >
+                <Field label="端点">
+                  <Select
+                    value={endpoint}
+                    onChange={(event) => setEndpoint(event.target.value as EndpointFilter)}
+                    aria-label="端点筛选"
+                  >
+                    <option value="all">全部端点</option>
+                    <option value="free">仅免费端点</option>
+                  </Select>
+                </Field>
+              </div>
               <DataState
                 error={data?.catalogError}
                 empty={filteredModels.length === 0}
-                emptyTitle={needle ? '没有匹配的模型' : '目录为空'}
-                emptyDetail={needle ? '尝试更换关键词。' : '模型目录尚未收录任何条目。'}
+                emptyTitle={needle || endpoint === 'free' ? '没有匹配的模型' : '目录为空'}
+                emptyDetail={needle || endpoint === 'free' ? '尝试更换关键词或清除端点筛选。' : '模型目录尚未收录任何条目。'}
                 onRetry={reload}
               >
-                <Table minWidth={860}>
-                  <thead>
-                    <tr>
-                      <th>名称</th>
-                      <th>供应商</th>
-                      <th>上下文长度</th>
-                      <th>模型 ID</th>
-                      <th>能力</th>
-                      <th>免费端点</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredModels.map((model) => (
-                      <tr key={model.id}>
-                        <td><div className="table-primary">{model.name}</div>{model.description && <small className="muted-text">{model.description}</small>}</td>
-                        <td>{model.provider}</td>
-                        <td>{contextLabel(model.contextLength)}</td>
-                        <td className="mono truncate-cell" title={model.id}>{model.id}</td>
-                        <td>{model.capabilities.length ? model.capabilities.join('、') : '—'}</td>
-                        <td>{model.freeEndpoint === undefined ? '—' : model.freeEndpoint ? <Pill tone="success">是</Pill> : <Pill tone="neutral">否</Pill>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <CatalogTable models={filteredModels} minWidth={900} showEndpoint />
               </DataState>
             </Panel>
 
@@ -617,20 +752,10 @@ export function Models({}: PageProps) {
                   ? `任务 ${task} 的推荐模型 ${formatNumber(data.recommendations.length)} 个`
                   : `任务 ${task} 暂无推荐模型`}
               >
-                {data?.recommendations.length ? (
-                  <Table minWidth={720}>
-                    <thead><tr><th>名称</th><th>供应商</th><th>上下文长度</th><th>模型 ID</th></tr></thead>
-                    <tbody>
-                      {data.recommendations.map((model) => (
-                        <tr key={model.id}>
-                          <td><div className="table-primary">{model.name}</div></td>
-                          <td>{model.provider}</td>
-                          <td>{contextLabel(model.contextLength)}</td>
-                          <td className="mono truncate-cell" title={model.id}>{model.id}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
+                {data?.catalogError ? (
+                  <ErrorState message={data.catalogError} retry={reload} />
+                ) : data?.recommendations.length ? (
+                  <CatalogTable models={data.recommendations} minWidth={720} />
                 ) : (
                   <EmptyState title="暂无推荐" detail="该任务在当前目录与可用性下没有匹配模型。" />
                 )}
@@ -647,43 +772,36 @@ export function Models({}: PageProps) {
               <EmptyState title="暂无健康探测" detail="模型健康协调器尚未返回任何探测结果。" />
             ) : (
               <div className="col">
-                {healthBots.map((bot) => (
-                  <Collapsible
-                    key={bot.botId}
-                    title={bot.botId}
-                    defaultOpen={healthBots.length === 1}
-                    meta={<span className="muted-text">{bot.configured ? `${formatNumber(bot.profiles.length)} 个 profile` : '未配置'}</span>}
-                  >
-                    {!bot.configured ? (
-                      <Notice tone="info" icon={<HeartPulse size={16} />}>该机器人未启用模型健康探测。</Notice>
-                    ) : bot.profiles.length === 0 ? (
-                      <EmptyState title="无探测记录" detail="此目标暂未返回 profile 健康数据。" />
-                    ) : (
-                      <>
-                        <Descriptions columns={2} items={[
-                          { label: 'Profile 数', value: formatNumber(bot.profiles.length) },
-                          { label: '可用 Profile', value: formatNumber(bot.profiles.filter((profile) => profile.availability === 'available').length) },
-                          { label: '快照时间', value: bot.generatedAt ? formatRelative(bot.generatedAt) : '—' },
-                        ]} />
-                        <Table minWidth={640}>
-                          <thead><tr><th>Profile</th><th>模型</th><th>可用性</th><th>熔断</th><th>延迟</th><th>连续失败</th></tr></thead>
-                          <tbody>
-                            {bot.profiles.map((profile) => (
-                              <tr key={`${bot.botId}:${profile.key}`}>
-                                <td className="mono">{profile.key}</td>
-                                <td className="mono truncate-cell" title={profile.modelId}>{profile.modelId}</td>
-                                <td>{availabilityPill(profile.availability)}</td>
-                                <td>{profile.circuit ? circuitPill(profile.circuit) : '—'}</td>
-                                <td>{profile.latencyMs === undefined ? '—' : `${formatNumber(profile.latencyMs)} ms`}</td>
-                                <td>{formatNumber(profile.consecutiveFailures)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </Table>
-                      </>
-                    )}
-                  </Collapsible>
-                ))}
+                {healthBots.map((bot) => {
+                  const rows = profileRows(bot);
+                  const available = bot.profiles.filter((profile) => profile.availability === 'available').length;
+                  const open = bot.profiles.filter((profile) => profile.circuit && profile.circuit !== 'closed').length;
+                  const needsAttention = available < bot.profiles.length || open > 0;
+                  return (
+                    <Collapsible
+                      key={bot.botId}
+                      title={bot.botId}
+                      defaultOpen={healthBots.length === 1 || needsAttention}
+                      meta={<span className="muted-text">{bot.configured ? `可用 ${formatNumber(available)}/${formatNumber(bot.profiles.length)}` : '未配置'}</span>}
+                    >
+                      {!bot.configured ? (
+                        <Notice tone="info" icon={<HeartPulse size={16} />}>该机器人未启用模型健康探测。</Notice>
+                      ) : rows.length === 0 ? (
+                        <EmptyState title="无探测记录" detail="此目标暂未返回 profile 健康数据。" />
+                      ) : (
+                        <>
+                          <Descriptions columns={2} items={[
+                            { label: 'Profile 数', value: formatNumber(bot.profiles.length) },
+                            { label: '可用 Profile', value: formatNumber(available) },
+                            { label: '熔断', value: open > 0 ? <Pill tone="warning">{formatNumber(open)} 个</Pill> : <Pill tone="success">正常</Pill> },
+                            { label: '快照时间', value: bot.generatedAt ? formatRelative(bot.generatedAt) : '—' },
+                          ]} />
+                          <HealthTable rows={rows} minWidth={640} showProfile />
+                        </>
+                      )}
+                    </Collapsible>
+                  );
+                })}
               </div>
             )}
           </Panel>
@@ -701,8 +819,6 @@ export function Models({}: PageProps) {
                   <Descriptions columns={3} items={[
                     { label: 'Bot 数', value: `${formatNumber(dashboard.totals.running)}/${formatNumber(dashboard.totals.bots)} 运行` },
                     { label: '模型数', value: `${formatNumber(dashboard.totals.availableModels)}/${formatNumber(dashboard.totals.models)} 可用` },
-                    { label: '回退事件', value: formatNumber(dashboard.events.filter((event) => event.kind === 'fallback').length) },
-                    { label: '熔断事件', value: formatNumber(dashboard.events.filter((event) => event.kind === 'circuit').length) },
                     { label: 'Provider 数', value: formatNumber(dashboard.providers.length) },
                     { label: '事件数', value: formatNumber(dashboard.events.length) },
                   ]} />
@@ -718,7 +834,7 @@ export function Models({}: PageProps) {
                       <thead><tr><th>实例</th><th>Provider</th><th>模型</th><th>状态</th><th>会话</th><th>模型数</th><th>熔断</th><th></th></tr></thead>
                       <tbody>
                         {dashboard.bots.map((bot) => {
-                          const openCircuits = bot.healthModels.filter((model) => model.circuit !== 'closed').length;
+                          const openC = bot.healthModels.filter((model) => model.circuit !== 'closed').length;
                           return (
                             <tr key={bot.botId} className="selectable-row">
                               <td><div className="table-primary">{bot.botName}</div><small className="muted-text mono">{bot.botId}</small></td>
@@ -727,7 +843,7 @@ export function Models({}: PageProps) {
                               <td>{bot.running ? <Pill tone="success">运行中</Pill> : <Pill tone="danger">已停止</Pill>}</td>
                               <td>{formatNumber(bot.sessions)}</td>
                               <td>{formatNumber(bot.healthModels.length)}</td>
-                              <td>{openCircuits === 0 ? <Pill tone="success">正常</Pill> : <Pill tone="warning">{formatNumber(openCircuits)} 个</Pill>}</td>
+                              <td>{openC === 0 ? <Pill tone="success">正常</Pill> : <Pill tone="warning">{formatNumber(openC)} 个</Pill>}</td>
                               <td className="table-actions">
                                 <Button variant="ghost" onClick={() => setSelectedBot(bot.botId)}>用量</Button>
                               </td>
@@ -753,7 +869,7 @@ export function Models({}: PageProps) {
                             <td className="table-primary">{provider.provider}</td>
                             <td>{formatNumber(provider.modelCount)}</td>
                             <td>{formatNumber(provider.availableCount)}</td>
-                            <td>{provider.avgLatencyMs === null ? '—' : `${formatNumber(provider.avgLatencyMs)} ms`}</td>
+                            <td className="nowrap">{provider.avgLatencyMs === null ? '—' : `${formatNumber(provider.avgLatencyMs)} ms`}</td>
                             <td className="table-actions">
                               <Button variant="ghost" onClick={() => setSelectedProvider(provider.provider)}>健康</Button>
                             </td>
@@ -802,7 +918,11 @@ export function Models({}: PageProps) {
         description="按模块统计的近期调用与 token 用量，以及该机器人当前的模型健康。"
         width={720}
       >
-        <DataState loading={usageState.loading && !usageState.data} error={usageState.error}>
+        <DataState
+          loading={usageState.loading && !usageState.data}
+          error={usageState.error || undefined}
+          onRetry={selectedBot ? () => usageState.reload() : undefined}
+        >
           {usageState.data && (
             <>
               <Descriptions columns={2} items={[
@@ -830,19 +950,7 @@ export function Models({}: PageProps) {
                 </Table>
               )}
               {usageState.data.models.length > 0 && (
-                <Table minWidth={560}>
-                  <thead><tr><th>模型</th><th>可用性</th><th>熔断</th><th>连续失败</th></tr></thead>
-                  <tbody>
-                    {usageState.data.models.map((model) => (
-                      <tr key={model.profileId}>
-                        <td className="mono truncate-cell" title={model.modelId}>{model.modelId}</td>
-                        <td>{availabilityPill(model.availability)}</td>
-                        <td>{circuitPill(model.circuit)}</td>
-                        <td>{formatNumber(model.consecutiveFailures)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <HealthTable rows={operationRows(usageState.data.models)} minWidth={560} showLatency={false} />
               )}
             </>
           )}
@@ -856,30 +964,23 @@ export function Models({}: PageProps) {
         description="该 provider 下所有机器人与模型的探测结果。"
         width={720}
       >
-        <DataState loading={providerState.loading && !providerState.data} error={providerState.error}>
+        <DataState
+          loading={providerState.loading && !providerState.data}
+          error={providerState.error || undefined}
+          onRetry={selectedProvider ? () => providerState.reload() : undefined}
+        >
           {providerState.data && (
             <>
               <Descriptions columns={2} items={[
                 { label: '可用模型', value: `${formatNumber(providerState.data.availableCount)}/${formatNumber(providerState.data.totalCount)}` },
                 { label: '平均延迟', value: providerState.data.avgLatencyMs === null ? '—' : `${formatNumber(providerState.data.avgLatencyMs)} ms` },
                 { label: '关联机器人', value: formatNumber(providerState.data.bots.length) },
+                { label: '模型探测数', value: formatNumber(providerState.data.models.length) },
               ]} />
-              <Table minWidth={620}>
-                <thead><tr><th>模型</th><th>可用性</th><th>熔断</th><th>延迟</th><th>连续失败</th></tr></thead>
-                <tbody>
-                  {providerState.data.models.map((model) => (
-                    <tr key={model.profileId}>
-                      <td className="mono truncate-cell" title={model.modelId}>{model.modelId}</td>
-                      <td>{availabilityPill(model.availability)}</td>
-                      <td>{circuitPill(model.circuit)}</td>
-                      <td>{model.latencyMs === undefined ? '—' : `${formatNumber(model.latencyMs)} ms`}</td>
-                      <td>{formatNumber(model.consecutiveFailures)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
-              {providerState.data.models.length === 0 && (
+              {providerState.data.models.length === 0 ? (
                 <EmptyState title="暂无模型健康" detail="该 provider 尚未返回模型探测数据。" />
+              ) : (
+                <HealthTable rows={operationRows(providerState.data.models)} minWidth={620} />
               )}
             </>
           )}

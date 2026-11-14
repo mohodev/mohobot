@@ -3,9 +3,10 @@ import { Lock, Plus, RefreshCw, RotateCcw } from 'lucide-react';
 import { ApiError, api, body, confirmedRequest } from '../lib/api';
 import type { FutureTask, PageProps } from '../lib/types';
 import { useAsync, useDebouncedValue, useToggle } from '../lib/hooks';
-import { formatDateTime, formatRelative, prettyJson, truncateMiddle } from '../lib/format';
+import { formatDateTime, formatNumber, formatRelative, prettyJson, truncateMiddle } from '../lib/format';
 import {
-  Button, DataState, Descriptions, Field, Modal, Notice, PageTitle, Panel, Pill, Select, Table, TextArea, TextInput,
+  Button, Collapsible, CopyButton, DataState, Descriptions, Field, Modal, Notice, PageTitle, Panel, Pill,
+  Select, StatCard, Table, TextArea, TextInput,
 } from '../components/ui';
 
 /**
@@ -20,6 +21,8 @@ import {
 
 type PillTone = 'success' | 'warning' | 'danger' | 'neutral' | 'info';
 type ScheduleType = 'world.tick' | 'discord.deliver';
+/** Empty string is the deliberate "not chosen yet" state for the schedule form. */
+type FormType = ScheduleType | '';
 
 const STATUS_VALUES = ['pending', 'claimed', 'completed', 'failed', 'expired', 'uncertain'] as const;
 
@@ -32,12 +35,21 @@ const STATUS_LABELS: Record<string, string> = {
   uncertain: '结果未知',
 };
 
+/** Attention-first order for the queue-health rail; problems read before history. */
+const RAIL_ORDER: readonly string[] = ['uncertain', 'failed', 'pending', 'claimed', 'expired', 'completed'];
+
 const LIMIT_OPTIONS = [50, 100, 200, 500];
 
 const TYPE_OPTIONS: Array<{ value: ScheduleType; label: string }> = [
   { value: 'world.tick', label: 'world.tick · 推进世界时钟' },
   { value: 'discord.deliver', label: 'discord.deliver · Discord 消息投递' },
 ];
+
+/** Human gloss for the raw task-type token shown in each row. */
+const TYPE_LABELS: Record<string, string> = {
+  'world.tick': '推进世界时钟',
+  'discord.deliver': 'Discord 消息投递',
+};
 
 /** 与 src/admin/api-routes/world.ts 中的校验完全一致。 */
 const CHANNEL_PATTERN = /^\d{1,32}$/;
@@ -71,6 +83,14 @@ function statusTone(status: string): PillTone {
   if (status === 'claimed' || status === 'uncertain') return 'warning';
   if (status === 'failed') return 'danger';
   return 'neutral';
+}
+
+/** StatCard only tones the value; keep it to states that need an operator's eye. */
+function statTone(status: string): 'success' | 'warning' | 'danger' | undefined {
+  if (status === 'completed') return 'success';
+  if (status === 'uncertain') return 'warning';
+  if (status === 'failed') return 'danger';
+  return undefined;
 }
 
 function numberOr(value: unknown): number | undefined {
@@ -116,8 +136,19 @@ function textOf(value: unknown): string {
   return prettyJson(value);
 }
 
+/** Maps the outbox record's status onto the reconcile verdict shown in the modal. */
+function outcomeOf(record: unknown): { label: string; tone: PillTone } | undefined {
+  if (record === undefined || record === null) return undefined;
+  const status = typeof record === 'object' && !Array.isArray(record)
+    ? (record as Record<string, unknown>).status
+    : undefined;
+  if (status === 'delivered') return { label: '已投递', tone: 'success' };
+  if (status === 'rejected') return { label: '已拒绝', tone: 'danger' };
+  return { label: '无法确认', tone: 'warning' };
+}
+
 interface ScheduleForm {
-  type: ScheduleType;
+  type: FormType;
   botId: string;
   channelId: string;
   dedupeKey: string;
@@ -127,8 +158,13 @@ interface ScheduleForm {
   timeoutMs: string;
 }
 
+/**
+ * No default task type: the operator must choose deliberately instead of
+ * inheriting a generated `world.tick` and accidentally enqueuing one. The
+ * optional numeric knobs live behind a collapsible to keep the form shallow.
+ */
 const EMPTY_FORM: ScheduleForm = {
-  type: 'world.tick',
+  type: '',
   botId: '',
   channelId: '',
   dedupeKey: '',
@@ -138,8 +174,20 @@ const EMPTY_FORM: ScheduleForm = {
   timeoutMs: '',
 };
 
+const OPTIONAL_NUMBERS: Array<{
+  key: 'maxRetries' | 'timeoutMs';
+  label: string;
+  hint: string;
+  placeholder: string;
+  testId: string;
+}> = [
+  { key: 'maxRetries', label: 'maxRetries', hint: '留空使用服务端默认值，范围 0~20', placeholder: '3', testId: 'schedule-maxRetries' },
+  { key: 'timeoutMs', label: 'timeoutMs', hint: '留空使用服务端默认值，范围 1000~300000', placeholder: '30000', testId: 'schedule-timeoutMs' },
+];
+
 function validate(form: ScheduleForm): Record<string, string> {
   const errors: Record<string, string> = {};
+  if (!form.type) errors.type = '请选择任务类型。';
   if (!form.botId.trim()) errors.botId = '必填：目标 Bot 实例 ID。';
   if (form.type === 'discord.deliver') {
     if (!CHANNEL_PATTERN.test(form.channelId.trim())) errors.channelId = '必须是 1~32 位数字的频道 ID。';
@@ -160,6 +208,7 @@ function validate(form: ScheduleForm): Record<string, string> {
 }
 
 function requestOf(form: ScheduleForm): Record<string, unknown> {
+  if (!form.type) throw new Error('任务类型未选择'); // unreachable after validate()
   const payload: Record<string, unknown> = form.type === 'world.tick'
     ? { botId: form.botId.trim() }
     : {
@@ -191,6 +240,7 @@ export function FutureTasks({ permissions }: PageProps) {
   );
   const state = useAsync(() => loadTasks(query), [query], '读取未来任务失败');
   const tasks = state.data?.tasks ?? [];
+  const hasData = state.data !== undefined;
   const filtersActive = Boolean(status || type.trim() || owner.trim());
 
   const counts = useMemo(() => {
@@ -198,6 +248,12 @@ export function FutureTasks({ permissions }: PageProps) {
     for (const task of tasks) map.set(task.status, (map.get(task.status) ?? 0) + 1);
     return map;
   }, [tasks]);
+
+  /** Non-empty status buckets in attention-first order; the rail stays compact. */
+  const presentStatuses = useMemo(
+    () => RAIL_ORDER.filter((value) => (counts.get(value) ?? 0) > 0),
+    [counts],
+  );
 
   const [scheduleOpen, toggleSchedule] = useToggle(false);
   const [form, setForm] = useState<ScheduleForm>(EMPTY_FORM);
@@ -215,10 +271,17 @@ export function FutureTasks({ permissions }: PageProps) {
     setForm(EMPTY_FORM);
     setErrors({});
     setActionError('');
+    setScheduled(undefined);
     toggleSchedule(true);
   };
 
-  const changeType = (next: ScheduleType) => {
+  const resetFilters = () => {
+    setStatus('');
+    setType('');
+    setOwner('');
+  };
+
+  const changeType = (next: FormType) => {
     setForm((current) => ({ ...current, type: next, channelId: '', dedupeKey: '', content: '' }));
     setErrors({});
   };
@@ -228,7 +291,12 @@ export function FutureTasks({ permissions }: PageProps) {
     const nextErrors = validate(form);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
-    const request = requestOf(form);
+    let request: Record<string, unknown>;
+    try {
+      request = requestOf(form);
+    } catch {
+      return;
+    }
     setSubmitting(true);
     setActionError('');
     setScheduled(undefined);
@@ -271,6 +339,9 @@ export function FutureTasks({ permissions }: PageProps) {
     }
   };
 
+  const reconciledTask = reconcileResult?.task;
+  const outcome = outcomeOf(reconcileResult?.record);
+
   return (
     <>
       <PageTitle
@@ -297,7 +368,17 @@ export function FutureTasks({ permissions }: PageProps) {
         </Notice>
       )}
 
-      <Panel title="筛选" description="owner 过滤仅对 admin / developer 角色生效，其余角色由服务端固定为自己的任务。">
+      {hasData && state.error && (
+        <Notice tone="warning">
+          刷新失败，当前显示上次成功读取的数据：{state.error}
+        </Notice>
+      )}
+
+      <Panel
+        title="筛选"
+        description="owner 过滤仅对 admin / developer 角色生效，其余角色由服务端固定为自己的任务。"
+        action={filtersActive ? <Button variant="ghost" onClick={resetFilters}>重置筛选</Button> : undefined}
+      >
         <div className="filter-row">
           <Field label="状态" hint="服务端枚举过滤">
             <Select data-testid="filter-status" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -319,22 +400,33 @@ export function FutureTasks({ permissions }: PageProps) {
         </div>
       </Panel>
 
+      {hasData && tasks.length > 0 && (
+        <div className="stat-grid">
+          <StatCard
+            label="队列总数"
+            value={formatNumber(tasks.length)}
+            note={`当前窗口 · limit ${formatNumber(limit)}`}
+          />
+          {presentStatuses.map((value) => (
+            <StatCard
+              key={value}
+              label={statusLabel(value)}
+              value={formatNumber(counts.get(value) ?? 0)}
+              note={value}
+              tone={statTone(value)}
+            />
+          ))}
+        </div>
+      )}
+
       <Panel
         title="任务队列"
-        description={`当前返回 ${tasks.length} 条${filtersActive ? '（已应用筛选）' : ''} · limit ${limit}`}
-        action={tasks.length > 0 ? (
-          <div className="row">
-            {STATUS_VALUES.map((value) => {
-              const count = counts.get(value) ?? 0;
-              if (count === 0) return null;
-              return <Pill key={value} tone={statusTone(value)}>{statusLabel(value)} {count}</Pill>;
-            })}
-          </div>
-        ) : undefined}
+        description={`当前返回 ${formatNumber(tasks.length)} 条${filtersActive ? '（已应用筛选）' : ''} · limit ${formatNumber(limit)}`}
+        flush
       >
         <DataState
-          loading={state.loading}
-          error={state.error}
+          loading={state.loading && !hasData}
+          error={hasData ? undefined : state.error}
           empty={!state.loading && !state.error && tasks.length === 0}
           emptyTitle="没有未来任务"
           emptyDetail={filtersActive ? '当前筛选条件下没有匹配记录，可调整状态 / 类型 / 所有者。' : '调度队列为空，尚未安排任何延时任务。'}
@@ -360,10 +452,16 @@ export function FutureTasks({ permissions }: PageProps) {
                 return (
                   <tr key={task.id}>
                     <td className="mono truncate-cell" title={task.id}>{task.id}</td>
-                    <td className="mono nowrap">{task.type}</td>
+                    <td>
+                      <span className="mono nowrap">{task.type}</span>
+                      {TYPE_LABELS[task.type] && <div><small className="muted-text">{TYPE_LABELS[task.type]}</small></div>}
+                    </td>
                     <td><Pill tone={statusTone(task.status)}>{statusLabel(task.status)}</Pill></td>
                     <td className="nowrap">{task.owner || '—'}</td>
-                    <td className="nowrap" title={formatDateTime(task.scheduledAt)}>{formatRelative(task.scheduledAt)}</td>
+                    <td className="nowrap" title={formatDateTime(task.scheduledAt)}>
+                      {formatDateTime(task.scheduledAt)}
+                      <div><small className="muted-text">{formatRelative(task.scheduledAt)}</small></div>
+                    </td>
                     <td className="nowrap">{attempts === undefined ? '—' : `${attempts}/${maxRetries ?? '—'}`}</td>
                     <td className="truncate-cell" title={task.lastError ?? ''}>{task.lastError || '—'}</td>
                     <td className="mono truncate-cell" title={payloadSummary(task)}>{payloadSummary(task)}</td>
@@ -398,12 +496,13 @@ export function FutureTasks({ permissions }: PageProps) {
         </>}
       >
         <div className="form-grid">
-          <Field label="任务类型" hint="决定任务载荷字段">
+          <Field label="任务类型" hint="决定任务载荷字段" error={errors.type}>
             <Select
               data-testid="schedule-type"
               value={form.type}
-              onChange={(event) => changeType(event.target.value as ScheduleType)}
+              onChange={(event) => changeType(event.target.value as FormType)}
             >
+              <option value="">请选择类型</option>
               {TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </Select>
           </Field>
@@ -455,25 +554,23 @@ export function FutureTasks({ permissions }: PageProps) {
               onChange={(event) => patchForm({ scheduledAt: event.target.value })}
             />
           </Field>
-          <Field label="maxRetries" hint="留空使用服务端默认值，范围 0~20" error={errors.maxRetries}>
-            <TextInput
-              data-testid="schedule-maxRetries"
-              inputMode="numeric"
-              value={form.maxRetries}
-              placeholder="3"
-              onChange={(event) => patchForm({ maxRetries: event.target.value })}
-            />
-          </Field>
-          <Field label="timeoutMs" hint="留空使用服务端默认值，范围 1000~300000" error={errors.timeoutMs}>
-            <TextInput
-              data-testid="schedule-timeoutMs"
-              inputMode="numeric"
-              value={form.timeoutMs}
-              placeholder="30000"
-              onChange={(event) => patchForm({ timeoutMs: event.target.value })}
-            />
-          </Field>
         </div>
+
+        <Collapsible title="高级选项（可选）" meta={<span className="muted-text">重试与超时留空即用服务端默认值</span>}>
+          <div className="form-grid">
+            {OPTIONAL_NUMBERS.map((field) => (
+              <Field key={field.key} label={field.label} hint={field.hint} error={errors[field.key]}>
+                <TextInput
+                  data-testid={field.testId}
+                  inputMode="numeric"
+                  value={form[field.key]}
+                  placeholder={field.placeholder}
+                  onChange={(event) => patchForm({ [field.key]: event.target.value } as Partial<ScheduleForm>)}
+                />
+              </Field>
+            ))}
+          </div>
+        </Collapsible>
       </Modal>
 
       <Modal
@@ -485,9 +582,23 @@ export function FutureTasks({ permissions }: PageProps) {
         footer={<Button onClick={() => setReconcileResult(undefined)}>关闭</Button>}
       >
         <Descriptions columns={1} items={[
-          { label: '任务 ID', value: <span className="mono">{reconcileResult?.task?.id ?? '—'}</span> },
-          { label: '新状态', value: reconcileResult?.task ? <Pill tone={statusTone(reconcileResult.task.status)}>{statusLabel(reconcileResult.task.status)}</Pill> : '—' },
-          { label: '最近错误', value: textOf(reconcileResult?.task?.lastError ?? reconcileResult?.task?.error) },
+          {
+            label: '任务 ID',
+            value: reconciledTask?.id
+              ? (
+                <span className="row gap-sm">
+                  <span className="mono">{reconciledTask.id}</span>
+                  <CopyButton value={reconciledTask.id} />
+                </span>
+              )
+              : '—',
+          },
+          {
+            label: '新状态',
+            value: reconciledTask ? <Pill tone={statusTone(reconciledTask.status)}>{statusLabel(reconciledTask.status)}</Pill> : '—',
+          },
+          ...(outcome ? [{ label: '出站判定', value: <Pill tone={outcome.tone}>{outcome.label}</Pill> }] : []),
+          { label: '最近错误', value: textOf(reconciledTask?.lastError ?? reconciledTask?.error) },
           {
             label: '出站记录',
             value: reconcileResult?.record === undefined || reconcileResult.record === null

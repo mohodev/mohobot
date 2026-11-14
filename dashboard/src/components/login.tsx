@@ -107,7 +107,7 @@ export function Login({ onLoggedIn }: { onLoggedIn: (me: AdminMe) => void }) {
             <KeyRound size={14} /> {mode === 'password' ? '使用本地初始化令牌' : '返回账号密码登录'}
           </button>
         )}
-        <div className="login-footer">经典控制台仍可在 <a href="/">/</a> 使用。</div>
+        <div className="login-footer">全部管理功能已整合到本控制台。</div>
       </form>
     </main>
   );

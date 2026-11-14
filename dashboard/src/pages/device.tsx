@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { BatteryCharging, RefreshCw } from 'lucide-react';
+import { Activity, BatteryCharging, Bell, RefreshCw, Wifi } from 'lucide-react';
 import {
   Button,
   DataState,
   Descriptions,
+  EmptyState,
   Field,
   Notice,
   PageTitle,
@@ -17,7 +18,7 @@ import {
 import { ApiError, api, body } from '../lib/api';
 import { useAsync } from '../lib/hooks';
 import { formatNumber, formatPercent, formatRelative } from '../lib/format';
-import type { DeviceActivity, DeviceState, NetworkState, PageProps } from '../lib/types';
+import type { DeviceActivity, DeviceHabits, DeviceState, NetworkState, PageProps } from '../lib/types';
 
 const NETWORKS: NetworkState[] = ['wifi', 'cellular', 'weak', 'offline'];
 const SCREENS: Array<'on' | 'off'> = ['on', 'off'];
@@ -30,9 +31,14 @@ const NETWORK_LABEL: Record<NetworkState, string> = {
   offline: '离线',
 };
 
-const NETWORK_TONE: Record<NetworkState, 'success' | 'info' | 'warning' | 'danger'> = {
+/**
+ * Metric-rail tint for the connection. `StatCard` only accepts success/warning/
+ * danger, so a healthy-but-plain connection (cellular) stays untinted rather
+ * than being forced into a status colour.
+ */
+const NETWORK_STAT_TONE: Record<NetworkState, 'success' | 'warning' | 'danger' | undefined> = {
   wifi: 'success',
-  cellular: 'info',
+  cellular: undefined,
   weak: 'warning',
   offline: 'danger',
 };
@@ -49,6 +55,17 @@ const ACTIVITY_LABEL: Record<DeviceActivity, string> = {
 const SCREEN_LABEL: Record<'on' | 'off', string> = {
   on: '亮屏',
   off: '息屏',
+};
+
+/** Human-readable names for the patch keys, so the change summary reads in Chinese. */
+const FIELD_LABEL: Record<string, string> = {
+  battery: '电量',
+  charging: '充电',
+  network: '网络',
+  screen: '屏幕',
+  doNotDisturb: '勿扰模式',
+  activity: '活动',
+  notificationCount: '通知数量',
 };
 
 /** Editable draft of the fields `parseDevicePatch` accepts. */
@@ -123,6 +140,27 @@ function meterTone(battery: number): string {
   return 'meter';
 }
 
+function batteryTone(battery: number): 'success' | 'warning' | 'danger' | undefined {
+  if (battery <= 15) return 'danger';
+  if (battery <= 35) return 'warning';
+  return undefined;
+}
+
+/**
+ * Mirrors the server's `DeviceStore.shouldDelay()` gate so the console can
+ * explain *why* the device is currently holding replies, instead of only
+ * showing the raw habit flags.
+ */
+function delayReasons(device: DeviceState, habits: DeviceHabits): string[] {
+  const reasons: string[] = [];
+  if (device.doNotDisturb) reasons.push('勿扰模式已开启');
+  if (device.network === 'offline') reasons.push('网络离线');
+  if (device.charging && !habits.checksPhoneWhileCharging) reasons.push('充电中且不查看手机');
+  const ignored = Array.isArray(habits.ignoresNotificationsWhile) ? habits.ignoresNotificationsWhile : [];
+  if (ignored.includes(device.activity)) reasons.push(`当前活动“${ACTIVITY_LABEL[device.activity]}”在忽略通知列表内`);
+  return reasons;
+}
+
 export function Device({ permissions }: PageProps) {
   const { data, error, loading, reload, setData } = useAsync<{ device?: DeviceState }>(
     () => api<{ device?: DeviceState }>('/device'),
@@ -148,6 +186,8 @@ export function Device({ permissions }: PageProps) {
   const canWrite = permissions.includes('device.write');
   const patch = useMemo(() => (device ? buildPatch(draft, device) : {}), [draft, device]);
   const changedFields = Object.keys(patch);
+  const habits = device?.habits;
+  const reasons = device && habits ? delayReasons(device, habits) : [];
 
   async function submit(): Promise<void> {
     setFormError('');
@@ -202,60 +242,87 @@ export function Device({ permissions }: PageProps) {
       >
         {device && (
           <>
+            {/* Headline rail: the four facts an operator reads first. Numeric and
+                label metrics share one joined strip instead of loose cards. */}
+            <div className="stat-grid">
+              <StatCard
+                label="电量"
+                value={`${device.battery}%`}
+                note={device.charging ? '充电中' : '未充电'}
+                tone={batteryTone(device.battery)}
+                icon={<BatteryCharging size={15} />}
+              />
+              <StatCard
+                label="网络"
+                value={NETWORK_LABEL[device.network]}
+                note="连接状态"
+                tone={NETWORK_STAT_TONE[device.network]}
+                icon={<Wifi size={15} />}
+              />
+              <StatCard label="活动" value={ACTIVITY_LABEL[device.activity]} note="当前活动" icon={<Activity size={15} />} />
+              <StatCard label="未读通知" value={formatNumber(device.notificationCount)} note="待处理通知" icon={<Bell size={15} />} />
+            </div>
+
             <div className="grid-2">
-              <Panel
-                title="当前状态"
-                description={`最后活跃：${formatRelative(device.lastSeenAt)}`}
-                action={<BatteryCharging size={16} />}
-              >
-                <div className="card-grid" style={{ marginBottom: 14 }}>
-                  <StatCard
-                    label="电量"
-                    value={`${device.battery}%`}
-                    note={device.charging ? '充电中' : '未充电'}
-                    tone={device.battery <= 15 ? 'danger' : device.battery <= 35 ? 'warning' : undefined}
+              <Panel title="当前状态" description={`最后活跃：${formatRelative(device.lastSeenAt)}`}>
+                <div className="col">
+                  <div className={meterTone(device.battery)}>
+                    <span style={{ width: `${device.battery}%` }} />
+                  </div>
+                  <Descriptions
+                    columns={2}
+                    items={[
+                      {
+                        label: '充电',
+                        value: <Pill tone={device.charging ? 'success' : 'neutral'}>{device.charging ? '充电中' : '未充电'}</Pill>,
+                      },
+                      { label: '屏幕', value: SCREEN_LABEL[device.screen] },
+                      {
+                        label: '勿扰模式',
+                        value: (
+                          <Switch
+                            checked={device.doNotDisturb}
+                            onChange={() => undefined}
+                            disabled
+                            label={device.doNotDisturb ? '已开启' : '已关闭'}
+                          />
+                        ),
+                      },
+                      ...(habits
+                        ? [{
+                          label: '延迟回复',
+                          value: (
+                            <div className="row row-wrap">
+                              <Pill tone={reasons.length ? 'warning' : 'success'}>{reasons.length ? '是' : '否'}</Pill>
+                              <span className="muted-text">{reasons.length ? reasons.join('；') : '当前不满足任何延迟条件'}</span>
+                            </div>
+                          ),
+                        }]
+                        : []),
+                    ]}
                   />
-                  <StatCard label="通知" value={formatNumber(device.notificationCount)} note="未读通知数量" />
                 </div>
-                <div className={meterTone(device.battery)} style={{ marginBottom: 16 }}>
-                  <span style={{ width: `${device.battery}%` }} />
-                </div>
-                <Descriptions
-                  columns={2}
-                  items={[
-                    { label: '电量', value: `${device.battery}%` },
-                    { label: '充电', value: (
-                      <Pill tone={device.charging ? 'success' : 'neutral'}>{device.charging ? '充电中' : '未充电'}</Pill>
-                    ) },
-                    { label: '网络', value: (
-                      <Pill tone={NETWORK_TONE[device.network]}>{NETWORK_LABEL[device.network]}</Pill>
-                    ) },
-                    { label: '屏幕', value: SCREEN_LABEL[device.screen] },
-                    { label: '勿扰模式', value: (
-                      <Switch checked={device.doNotDisturb} onChange={() => undefined} disabled label={device.doNotDisturb ? '已开启' : '已关闭'} />
-                    ) },
-                    { label: '活动', value: ACTIVITY_LABEL[device.activity] },
-                    { label: '通知数量', value: formatNumber(device.notificationCount) },
-                    { label: '最后活跃', value: formatRelative(device.lastSeenAt) },
-                  ]}
-                />
               </Panel>
 
               <Panel title="行为习惯" description="设备模拟使用的启发式规则（只读）。">
-                <Descriptions
-                  columns={1}
-                  items={[
-                    { label: '充电时查看手机', value: device.habits.checksPhoneWhileCharging ? '是' : '否' },
-                    { label: '低电量阈值', value: `${device.habits.chargeBelow}%` },
-                    {
-                      label: '忽略通知的活动',
-                      value: device.habits.ignoresNotificationsWhile.length > 0
-                        ? device.habits.ignoresNotificationsWhile.map((item) => ACTIVITY_LABEL[item]).join('、')
-                        : '无',
-                    },
-                    { label: '延迟回复概率', value: formatPercent(device.habits.delayedReplyProbability) },
-                  ]}
-                />
+                {habits ? (
+                  <Descriptions
+                    columns={1}
+                    items={[
+                      { label: '充电时查看手机', value: habits.checksPhoneWhileCharging ? '是' : '否' },
+                      { label: '低电量阈值', value: `${formatNumber(habits.chargeBelow)}%` },
+                      {
+                        label: '忽略通知的活动',
+                        value: Array.isArray(habits.ignoresNotificationsWhile) && habits.ignoresNotificationsWhile.length > 0
+                          ? habits.ignoresNotificationsWhile.map((item) => ACTIVITY_LABEL[item]).join('、')
+                          : '无',
+                      },
+                      { label: '延迟回复概率', value: formatPercent(habits.delayedReplyProbability) },
+                    ]}
+                  />
+                ) : (
+                  <EmptyState title="行为习惯数据不可用" detail="服务端响应缺少 habits 字段，暂时无法展示启发式规则。" />
+                )}
               </Panel>
             </div>
 
@@ -264,9 +331,8 @@ export function Device({ permissions }: PageProps) {
               description={canWrite ? `仅提交已修改的字段（当前 ${changedFields.length} 项）。` : '缺少 device.write 权限，只能查看。'}
             >
               {formError && <Notice tone="danger">{formError}</Notice>}
-              {!canWrite ? (
-                <Notice tone="warning">只读：你的账号没有 device.write 权限，无法触发状态迁移。</Notice>
-              ) : (
+              {!canWrite && <Notice tone="warning">只读：你的账号没有 device.write 权限，无法触发状态迁移。</Notice>}
+              {canWrite && (
                 <>
                   <div className="form-grid">
                     <Field label="电量（%）" hint="留空表示不修改，范围 0 - 100">
@@ -306,7 +372,7 @@ export function Device({ permissions }: PageProps) {
                         ))}
                       </Select>
                     </Field>
-                    <Field label="活动">
+                    <Field label="活动" hint="开启充电时服务端会将活动强制为“充电中”">
                       <Select
                         value={draft.activity}
                         onChange={(event) => setDraft((current) => ({ ...current, activity: event.target.value as DeviceActivity }))}
@@ -317,7 +383,7 @@ export function Device({ permissions }: PageProps) {
                       </Select>
                     </Field>
                   </div>
-                  <div className="form-inline" style={{ marginTop: 14 }}>
+                  <div className="form-inline mt-3">
                     <div className="field">
                       <span className="field-label">充电</span>
                       <Switch
@@ -335,9 +401,11 @@ export function Device({ permissions }: PageProps) {
                       />
                     </div>
                   </div>
-                  <div className="row row-between" style={{ marginTop: 16 }}>
+                  <div className="row row-between mt-3">
                     <span className="muted-text">
-                      {changedFields.length > 0 ? `变更字段：${changedFields.join('、')}` : '尚未修改任何字段。'}
+                      {changedFields.length > 0
+                        ? `变更字段：${changedFields.map((field) => FIELD_LABEL[field] ?? field).join('、')}`
+                        : '尚未修改任何字段。'}
                     </span>
                     <Button variant="primary" onClick={() => void submit()} busy={submitting} disabled={changedFields.length === 0}>
                       应用变更

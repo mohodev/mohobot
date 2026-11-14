@@ -1,14 +1,14 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
-  Check, Download, RefreshCw, RotateCcw, ShieldAlert, Trash2, X,
+  Check, Clock, Download, RefreshCw, RotateCcw, ShieldAlert, Trash2, X,
 } from 'lucide-react';
 import { api, ApiError, body, confirmedRequest } from '../lib/api';
 import type { PageProps } from '../lib/types';
 import { useAsync } from '../lib/hooks';
 import { formatDateTime, formatNumber, formatPercent, formatRelative, truncateMiddle } from '../lib/format';
 import {
-  Button, CopyButton, DataState, EmptyState, Field, Modal, Notice, PageTitle, Panel, Pill,
-  Select, Table, Tabs, TextInput,
+  Button, Collapsible, CopyButton, DataState, EmptyState, Field, Modal, Notice, PageTitle, Panel, Pill,
+  Select, StatCard, Table, Tabs, TextInput,
 } from '../components/ui';
 
 /**
@@ -62,16 +62,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   preference: '偏好', addressing: '称呼', 'communication-style': '沟通风格', boundary: '边界',
 };
 
-function jargonTone(status: string | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
+/** State tone for both review planes: candidate/pending are the queue, approved settled, rejected refused. */
+function statusTone(status: string | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
   if (status === 'approved') return 'success';
-  if (status === 'candidate') return 'warning';
-  if (status === 'rejected') return 'danger';
-  return 'neutral';
-}
-
-function expressionTone(status: string | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
-  if (status === 'approved') return 'success';
-  if (status === 'pending') return 'warning';
+  if (status === 'candidate' || status === 'pending') return 'warning';
   if (status === 'rejected') return 'danger';
   return 'neutral';
 }
@@ -105,6 +99,32 @@ function downloadJsonl(filename: string, text: string): void {
   }
 }
 
+/**
+ * The approve/reject pair is identical on both review planes; extracted so the
+ * button semantics (busy-per-row, disable-when-settled) stay in one place.
+ */
+function ReviewActions({ approveBusy, rejectBusy, approveDisabled, rejectDisabled, approveTitle, rejectTitle, onApprove, onReject }: {
+  approveBusy: boolean;
+  rejectBusy: boolean;
+  approveDisabled: boolean;
+  rejectDisabled: boolean;
+  approveTitle?: string;
+  rejectTitle?: string;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  return (
+    <div className="table-actions">
+      <Button variant="secondary" busy={approveBusy} disabled={approveDisabled} title={approveTitle} onClick={onApprove}>
+        <Check size={14} /> 批准
+      </Button>
+      <Button variant="danger" busy={rejectBusy} disabled={rejectDisabled} title={rejectTitle} onClick={onReject}>
+        <X size={14} /> 拒绝
+      </Button>
+    </div>
+  );
+}
+
 export function Jargon({ permissions }: PageProps) {
   const [tab, setTab] = useState<TabId>('jargon');
   const [nonce, setNonce] = useState(0);
@@ -128,9 +148,13 @@ export function Jargon({ permissions }: PageProps) {
         onChange={setTab}
       />
 
-      {!canWrite && (
+      {!canWrite ? (
         <Notice tone="warning" icon={<ShieldAlert size={17} />}>
           只读模式：当前账号缺少 memory.write 权限，黑话与表达记忆的审批操作已隐藏。
+        </Notice>
+      ) : (
+        <Notice tone="info" icon={<ShieldAlert size={17} />}>
+          审批、拒绝、恢复与批量删除均为受保护写操作，提交前需要服务端确认 nonce 二次确认。
         </Notice>
       )}
 
@@ -160,6 +184,25 @@ function JargonTab({ canWrite, refreshToken }: { canWrite: boolean; refreshToken
   }, [status, channelId, guildId, refreshToken], '读取群体黑话失败');
 
   const entries = state.data ?? [];
+  const hasFilters = Boolean(status || channelId.trim() || guildId.trim());
+
+  const counts = useMemo(() => {
+    let candidate = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const entry of entries) {
+      if (entry.status === 'candidate') candidate += 1;
+      else if (entry.status === 'approved') approved += 1;
+      else if (entry.status === 'rejected') rejected += 1;
+    }
+    return { candidate, approved, rejected };
+  }, [entries]);
+
+  const resetFilters = useCallback(() => {
+    setStatus('');
+    setChannelId('');
+    setGuildId('');
+  }, []);
 
   async function review(entry: JargonEntry, action: 'approve' | 'reject') {
     const id = entry.id;
@@ -187,7 +230,7 @@ function JargonTab({ canWrite, refreshToken }: { canWrite: boolean; refreshToken
   return (
     <Panel
       title="群体黑话"
-      description={state.data ? `${formatNumber(entries.length)} 条词条（最多显示 100 条）` : '按状态与共享范围筛选群内术语。'}
+      description="群内术语候选与已审核词条，按状态与共享范围筛选，最多返回 100 条。"
     >
       <div className="filter-row">
         <Select aria-label="黑话状态" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -198,6 +241,7 @@ function JargonTab({ canWrite, refreshToken }: { canWrite: boolean; refreshToken
         </Select>
         <TextInput aria-label="频道 ID" placeholder="频道 ID" value={channelId} onChange={(event) => setChannelId(event.target.value)} />
         <TextInput aria-label="服务器 ID" placeholder="服务器 ID" value={guildId} onChange={(event) => setGuildId(event.target.value)} />
+        <Button onClick={resetFilters} disabled={!hasFilters}>重置筛选</Button>
       </div>
 
       {actionError && <Notice tone="danger">{actionError}</Notice>}
@@ -208,53 +252,72 @@ function JargonTab({ canWrite, refreshToken }: { canWrite: boolean; refreshToken
         error={state.error}
         empty={entries.length === 0}
         emptyTitle="暂无黑话条目"
-        emptyDetail="当前筛选条件下没有候选或已审核的黑话词条。"
+        emptyDetail={hasFilters ? '当前筛选条件下没有候选或已审核的黑话词条。' : '尚未从群聊中识别到任何黑话候选。'}
         onRetry={state.reload}
       >
-        <Table minWidth={900}>
+        <div className="stat-grid">
+          <StatCard label="词条" value={formatNumber(entries.length)} note="当前筛选结果" />
+          <StatCard label="候选" value={formatNumber(counts.candidate)} note="待审批" icon={<Clock size={17} />} tone={counts.candidate > 0 ? 'warning' : undefined} />
+          <StatCard label="已批准" value={formatNumber(counts.approved)} note="已进入召回" icon={<Check size={17} />} tone={counts.approved > 0 ? 'success' : undefined} />
+          <StatCard label="已拒绝" value={formatNumber(counts.rejected)} note="不再召回" icon={<X size={17} />} tone={counts.rejected > 0 ? 'danger' : undefined} />
+        </div>
+
+        <Table minWidth={1180}>
           <thead>
             <tr>
-              <th>术语</th><th>含义</th><th>共享范围</th><th>状态</th><th>使用次数</th><th>最近出现</th>
+              <th>术语</th><th>含义</th><th>共享范围</th><th>示例与来源</th><th>状态</th><th>使用次数</th><th>置信度</th><th>最近出现</th>
               {canWrite && <th>操作</th>}
             </tr>
           </thead>
           <tbody>
             {entries.map((entry, index) => {
               const id = entry.id ?? `entry-${index}`;
+              const examples = entry.examples ?? [];
+              const authors = entry.sourceAuthors ?? [];
+              const hasContext = examples.length > 0 || authors.length > 0;
+              const term = entry.term ?? id;
               return (
                 <tr key={id}>
-                  <td><div className="table-primary">{entry.term || '—'}</div><small className="muted-text mono">{truncateMiddle(id, 20)}</small></td>
-                  <td><span className="prewrap">{entry.meaning || '—'}</span></td>
                   <td>
-                    {entry.sharingGroup?.channelId && <div className="mono dim">{entry.sharingGroup.channelId}</div>}
-                    {entry.sharingGroup?.guildId && <div className="mono dim">服务器 {entry.sharingGroup.guildId}</div>}
-                    {!entry.sharingGroup?.channelId && !entry.sharingGroup?.guildId && '—'}
+                    <div className="table-primary">{entry.term || '—'}</div>
+                    <small className="muted-text mono" title={id}>{truncateMiddle(id, 20)}</small>
                   </td>
-                  <td><Pill tone={jargonTone(entry.status)}>{statusLabel(JARGON_STATUS_LABELS, entry.status)}</Pill></td>
+                  <td><span className="truncate-cell" title={entry.meaning || undefined}>{entry.meaning || '—'}</span></td>
+                  <td>
+                    {entry.sharingGroup?.channelId && <div className="mono dim" title={entry.sharingGroup.channelId}>{entry.sharingGroup.channelId}</div>}
+                    {entry.sharingGroup?.guildId && <div className="mono dim">服务器 {entry.sharingGroup.guildId}</div>}
+                    {!entry.sharingGroup?.channelId && !entry.sharingGroup?.guildId && <span className="muted-text">—</span>}
+                  </td>
+                  <td>
+                    {hasContext ? (
+                      <Collapsible title={`${formatNumber(examples.length)} 示例 · ${formatNumber(authors.length)} 来源`}>
+                        {examples.length > 0 && (
+                          <div className="col gap-sm">
+                            {examples.map((example, exampleIndex) => (
+                              <span key={`${exampleIndex}:${example}`} className="muted-text prewrap">「{example}」</span>
+                            ))}
+                          </div>
+                        )}
+                        {authors.length > 0 && <div className="muted-text mono mt-2">{authors.join('、')}</div>}
+                      </Collapsible>
+                    ) : <span className="muted-text">—</span>}
+                  </td>
+                  <td><Pill tone={statusTone(entry.status)}>{statusLabel(JARGON_STATUS_LABELS, entry.status)}</Pill></td>
                   <td>{formatNumber(entry.usageCount ?? 0)}</td>
-                  <td className="nowrap">{formatRelative(entry.lastSeen)}</td>
+                  <td>{typeof entry.confidence === 'number' ? formatPercent(entry.confidence) : '—'}</td>
+                  <td className="nowrap" title={formatDateTime(entry.lastSeen)}>{formatRelative(entry.lastSeen)}</td>
                   {canWrite && (
                     <td>
-                      <div className="table-actions">
-                        <Button
-                          variant="secondary"
-                          busy={busyKey === `approve:${id}`}
-                          disabled={entry.status === 'approved'}
-                          onClick={() => void review(entry, 'approve')}
-                          title={`通过 ${entry.term ?? id}`}
-                        >
-                          <Check size={14} /> 批准
-                        </Button>
-                        <Button
-                          variant="danger"
-                          busy={busyKey === `reject:${id}`}
-                          disabled={entry.status === 'rejected'}
-                          onClick={() => void review(entry, 'reject')}
-                          title={`拒绝 ${entry.term ?? id}`}
-                        >
-                          <X size={14} /> 拒绝
-                        </Button>
-                      </div>
+                      <ReviewActions
+                        approveBusy={busyKey === `approve:${id}`}
+                        rejectBusy={busyKey === `reject:${id}`}
+                        approveDisabled={entry.status === 'approved'}
+                        rejectDisabled={entry.status === 'rejected'}
+                        approveTitle={`通过 ${term}`}
+                        rejectTitle={`拒绝 ${term}`}
+                        onApprove={() => void review(entry, 'approve')}
+                        onReject={() => void review(entry, 'reject')}
+                      />
                     </td>
                   )}
                 </tr>
@@ -308,6 +371,25 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
 
   const records = state.data ?? [];
   const binRecords = binState.data ?? [];
+  const hasFilters = Boolean(userText.trim() || status);
+
+  const counts = useMemo(() => {
+    let pending = 0;
+    let approved = 0;
+    let rejected = 0;
+    for (const record of records) {
+      if (record.tombstone !== undefined) continue;
+      if (record.status === 'pending') pending += 1;
+      else if (record.status === 'approved') approved += 1;
+      else if (record.status === 'rejected') rejected += 1;
+    }
+    return { pending, approved, rejected };
+  }, [records]);
+
+  const resetFilters = useCallback(() => {
+    setUserText('');
+    setStatus('');
+  }, []);
 
   async function review(record: ExpressionRecord, action: 'approve' | 'reject') {
     const id = record.id;
@@ -413,7 +495,10 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
       {actionError && <Notice tone="danger">{actionError}</Notice>}
       {notice && <Notice tone="info">{notice}</Notice>}
 
-      <Panel title="表达记忆" description={state.data ? `${formatNumber(records.length)} 条记录` : '按 Bot ID 与用户筛选表达记忆。'}>
+      <Panel
+        title="表达记忆"
+        description="按 Bot ID 与用户筛选表达记忆；Bot ID 为服务端必填项。"
+      >
         <div className="toolbar">
           <Field label="Bot ID" hint="服务端必填">
             <TextInput aria-label="Bot ID" placeholder="例如 moho" value={botText} onChange={(event) => setBotText(event.target.value)} />
@@ -433,6 +518,7 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
           <Button onClick={() => void runExport()} busy={exportBusy} disabled={!botId}>
             <Download size={15} /> 导出 JSONL
           </Button>
+          <Button onClick={resetFilters} disabled={!hasFilters}>重置筛选</Button>
         </div>
 
         {!botId
@@ -443,10 +529,17 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
               error={state.error}
               empty={records.length === 0}
               emptyTitle="暂无表达记忆"
-              emptyDetail="该机器人下没有符合当前筛选条件的表达记忆记录。"
+              emptyDetail={hasFilters ? '该机器人下没有符合当前筛选条件的表达记忆记录。' : '该机器人还没有被记录任何表达偏好。'}
               onRetry={state.reload}
             >
-              <Table minWidth={980}>
+              <div className="stat-grid">
+                <StatCard label="记录" value={formatNumber(records.length)} note="当前筛选结果" />
+                <StatCard label="待审" value={formatNumber(counts.pending)} note="等待审批" icon={<Clock size={17} />} tone={counts.pending > 0 ? 'warning' : undefined} />
+                <StatCard label="已批准" value={formatNumber(counts.approved)} note="已生效" icon={<Check size={17} />} tone={counts.approved > 0 ? 'success' : undefined} />
+                <StatCard label="已拒绝" value={formatNumber(counts.rejected)} note="不再生效" icon={<X size={17} />} tone={counts.rejected > 0 ? 'danger' : undefined} />
+              </div>
+
+              <Table minWidth={1180}>
                 <thead>
                   <tr>
                     <th>内容</th><th>类别</th><th>用户</th><th>频道</th><th>状态</th><th>置信度</th><th>更新时间</th>
@@ -456,35 +549,35 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
                 <tbody>
                   {records.map((record, index) => {
                     const id = record.id ?? `record-${index}`;
+                    const tombstoned = record.tombstone !== undefined;
                     return (
                       <tr key={id}>
-                        <td><span className="prewrap">{record.text || '—'}</span><br /><small className="muted-text mono">{truncateMiddle(id, 20)}</small></td>
+                        <td>
+                          <span className="prewrap">{record.text || '—'}</span>
+                          <br />
+                          <small className="muted-text mono" title={id}>{truncateMiddle(id, 20)}</small>
+                        </td>
                         <td>{statusLabel(CATEGORY_LABELS, record.category)}</td>
                         <td className="mono dim">{record.userId ?? '—'}</td>
                         <td className="mono dim">{record.channelId ?? '—'}</td>
-                        <td><Pill tone={expressionTone(record.status)}>{statusLabel(EXPRESSION_STATUS_LABELS, record.status)}</Pill></td>
+                        <td>
+                          <Pill tone={statusTone(record.status)}>{statusLabel(EXPRESSION_STATUS_LABELS, record.status)}</Pill>
+                          {tombstoned && <div className="mt-2"><Pill tone="danger">已删除</Pill></div>}
+                        </td>
                         <td>{typeof record.confidence === 'number' ? formatPercent(record.confidence) : '—'}</td>
-                        <td className="nowrap">{formatDateTime(record.updatedAt)}</td>
+                        <td className="nowrap" title={formatDateTime(record.updatedAt)}>{formatRelative(record.updatedAt)}</td>
                         {canWrite && (
                           <td>
-                            <div className="table-actions">
-                              <Button
-                                variant="secondary"
-                                busy={busyKey === `approve:${id}`}
-                                disabled={record.status === 'approved' || record.tombstone !== undefined}
-                                onClick={() => void review(record, 'approve')}
-                              >
-                                <Check size={14} /> 批准
-                              </Button>
-                              <Button
-                                variant="danger"
-                                busy={busyKey === `reject:${id}`}
-                                disabled={record.status === 'rejected' || record.tombstone !== undefined}
-                                onClick={() => void review(record, 'reject')}
-                              >
-                                <X size={14} /> 拒绝
-                              </Button>
-                            </div>
+                            <ReviewActions
+                              approveBusy={busyKey === `approve:${id}`}
+                              rejectBusy={busyKey === `reject:${id}`}
+                              approveDisabled={record.status === 'approved' || tombstoned}
+                              rejectDisabled={record.status === 'rejected' || tombstoned}
+                              approveTitle={`批准 ${truncateMiddle(record.text ?? id, 24)}`}
+                              rejectTitle={`拒绝 ${truncateMiddle(record.text ?? id, 24)}`}
+                              onApprove={() => void review(record, 'approve')}
+                              onReject={() => void review(record, 'reject')}
+                            />
                           </td>
                         )}
                       </tr>
@@ -497,7 +590,10 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
       </Panel>
 
       {botId && (
-        <Panel title="回收站" description={binState.data ? `${formatNumber(binRecords.length)} 条已软删除记录` : '软删除的表达记忆可在此恢复。'}>
+        <Panel
+          title="回收站"
+          description="软删除的表达记忆可在此恢复；到期后由保留策略物理清除。"
+        >
           <DataState
             loading={binState.loading && !binState.data}
             error={binState.error}
@@ -506,10 +602,10 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
             emptyDetail="当前没有可恢复的表达记忆。"
             onRetry={binState.reload}
           >
-            <Table minWidth={880}>
+            <Table minWidth={1080}>
               <thead>
                 <tr>
-                  <th>内容</th><th>类别</th><th>用户</th><th>删除时间</th><th>到期时间</th>
+                  <th>内容</th><th>类别</th><th>用户</th><th>删除原因</th><th>删除时间</th><th>到期时间</th>
                   {canWrite && <th>操作</th>}
                 </tr>
               </thead>
@@ -518,11 +614,16 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
                   const id = record.id ?? `bin-${index}`;
                   return (
                     <tr key={id}>
-                      <td><span className="prewrap">{record.text || '—'}</span><br /><small className="muted-text mono">{truncateMiddle(id, 20)}</small></td>
+                      <td>
+                        <span className="prewrap">{record.text || '—'}</span>
+                        <br />
+                        <small className="muted-text mono" title={id}>{truncateMiddle(id, 20)}</small>
+                      </td>
                       <td>{statusLabel(CATEGORY_LABELS, record.category)}</td>
                       <td className="mono dim">{record.userId ?? '—'}</td>
-                      <td className="nowrap">{formatDateTime(record.tombstone?.at)}</td>
-                      <td className="nowrap">{record.expiresAt ? formatDateTime(record.expiresAt) : '—'}</td>
+                      <td className="truncate-cell" title={record.tombstone?.reason}>{record.tombstone?.reason || '—'}</td>
+                      <td className="nowrap" title={formatDateTime(record.tombstone?.at)}>{formatRelative(record.tombstone?.at)}</td>
+                      <td className="nowrap" title={record.expiresAt ? formatDateTime(record.expiresAt) : undefined}>{record.expiresAt ? formatDateTime(record.expiresAt) : '—'}</td>
                       {canWrite && (
                         <td>
                           <div className="table-actions">
@@ -552,21 +653,23 @@ function ExpressionTab({ canWrite, canDelete, refreshToken }: {
             <>
               {deleteError && <Notice tone="danger">{deleteError}</Notice>}
               {deleteNotice && <Notice tone="info">{deleteNotice}</Notice>}
-              <div className="toolbar">
+              <div className="form-grid form-grid-3">
                 <Field label="User ID（可选）">
                   <TextInput aria-label="批量 User ID" placeholder="限定某个用户" value={bulkUser} onChange={(event) => setBulkUser(event.target.value)} />
                 </Field>
                 <Field label="频道 ID（可选）">
                   <TextInput aria-label="批量频道 ID" placeholder="限定某个频道" value={bulkChannel} onChange={(event) => setBulkChannel(event.target.value)} />
                 </Field>
-                <Field label="截止时间（可选）">
+                <Field label="截止时间（可选）" hint="删除该时间之前创建的记录">
                   <TextInput aria-label="批量截止时间" type="datetime-local" value={bulkBefore} onChange={(event) => setBulkBefore(event.target.value)} />
                 </Field>
+              </div>
+              <div className="row row-wrap">
                 <Button variant="danger" busy={busyKey === 'bulk-delete'} disabled={!botId} onClick={() => void runBulkDelete()}>
                   <Trash2 size={15} /> 批量删除
                 </Button>
+                <span className="muted-text">至少填写一个筛选条件（User ID、频道 ID 或截止时间），避免误删全部记录；Bot ID 取自上方的输入框。</span>
               </div>
-              <p className="muted-text">至少填写一个筛选条件（User ID、频道 ID 或截止时间），避免误删全部记录。Bot ID 取自上方的输入框。</p>
             </>
           )}
       </Panel>

@@ -5,6 +5,7 @@ import {
   Clock,
   CloudSun,
   HeartPulse,
+  ListChecks,
   MapPin,
   Play,
   RefreshCw,
@@ -12,9 +13,10 @@ import {
 import { ApiError, api, body, confirmedRequest } from '../lib/api';
 import type { PageProps, ScheduledWorldEvent, WorldState } from '../lib/types';
 import { useAsync, useDebouncedValue, useToggle } from '../lib/hooks';
-import { formatDateTime, formatNumber, formatRelative } from '../lib/format';
+import { formatDateTime, formatDuration, formatNumber, formatRelative } from '../lib/format';
 import {
   Button,
+  Collapsible,
   DataState,
   Descriptions,
   Field,
@@ -86,6 +88,17 @@ const TRUST_LABELS: Record<TrustValue, string> = {
   rejected: '已拒绝',
 };
 
+/**
+ * The three mutually-exclusive trust transitions, rendered as one mapped action
+ * set. The current value is rendered disabled so the row always shows which
+ * transition is still available; `hint` documents the server-side effect.
+ */
+const TRUST_ACTIONS: Array<{ value: TrustValue; label: string; hint: string }> = [
+  { value: 'confirmed', label: '确认', hint: '标记为已确认；与它时间重叠的已确认日程会被服务端拒绝' },
+  { value: 'candidate', label: '候选', hint: '回退为候选，等待再次确认' },
+  { value: 'rejected', label: '拒绝', hint: '标记为已拒绝，不再参与世界演化' },
+];
+
 const MOOD_LABELS: Record<string, string> = {
   energy: '能量',
   sociability: '社交',
@@ -94,6 +107,9 @@ const MOOD_LABELS: Record<string, string> = {
   happiness: '愉悦',
   fatigue: '疲劳',
 };
+
+/** Canonical display order; unknown server keys sort after the known ones. */
+const MOOD_ORDER = ['energy', 'sociability', 'curiosity', 'stress', 'happiness', 'fatigue'];
 
 const WEATHER_LABELS: Record<string, string> = {
   clear: '晴朗',
@@ -114,6 +130,17 @@ const EVENT_TYPES: Array<{ value: string; label: string }> = [
   { value: 'conflict', label: '冲突' },
   { value: 'rest', label: '休息' },
 ];
+
+const KIND_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'concert', label: '演出 concert' },
+  { value: 'trip', label: '出行 trip' },
+  { value: 'rehearsal', label: '排练 rehearsal' },
+  { value: 'rest', label: '休息 rest' },
+  { value: 'news', label: '情报 news' },
+];
+
+const TRACE_LIMITS = [20, 50, 100, 200] as const;
+const EVENT_LIMIT = 20;
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error && cause.message ? cause.message : '读取失败';
@@ -160,6 +187,15 @@ function scheduleText(event: ScheduledWorldEvent): string {
   return String(event.text ?? event.title ?? '—');
 }
 
+/** Relative framing of a scheduled slot, without the past-only wording of formatRelative. */
+function timingLabel(at: unknown): { text: string; tone: 'neutral' | 'warning' } {
+  const ms = Date.parse(String(at));
+  if (!Number.isFinite(ms)) return { text: '—', tone: 'neutral' };
+  const delta = ms - Date.now();
+  if (delta > 0) return { text: `还有 ${formatDuration(delta)}`, tone: 'neutral' };
+  return { text: `已过期 ${formatDuration(-delta)}`, tone: 'warning' };
+}
+
 function summarize(value: unknown): string {
   if (value === undefined || value === null) return '—';
   try {
@@ -168,6 +204,52 @@ function summarize(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function shortValue(value: unknown): string {
+  if (value === undefined) return '—';
+  const text = typeof value === 'string' ? value : summarize(value);
+  return text.length > 48 ? `${text.slice(0, 47)}…` : text;
+}
+
+/**
+ * Turns a trace's before/after pair into the actually-changed fields. Falls back
+ * to the raw arrow form when the server did not send comparable objects.
+ */
+function diffSummary(before?: Record<string, unknown>, after?: Record<string, unknown>): string {
+  const b = asRecord(before);
+  const a = asRecord(after);
+  if (!b && !a) return '—';
+  if (!b || !a) return `${summarize(before)} → ${summarize(after)}`;
+  const keys = Array.from(new Set([...Object.keys(b), ...Object.keys(a)]));
+  const changed = keys.filter((key) => JSON.stringify(b[key]) !== JSON.stringify(a[key]));
+  if (changed.length === 0) return '无字段变化';
+  const parts = changed.slice(0, 2).map((key) => `${key}: ${shortValue(b[key])} → ${shortValue(a[key])}`);
+  if (changed.length > 2) parts.push(`其余 ${changed.length - 2} 个字段`);
+  return parts.join(' · ');
+}
+
+function moodEntries(mood: Record<string, number> | undefined): Array<[string, number]> {
+  const rank = (key: string) => {
+    const index = MOOD_ORDER.indexOf(key);
+    return index === -1 ? MOOD_ORDER.length : index;
+  };
+  return Object.entries(mood ?? {}).sort((left, right) => rank(left[0]) - rank(right[0]) || left[0].localeCompare(right[0]));
+}
+
+function moodMeterClass(key: string, value: number): string {
+  if (key === 'stress') {
+    if (value > 0.6) return 'meter grow meter-danger';
+    if (value > 0.4) return 'meter grow meter-warning';
+  }
+  if (key === 'energy' && value < 0.2) return 'meter grow meter-warning';
+  return 'meter grow';
 }
 
 function toInputValue(ms: number): string {
@@ -196,7 +278,9 @@ interface ScheduleForm {
 function defaultForm(): ScheduleForm {
   const start = Date.now() + 60 * 60 * 1000;
   return {
-    kind: 'concert',
+    // No default kind: the operator must choose deliberately instead of
+    // inheriting a generated "concert" and accidentally scheduling one.
+    kind: '',
     title: '',
     location: '',
     timezone: 'Asia/Shanghai',
@@ -206,14 +290,6 @@ function defaultForm(): ScheduleForm {
     sourceUrl: '',
   };
 }
-
-const KIND_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: 'concert', label: '演出 concert' },
-  { value: 'trip', label: '出行 trip' },
-  { value: 'rehearsal', label: '排练 rehearsal' },
-  { value: 'rest', label: '休息 rest' },
-  { value: 'news', label: '情报 news' },
-];
 
 async function loadMain(botId: string): Promise<MainData> {
   const query = botId ? `?botId=${encodeURIComponent(botId)}` : '';
@@ -231,12 +307,12 @@ async function loadMain(botId: string): Promise<MainData> {
     if (Array.isArray(scheduleResult.value.schedule)) schedule = scheduleResult.value.schedule;
     domains = Array.isArray(scheduleResult.value.domains) ? scheduleResult.value.domains : [];
   } else {
-    failures.push(`计划日程：${messageOf(scheduleResult.reason)}`);
+    failures.push(`计划日程读取失败：${messageOf(scheduleResult.reason)}`);
   }
   if (planResult.status === 'fulfilled') {
     plan = planResult.value.plan;
   } else {
-    failures.push(`日程计划：${messageOf(planResult.reason)}`);
+    failures.push(`当日计划读取失败：${messageOf(planResult.reason)}`);
   }
   return { world: result.world, schedule, domains, plan, failures };
 }
@@ -278,11 +354,31 @@ export function World({ permissions }: PageProps) {
   const data = main.data;
   const schedule = data?.schedule ?? [];
   const events = data?.world.events ?? [];
+  const domains = data?.domains ?? [];
+  const plan = data?.plan;
+  const mood = useMemo(() => moodEntries(data?.world.mood), [data]);
 
   const sortedSchedule = useMemo(
     () => [...schedule].sort((a, b) => Date.parse(String(eventAt(a))) - Date.parse(String(eventAt(b)))),
     [schedule],
   );
+
+  /** Trust distribution, so unconfirmed rows are visible before scrolling the table. */
+  const trustCounts = useMemo(() => {
+    let candidate = 0;
+    let confirmed = 0;
+    let rejected = 0;
+    for (const event of schedule) {
+      const trust = trustOf(event);
+      if (trust === 'confirmed') confirmed += 1;
+      else if (trust === 'rejected') rejected += 1;
+      else candidate += 1;
+    }
+    return { candidate, confirmed, rejected };
+  }, [schedule]);
+
+  const visibleEvents = events.slice(0, EVENT_LIMIT);
+  const planEnergy = plan ? plan.items.reduce((sum, item) => sum + Number(item.energyCost ?? 0), 0) : 0;
 
   async function run(key: string, action: () => Promise<unknown>, success: string): Promise<void> {
     setBusy(key);
@@ -398,7 +494,7 @@ export function World({ permissions }: PageProps) {
       <PageTitle
         eyebrow="WORLD SIMULATION"
         title="世界模拟"
-        description="只读查看角色的沉浸式世界状态、计划日程与演化轨迹；写入操作需要相应权限。"
+        description="只读查看角色的沉浸式世界状态、计划日程与演化轨迹；日程确认、写入与 Tick 需要相应权限。"
         actions={<>
           <TextInput
             value={botIdDraft}
@@ -414,46 +510,65 @@ export function World({ permissions }: PageProps) {
       />
 
       {notice && <Notice tone={notice.tone} icon={<HeartPulse size={17} />}>{notice.text}</Notice>}
-      {data && data.failures.length > 0 && (
-        <Notice tone="warning" icon={<HeartPulse size={17} />}>部分数据源不可用：{data.failures.join('；')}</Notice>
+      {data && main.error && (
+        <Notice tone="warning" icon={<HeartPulse size={17} />}>刷新失败，当前显示上次成功读取的数据：{main.error}</Notice>
       )}
+      {data?.failures.map((failure) => (
+        <Notice key={failure} tone="warning" icon={<HeartPulse size={17} />}>部分数据源不可用 — {failure}</Notice>
+      ))}
       {!canWrite && <Notice tone="info">当前账号为只读，缺少 world.write 权限，无法修改世界状态。</Notice>}
 
-      <DataState loading={main.loading && !data} error={main.error} onRetry={main.reload}>
+      <DataState
+        loading={main.loading && !data}
+        error={data ? undefined : main.error}
+        onRetry={main.reload}
+      >
         {data && (
           <>
             <div className="stat-grid">
               <StatCard label="世界时钟" value={formatDateTime(data.world.clock)} note={formatRelative(data.world.clock)} icon={<Clock size={17} />} />
               <StatCard label="天气" value={weatherLabel(data.world.weather)} note={data.world.weather} icon={<CloudSun size={17} />} />
-              <StatCard label="地点" value={data.world.location || '—'} note="沉浸式模拟地点" icon={<MapPin size={17} />} />
+              <StatCard label="地点" value={data.world.location || '—'} note={botId ? `实例 ${botId}` : '默认实例'} icon={<MapPin size={17} />} />
               <StatCard label="当前活动" value={data.world.activity || '—'} note={`${formatNumber(events.length)} 条最近事件`} icon={<Activity size={17} />} />
+              <StatCard
+                label="待确认日程"
+                value={formatNumber(trustCounts.candidate)}
+                note={`已确认 ${formatNumber(trustCounts.confirmed)} · 已拒绝 ${formatNumber(trustCounts.rejected)}`}
+                icon={<ListChecks size={17} />}
+                tone={trustCounts.candidate > 0 ? 'warning' : undefined}
+              />
             </div>
 
             <div className="detail-split">
-              <Panel title="情绪状态" description={`${formatNumber(Object.keys(data.world.mood).length)} 项指标（0–1）`}>
-                <div className="col">
-                  {Object.entries(data.world.mood).map(([key, value]) => (
-                    <div className="row" key={key}>
-                      <span className="nowrap" style={{ width: 64 }}>{moodLabel(key)}</span>
-                      <div className={`meter grow${key === 'stress' && value > 0.6 ? ' meter-danger' : ''}`}>
-                        <span style={{ width: `${Math.round(clamp01(value) * 100)}%` }} />
+              <Panel title="情绪状态" description={`${formatNumber(mood.length)} 项指标（0–1）`}>
+                <DataState empty={mood.length === 0} emptyTitle="暂无情绪指标" emptyDetail="世界状态尚未记录任何情绪维度。">
+                  <div className="col">
+                    {mood.map(([key, value]) => (
+                      <div className="row" key={key}>
+                        <span className="nowrap" style={{ width: 64 }}>{moodLabel(key)}</span>
+                        <div className={moodMeterClass(key, value)}>
+                          <span style={{ width: `${Math.round(clamp01(value) * 100)}%` }} />
+                        </div>
+                        <span className="mono nowrap">{formatNumber(value, 2)}</span>
                       </div>
-                      <span className="mono nowrap">{formatNumber(value, 2)}</span>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                </DataState>
               </Panel>
 
-              <Panel title="最近事件" description={`${formatNumber(events.length)} 条`}>
+              <Panel
+                title="最近事件"
+                description={`${formatNumber(events.length)} 条${events.length > EVENT_LIMIT ? ` · 仅显示最近 ${EVENT_LIMIT} 条` : ''}`}
+              >
                 <DataState empty={events.length === 0} emptyTitle="暂无世界事件" emptyDetail="推进 Tick 或写入事件后会出现。">
                   <div className="timeline">
-                    {events.slice(0, 20).map((event) => (
+                    {visibleEvents.map((event) => (
                       <div className="timeline-item" key={event.id}>
                         <span className="timeline-marker" />
                         <div className="grow">
                           <div className="row row-between">
                             <strong>{event.type}</strong>
-                            <small className="muted-text">{formatDateTime(event.at)}</small>
+                            <small className="muted-text nowrap" title={formatDateTime(event.at)}>{formatRelative(event.at)}</small>
                           </div>
                           <p className="prewrap">{event.text}</p>
                         </div>
@@ -466,10 +581,11 @@ export function World({ permissions }: PageProps) {
 
             <Panel
               title="计划日程"
-              description={`${formatNumber(schedule.length)} 条 · ${formatNumber(data.domains.length)} 个世界域`}
+              description={`${formatNumber(schedule.length)} 条 · ${formatNumber(domains.length)} 个世界域`}
               action={canWrite
                 ? <Button onClick={openSchedule}><CalendarPlus size={15} /> 新建日程</Button>
                 : <span className="muted-text">只读</span>}
+              flush
             >
               <DataState empty={sortedSchedule.length === 0} emptyTitle="暂无计划日程" emptyDetail="尚未创建任何世界日程。">
                 <Table minWidth={860}>
@@ -486,34 +602,30 @@ export function World({ permissions }: PageProps) {
                   <tbody>
                     {sortedSchedule.map((event) => {
                       const trust = trustOf(event);
+                      const timing = timingLabel(eventAt(event));
                       return (
                         <tr key={event.id}>
                           <td><span className="mono truncate-cell" title={event.id}>{event.id}</span></td>
-                          <td className="nowrap">{formatDateTime(eventAt(event))}</td>
+                          <td className="nowrap">
+                            {formatDateTime(eventAt(event))}
+                            <div><small className={timing.tone === 'warning' ? 'muted-text text-warning' : 'muted-text'}>{timing.text}</small></div>
+                          </td>
                           <td>{scheduleType(event)}</td>
                           <td className="truncate-cell" title={scheduleText(event)}>{scheduleText(event)}</td>
                           <td><Pill tone={trustTone(trust)}>{TRUST_LABELS[trust]}</Pill></td>
                           <td>
                             {canConfirm ? (
                               <div className="table-actions">
-                                <Button
-                                  variant="ghost"
-                                  disabled={trust === 'confirmed'}
-                                  busy={busy === `trust:${event.id}:confirmed`}
-                                  onClick={() => setTrust(event, 'confirmed')}
-                                >确认</Button>
-                                <Button
-                                  variant="ghost"
-                                  disabled={trust === 'candidate'}
-                                  busy={busy === `trust:${event.id}:candidate`}
-                                  onClick={() => setTrust(event, 'candidate')}
-                                >候选</Button>
-                                <Button
-                                  variant="ghost"
-                                  disabled={trust === 'rejected'}
-                                  busy={busy === `trust:${event.id}:rejected`}
-                                  onClick={() => setTrust(event, 'rejected')}
-                                >拒绝</Button>
+                                {TRUST_ACTIONS.map((action) => (
+                                  <Button
+                                    key={action.value}
+                                    variant="ghost"
+                                    title={action.hint}
+                                    disabled={trust === action.value}
+                                    busy={busy === `trust:${event.id}:${action.value}`}
+                                    onClick={() => setTrust(event, action.value)}
+                                  >{action.label}</Button>
+                                ))}
                               </div>
                             ) : <span className="muted-text">只读</span>}
                           </td>
@@ -528,19 +640,21 @@ export function World({ permissions }: PageProps) {
             <div className="grid-2">
               <Panel
                 title="当日计划"
-                description={data.plan ? `规则/模型来源：${data.plan.source}` : '尚未生成'}
+                description={plan ? `规则/模型来源：${plan.source}` : '尚未生成'}
               >
-                <DataState empty={!data.plan || data.plan.items.length === 0} emptyTitle="暂无当日计划" emptyDetail="日计划由服务端规则或模型生成。">
-                  {data.plan && (
+                <DataState empty={!plan || plan.items.length === 0} emptyTitle="暂无当日计划" emptyDetail="日计划由服务端规则或模型生成。">
+                  {plan && (
                     <>
                       <Descriptions columns={2} items={[
-                        { label: '日期', value: data.plan.date },
-                        { label: '来源', value: <Pill tone={data.plan.source === 'model' ? 'info' : 'neutral'}>{data.plan.source}</Pill> },
+                        { label: '日期', value: plan.date },
+                        { label: '来源', value: <Pill tone={plan.source === 'model' ? 'info' : 'neutral'}>{plan.source}</Pill> },
+                        { label: '条目数', value: formatNumber(plan.items.length) },
+                        { label: '能量合计', value: formatNumber(planEnergy, 2) },
                       ]} />
                       <Table minWidth={640}>
                         <thead><tr><th>时间</th><th>活动</th><th>地点</th><th>理由</th><th>能量</th></tr></thead>
                         <tbody>
-                          {data.plan.items.map((item, index) => (
+                          {plan.items.map((item, index) => (
                             <tr key={`${item.at}:${index}`}>
                               <td className="nowrap">{item.at}</td>
                               <td>{item.activity}</td>
@@ -569,7 +683,7 @@ export function World({ permissions }: PageProps) {
                     onChange={(event) => setLimit(Number(event.target.value))}
                     aria-label="limit"
                   >
-                    {[20, 50, 100, 200].map((value) => <option key={value} value={value}>{`最近 ${value} 条`}</option>)}
+                    {TRACE_LIMITS.map((value) => <option key={value} value={value}>{`最近 ${value} 条`}</option>)}
                   </Select>
                   <Button onClick={() => trace.reload()} busy={trace.loading}>刷新</Button>
                 </div>
@@ -581,16 +695,21 @@ export function World({ permissions }: PageProps) {
                   emptyDetail="Tick、日程确认与演化会写入轨迹。"
                   onRetry={() => trace.reload()}
                 >
-                  <Table minWidth={720}>
+                  <Table minWidth={760}>
                     <thead><tr><th>时间</th><th>类型</th><th>Bot</th><th>域</th><th>变更</th><th>说明</th></tr></thead>
                     <tbody>
                       {tracedRows.map((entry) => (
                         <tr key={entry.id}>
-                          <td className="nowrap">{formatDateTime(entry.at)}</td>
-                          <td><Pill tone="info">{entry.kind}</Pill></td>
+                          <td className="nowrap" title={formatDateTime(entry.at)}>{formatRelative(entry.at)}</td>
+                          <td>
+                            <Pill tone="info">{entry.kind}</Pill>
+                            {entry.phaseKey && <div><small className="muted-text mono">{entry.phaseKey}</small></div>}
+                          </td>
                           <td className="mono">{entry.botId}</td>
                           <td className="mono truncate-cell" title={entry.domainId}>{entry.domainId}</td>
-                          <td className="mono truncate-cell" title={summarize(entry.before)}>{summarize(entry.before)} → {summarize(entry.after)}</td>
+                          <td className="truncate-cell" title={`${summarize(entry.before)} → ${summarize(entry.after)}`}>
+                            {diffSummary(entry.before, entry.after)}
+                          </td>
                           <td className="truncate-cell" title={entry.detail ?? ''}>{entry.detail ?? '—'}</td>
                         </tr>
                       ))}
@@ -599,6 +718,28 @@ export function World({ permissions }: PageProps) {
                 </DataState>
               </Panel>
             </div>
+
+            <Collapsible
+              title="世界域"
+              meta={<Pill tone="neutral">{formatNumber(domains.length)}</Pill>}
+            >
+              <DataState empty={domains.length === 0} emptyTitle="暂无世界域" emptyDetail="世界域由服务端的隔离层持久化管理。">
+                <Table minWidth={640}>
+                  <thead><tr><th>域 ID</th><th>Bot</th><th>策略</th><th>频道</th><th>创建时间</th></tr></thead>
+                  <tbody>
+                    {domains.map((domain) => (
+                      <tr key={domain.id}>
+                        <td className="mono truncate-cell" title={domain.id}>{domain.id}</td>
+                        <td className="mono">{domain.botId}</td>
+                        <td>{domain.strategy}</td>
+                        <td className="mono truncate-cell" title={domain.channelId ?? ''}>{domain.channelId || '—'}</td>
+                        <td className="nowrap">{formatDateTime(domain.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </DataState>
+            </Collapsible>
           </>
         )}
       </DataState>
@@ -607,7 +748,7 @@ export function World({ permissions }: PageProps) {
         open={scheduleOpen}
         onClose={() => toggleSchedule(false)}
         title="新建世界日程"
-        description="提交后以候选（candidate）状态写入，需 world.write 权限；预演为只读。"
+        description="提交后以候选（candidate）状态写入，需 world.write 权限；预演为只读，不会持久化。"
         width={720}
         footer={<>
           <Button onClick={() => toggleSchedule(false)}>取消</Button>
@@ -618,8 +759,9 @@ export function World({ permissions }: PageProps) {
         </>}
       >
         <div className="form-grid">
-          <Field label="类型">
+          <Field label="类型" hint="必选；决定服务端采用的演化分支。">
             <Select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}>
+              <option value="">请选择类型</option>
               {KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </Select>
           </Field>
@@ -635,7 +777,7 @@ export function World({ permissions }: PageProps) {
           <Field label="地点">
             <TextInput value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} placeholder="例如：上海" />
           </Field>
-          <Field label="时区" hint="留空使用默认 Asia/Shanghai">
+          <Field label="时区" hint="IANA 时区；留空则由服务端使用默认值。">
             <TextInput value={form.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} />
           </Field>
           <Field label="来源链接" hint="可选，仅 http/https">
