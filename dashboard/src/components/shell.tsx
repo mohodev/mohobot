@@ -5,7 +5,6 @@ import {
   Search, Settings2, ShieldCheck, Smartphone, Sparkles, Users, Workflow,
 } from 'lucide-react';
 import type { AdminPrincipal } from '../lib/types';
-import { Pill } from './ui';
 
 export type ViewId =
   | 'overview' | 'bots' | 'providers' | 'models' | 'logs' | 'characters'
@@ -97,10 +96,9 @@ export function Shell({ children, view, setView, principal, permissions, onLogou
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-symbol">墨</div>
-          <div><strong>MohoBot</strong><span>CONTROL CENTER</span></div>
+          <div><strong>MohoBot</strong><span>管理控制台</span></div>
         </div>
         <div className="sidebar-divider" />
-        <div className="workspace-switch"><span className="workspace-dot" /> Main Runtime <span className="workspace-chevron">⌄</span></div>
         <label className="side-search">
           <Search size={14} />
           <input
@@ -128,7 +126,6 @@ export function Shell({ children, view, setView, principal, permissions, onLogou
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="runtime-mini"><span className="online-dot" /><span>Runtime session</span><Pill tone="success">在线</Pill></div>
           <div className="profile-row">
             <div className="avatar">{String(name).slice(0, 1).toUpperCase()}</div>
             <div className="profile-text"><strong>{name}</strong><span>{principal.role ?? 'admin'}</span></div>
@@ -142,15 +139,13 @@ export function Shell({ children, view, setView, principal, permissions, onLogou
           <div className="topbar-right">
             <a className="topbar-link" href="/" title="打开经典控制台"><Plug size={14} /> 经典控制台</a>
             <span className="topbar-divider" />
-            <Pill tone="success"><span className="online-dot" /> 已鉴权</Pill>
-            <span className="topbar-divider" />
-            <span className="role-label">{principal.role ?? 'admin'}</span>
+            <span className="role-label">已鉴权 · {principal.role ?? 'admin'}</span>
           </div>
         </header>
         <div className="page-content">{children}</div>
         <footer className="app-footer">
-          <span>MOHOBOT RUNTIME</span>
-          <span className="footer-legend"><Database size={12} /> SQLite 真相源 · 管理界面仅展示当前账号获准访问的功能</span>
+          <span>MohoBot 管理平面</span>
+          <span className="footer-legend"><Database size={12} /> 状态存储于 SQLite · 仅展示当前账号获准访问的功能</span>
           <span><GraduationCap size={12} /> 高风险操作需服务端确认</span>
         </footer>
       </main>
