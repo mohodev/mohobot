@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Activity, ChevronLeft, ChevronRight, ListChecks, Lock, Pause, Play, RefreshCw, Search, TriangleAlert, Zap } from 'lucide-react';
 import { ApiError, api, confirmedRequest } from '../lib/api';
 import type { OpsPage, OpsTask, PageProps } from '../lib/types';
@@ -18,6 +19,10 @@ import {
  * - `POST /api/tasks/:id/(pause|resume|run)`（permission `tasks.control`，
  *   route-policy 标记 confirmation=true）→ `{ task }`。控制项按任务状态与
  *   类型（仅 interval 可控制）逐行显示，写入前走服务端 nonce 确认流程。
+ *
+ * 状态分层：过滤器与数据表同处一个面板（筛选即工作流，不应跨框跳读）；
+ * 首次加载用整页 loading，刷新失败但仍有旧数据时保留数据并给出警告，
+ * 只有在没有任何成功数据时才降级为整页错误态。
  */
 
 type PillTone = 'success' | 'warning' | 'danger' | 'neutral' | 'info';
@@ -35,13 +40,15 @@ const STATE_LABELS: Record<string, string> = {
   paused: '已暂停',
 };
 
-const ACTION_LABELS: Record<TaskAction, string> = {
-  pause: '暂停',
-  resume: '恢复',
-  run: '立即执行',
-};
+const LIMIT_OPTIONS: number[] = [25, 50, 100];
+const DEFAULT_LIMIT = 25;
 
-const LIMIT_OPTIONS = [25, 50, 100];
+/** 单一事实来源：动作的中文标签、按钮语气与图标，避免三处近似分支。 */
+const ACTION_META: Record<TaskAction, { label: string; variant: 'primary' | 'secondary'; icon: ReactNode }> = {
+  run: { label: '立即执行', variant: 'primary', icon: <Zap size={14} /> },
+  resume: { label: '恢复', variant: 'secondary', icon: <Play size={14} /> },
+  pause: { label: '暂停', variant: 'secondary', icon: <Pause size={14} /> },
+};
 
 interface TasksResponse { tasks?: OpsTask[] | OpsPage<OpsTask> }
 
@@ -90,14 +97,32 @@ function isErrored(task: OpsTask): boolean {
 /** 模块级字段访问器，保持 `useFiltered` 的记忆化依赖稳定。 */
 const taskSearchFields = (task: OpsTask): Array<unknown> => [task.name, task.id];
 
+/** 行内“最近活动”时间窗：开始与结束各自成行，扫读远比拼接一行清晰。 */
+function TaskTimeWindow({ task }: { task: OpsTask }) {
+  if (task.startedAt === undefined) return <span className="muted-text">—</span>;
+  return (
+    <>
+      <span title={new Date(task.startedAt).toLocaleString()}>{formatRelative(task.startedAt)} 开始</span>
+      {task.finishedAt !== undefined && (
+        <div>
+          <small className="muted-text" title={new Date(task.finishedAt).toLocaleString()}>
+            {formatRelative(task.finishedAt)} 结束
+          </small>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function Tasks({ permissions }: PageProps) {
   const canControl = permissions.includes('tasks.control');
 
-  const [limit, setLimit] = useState(25);
+  const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [offset, setOffset] = useState(0);
   const state = useAsync(() => loadTasks(limit, offset), [limit, offset], '读取任务列表失败');
 
   const tasks = state.data?.items ?? [];
+  const hasData = state.data !== undefined;
   const page = state.data?.page;
 
   const [stateFilter, setStateFilter] = useState('');
@@ -124,6 +149,7 @@ export function Tasks({ permissions }: PageProps) {
 
   const mutate = async (task: OpsTask, action: TaskAction) => {
     if (!canControl) return;
+    const label = ACTION_META[action].label;
     setBusy(`${task.id}:${action}`);
     setActionError('');
     setActionNotice('');
@@ -132,13 +158,13 @@ export function Tasks({ permissions }: PageProps) {
         `/tasks/${encodeURIComponent(task.id)}/${action}`,
         { method: 'POST' },
         {},
-        `${ACTION_LABELS[action]}任务 ${task.name || task.id}`,
+        `${label}任务 ${task.name || task.id}`,
       );
-      setActionNotice(`已对任务 ${task.name || task.id} 执行「${ACTION_LABELS[action]}」。`);
+      setActionNotice(`已对任务 ${task.name || task.id} 执行「${label}」。`);
       state.reload();
     } catch (cause) {
       if (cause instanceof ApiError && cause.statusCode === 0) return; // 用户取消确认，不提示错误
-      setActionError(cause instanceof Error ? cause.message : `执行「${ACTION_LABELS[action]}」失败。`);
+      setActionError(cause instanceof Error ? cause.message : `执行「${label}」失败。`);
     } finally {
       setBusy('');
     }
@@ -147,6 +173,11 @@ export function Tasks({ permissions }: PageProps) {
   const changeLimit = (next: number) => {
     setLimit(next);
     setOffset(0);
+  };
+
+  const resetFilters = () => {
+    setStateFilter('');
+    setQuery('');
   };
 
   const canPrev = offset > 0;
@@ -170,15 +201,39 @@ export function Tasks({ permissions }: PageProps) {
       {actionError && <Notice tone="danger">{actionError}</Notice>}
       {actionNotice && <Notice tone="info" icon={<Zap size={16} />}>{actionNotice}</Notice>}
 
-      <DataState loading={state.loading && !state.data} error={state.error} onRetry={state.reload}>
-        <div className="stat-grid">
-          <StatCard label="任务总数" value={formatNumber(stats.total)} note="当前加载页" icon={<ListChecks size={17} />} />
-          <StatCard label="运行中任务" value={formatNumber(stats.running)} note="state = running" icon={<Activity size={17} />} tone={stats.running > 0 ? 'success' : undefined} />
-          <StatCard label="有错误任务" value={formatNumber(stats.errored)} note="errors > 0 或已失败" icon={<TriangleAlert size={17} />} tone={stats.errored > 0 ? 'danger' : undefined} />
-          <StatCard label="已暂停任务" value={formatNumber(stats.paused)} note="可恢复执行" icon={<Pause size={17} />} tone={stats.paused > 0 ? 'warning' : undefined} />
-        </div>
+      <DataState
+        loading={state.loading && !hasData}
+        error={hasData ? undefined : state.error}
+        onRetry={state.reload}
+      >
+        {hasData && state.error && (
+          <Notice tone="warning" icon={<TriangleAlert size={16} />}>
+            刷新失败，当前显示上次成功读取的数据：{state.error}
+          </Notice>
+        )}
 
-        <Panel title="筛选" description="状态与关键字在已加载的数据内过滤；分页由服务端执行。">
+        {tasks.length > 0 && (
+          <div className="stat-grid">
+            <StatCard label="任务总数" value={formatNumber(stats.total)} note="当前加载页" icon={<ListChecks size={17} />} />
+            <StatCard label="运行中任务" value={formatNumber(stats.running)} note="状态 running" icon={<Activity size={17} />} tone={stats.running > 0 ? 'success' : undefined} />
+            <StatCard label="有错误任务" value={formatNumber(stats.errored)} note="errors > 0 或已失败" icon={<TriangleAlert size={17} />} tone={stats.errored > 0 ? 'danger' : undefined} />
+            <StatCard label="已暂停任务" value={formatNumber(stats.paused)} note="可恢复执行" icon={<Pause size={17} />} tone={stats.paused > 0 ? 'warning' : undefined} />
+          </div>
+        )}
+
+        <Panel
+          title="任务列表"
+          description={filtersActive
+            ? `${formatNumber(visible.length)} 条匹配（已加载 ${formatNumber(tasks.length)} 条）；筛选在已加载数据内进行，分页由服务端执行。`
+            : `共 ${formatNumber(tasks.length)} 条任务；筛选在已加载数据内进行，分页由服务端执行。`}
+          action={canPrev || canNext ? (
+            <div className="panel-actions">
+              <Button onClick={() => setOffset(Math.max(0, offset - limit))} disabled={!canPrev}><ChevronLeft size={14} /> 上一页</Button>
+              <span className="muted-text nowrap">偏移 {formatNumber(offset)}</span>
+              <Button onClick={() => setOffset(offset + limit)} disabled={!canNext}><ChevronRight size={14} /> 下一页</Button>
+            </div>
+          ) : undefined}
+        >
           <div className="filter-row">
             <Field label="状态">
               <Select data-testid="filter-state" value={stateFilter} onChange={(event) => setStateFilter(event.target.value)}>
@@ -196,26 +251,13 @@ export function Tasks({ permissions }: PageProps) {
               />
             </div>
             <Field label="每页条数">
-              <Select data-testid="filter-limit" value={String(limit)} onChange={(event) => changeLimit(Number(event.target.value) || 25)}>
+              <Select data-testid="filter-limit" value={String(limit)} onChange={(event) => changeLimit(Number(event.target.value) || DEFAULT_LIMIT)}>
                 {LIMIT_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}
               </Select>
             </Field>
+            {filtersActive && <Button variant="ghost" onClick={resetFilters}>重置筛选</Button>}
           </div>
-        </Panel>
 
-        <Panel
-          title="任务列表"
-          description={filtersActive
-            ? `${visible.length} 条匹配（共加载 ${tasks.length} 条）`
-            : `共 ${tasks.length} 条任务`}
-          action={canNext || canPrev ? (
-            <div className="row">
-              <Button onClick={() => setOffset(Math.max(0, offset - limit))} disabled={!canPrev}><ChevronLeft size={14} /> 上一页</Button>
-              <span className="muted-text nowrap">偏移 {offset}</span>
-              <Button onClick={() => setOffset(offset + limit)} disabled={!canNext}><ChevronRight size={14} /> 下一页</Button>
-            </div>
-          ) : undefined}
-        >
           <DataState
             empty={visible.length === 0}
             emptyTitle="没有匹配的任务"
@@ -236,38 +278,45 @@ export function Tasks({ permissions }: PageProps) {
                 </tr>
               </thead>
               <tbody>
-                {visible.map((task) => (
-                  <tr key={task.id}>
-                    <td>
-                      <div className="table-primary">{task.name || '未命名任务'}</div>
-                      <small className="muted-text mono truncate-cell" title={task.id}>{task.id}</small>
-                      {task.lastErrorCode && <small className="muted-text mono">错误码 {task.lastErrorCode}</small>}
-                    </td>
-                    <td className="nowrap">{kindLabel(task.kind)}</td>
-                    <td><Pill tone={stateTone(task.state)}>{stateLabel(task.state)}</Pill></td>
-                    <td className="nowrap">{formatNumber(task.runs)}</td>
-                    <td className="nowrap">{task.errors > 0 ? <span className="mono">{formatNumber(task.errors)}</span> : '0'}</td>
-                    <td className="nowrap">{formatDuration(task.lastRunMs)}</td>
-                    <td className="nowrap">
-                      {task.startedAt === undefined ? '—' : <span title={new Date(task.startedAt).toLocaleString()}>{formatRelative(task.startedAt)} 开始</span>}
-                      {task.finishedAt === undefined ? null : <> · <span title={new Date(task.finishedAt).toLocaleString()}>{formatRelative(task.finishedAt)} 结束</span></>}
-                    </td>
-                    <td className="table-actions">
-                      {canControl && actionsFor(task).length > 0 ? actionsFor(task).map((action) => (
-                        <Button
-                          key={action}
-                          variant={action === 'run' ? 'primary' : 'secondary'}
-                          busy={busy === `${task.id}:${action}`}
-                          onClick={() => void mutate(task, action)}
-                        >
-                          {action === 'pause' && <><Pause size={14} /> 暂停</>}
-                          {action === 'resume' && <><Play size={14} /> 恢复</>}
-                          {action === 'run' && <><Zap size={14} /> 立即执行</>}
-                        </Button>
-                      )) : <span className="muted-text">—</span>}
-                    </td>
-                  </tr>
-                ))}
+                {visible.map((task) => {
+                  const actions = canControl ? actionsFor(task) : [];
+                  return (
+                    <tr key={task.id}>
+                      <td>
+                        <div className="table-primary">
+                          <span className="truncate-cell" title={task.name || task.id}>{task.name || '未命名任务'}</span>
+                        </div>
+                        <small className="muted-text mono truncate-cell" title={task.id}>{task.id}</small>
+                        {task.lastErrorCode && <small className="muted-text mono">错误码 {task.lastErrorCode}</small>}
+                      </td>
+                      <td className="nowrap">{kindLabel(task.kind)}</td>
+                      <td><Pill tone={stateTone(task.state)}>{stateLabel(task.state)}</Pill></td>
+                      <td className="nowrap">{formatNumber(task.runs)}</td>
+                      <td className="nowrap">
+                        {task.errors > 0
+                          ? <span className="mono text-danger">{formatNumber(task.errors)}</span>
+                          : <span className="muted-text">0</span>}
+                      </td>
+                      <td className="nowrap">{formatDuration(task.lastRunMs)}</td>
+                      <td className="nowrap"><TaskTimeWindow task={task} /></td>
+                      <td className="table-actions">
+                        {actions.length === 0 ? <span className="muted-text">—</span> : actions.map((action) => {
+                          const meta = ACTION_META[action];
+                          return (
+                            <Button
+                              key={action}
+                              variant={meta.variant}
+                              busy={busy === `${task.id}:${action}`}
+                              onClick={() => void mutate(task, action)}
+                            >
+                              {meta.icon} {meta.label}
+                            </Button>
+                          );
+                        })}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </Table>
           </DataState>

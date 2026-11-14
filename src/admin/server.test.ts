@@ -24,10 +24,9 @@ describe('AdminServer production authorization chain', () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'mohobot-admin-server-'));
     await fs.mkdir(path.join(root, 'webui'), { recursive: true });
-    await fs.writeFile(path.join(root, 'webui', 'index.html'), '<h1>Moho</h1>');
-    await fs.mkdir(path.join(root, 'webui', 'dashboard', 'assets'), { recursive: true });
-    await fs.writeFile(path.join(root, 'webui', 'dashboard', 'index.html'), '<h1>Modern dashboard bundle</h1><script src="/dashboard/assets/app.js"></script>');
-    await fs.writeFile(path.join(root, 'webui', 'dashboard', 'assets', 'app.js'), 'window.__dashboardReady = true;');
+    await fs.writeFile(path.join(root, 'webui', 'index.html'), '<h1>React control center</h1><script src="/assets/app.js"></script>');
+    await fs.mkdir(path.join(root, 'webui', 'assets'), { recursive: true });
+    await fs.writeFile(path.join(root, 'webui', 'assets', 'app.js'), 'window.__consoleReady = true;');
     clearSecrets();logs=new LogBuffer({capacity:3});
     storage = new MemoryStorage({ logger: createNullLogger() });
     await storage.init(); taskManager=new TaskManager({logger:createNullLogger()});taskManager.spawn(async()=>{}, {name:'world-tick',intervalMs:60_000});
@@ -90,19 +89,19 @@ describe('AdminServer production authorization chain', () => {
     return result.data.confirmation.nonce as string;
   }
 
-  it('serves the modern dashboard independently while keeping the legacy console at root', async () => {
-    const modern = await fetch(`${base}/dashboard/`);
-    expect(modern.status).toBe(200);
-    expect(await modern.text()).toContain('Modern dashboard bundle');
+  it('serves the React control center at root with its assets, and keeps /dashboard/ as an alias', async () => {
+    const root = await fetch(`${base}/`);
+    expect(root.status).toBe(200);
+    expect(await root.text()).toContain('React control center');
 
-    const asset = await fetch(`${base}/dashboard/assets/app.js`);
+    const asset = await fetch(`${base}/assets/app.js`);
     expect(asset.status).toBe(200);
     expect(asset.headers.get('content-type')).toContain('text/javascript');
-    expect(await asset.text()).toContain('__dashboardReady');
+    expect(await asset.text()).toContain('__consoleReady');
 
-    const legacy = await fetch(`${base}/`);
-    expect(legacy.status).toBe(200);
-    expect(await legacy.text()).toContain('<h1>Moho</h1>');
+    const alias = await fetch(`${base}/dashboard/`);
+    expect(alias.status).toBe(200);
+    expect(await alias.text()).toContain('React control center');
   });
 
   it('offers isolated debug chat only to operators with bounded input and redacted traces',async()=>{const admin=await bootstrap();const create={username:'operator-debug',password:'long operator password',role:'operator',enabled:true};const nonce=await confirmation(admin,'POST','/api/admin/users',create);await request('POST','/api/admin/users',{token:admin,confirmation:nonce,body:create});const login=await request('POST','/api/auth/login',{body:{username:'operator-debug',password:'long operator password'}});const operator=login.data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:operator})).data.capabilities.bots).toEqual([{id:'main',model:'mock-model',available:true}]);const reply=await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'hello'}});expect(reply.status).toBe(200);expect(reply.data.reply.content).toBe('debug response');expect(JSON.stringify(reply.data.reply.trace)).not.toContain('hello');expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'too long input'}})).status).toBe(400);expect((await request('POST','/api/debug/chat',{token:operator,body:{botId:'main',content:'again'}})).status).toBe(429);const viewerCreate={username:'viewer-debug',password:'long viewer password',role:'viewer',enabled:true};const viewerNonce=await confirmation(admin,'POST','/api/admin/users',viewerCreate);await request('POST','/api/admin/users',{token:admin,confirmation:viewerNonce,body:viewerCreate});const viewer=(await request('POST','/api/auth/login',{body:{username:'viewer-debug',password:'long viewer password'}})).data.token;expect((await request('GET','/api/debug/chat/capabilities',{token:viewer})).status).toBe(403);});

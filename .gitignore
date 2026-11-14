@@ -56,5 +56,5 @@ RESIGN_UNCOMMITTED_TODO.md
 
 REPO_CLEAN_PUSH_TODO.md
 
-# generated React dashboard bundle
-/webui/dashboard/
+# generated React control-center bundle (the primary console, served at /)
+/webui/

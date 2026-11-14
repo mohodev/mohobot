@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
-import { Eye, FileText, Link2, Plus, RefreshCw, Save, Search, Trash2, Unlink } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import { AlertTriangle, Eye, FileText, Link2, Plus, RefreshCw, Save, Search, Trash2, Unlink } from 'lucide-react';
 import { api, ApiError, body, confirmedRequest } from '../lib/api';
 import type { KnowledgeBase, KnowledgeBinding, KnowledgeDocument, PageProps } from '../lib/types';
 import { useAsync, useFiltered, useToggle } from '../lib/hooks';
 import { formatBytes, formatDateTime, formatNumber, formatRelative } from '../lib/format';
 import {
   Button,
+  CopyButton,
   DataState,
   Descriptions,
   EmptyState,
+  ErrorState,
   Field,
   Modal,
   Notice,
@@ -25,10 +28,25 @@ import {
 /** Detail views for the selected knowledge base. */
 type DetailTab = 'documents' | 'search' | 'bindings';
 
+/** A paginated list response, normalised from either a bare array or `{ items, total }`. */
+interface ListPage<T> {
+  items: T[];
+  total: number;
+}
+
+/**
+ * Detail for the selected base. Each sub-resource is loaded independently so a
+ * single failing endpoint degrades to a partial view instead of blanking the
+ * whole panel.
+ */
 interface BaseDetail {
   base?: KnowledgeBase;
+  baseError?: string;
   documents: KnowledgeDocument[];
+  documentsTotal: number;
+  documentsError?: string;
   bindings: KnowledgeBinding[];
+  bindingsError?: string;
 }
 
 /** One keyword-search hit (mirrors the server's chunk result row). */
@@ -46,13 +64,17 @@ interface DocumentPayload {
   text: string;
 }
 
-function listOf<T>(value: unknown): T[] {
-  if (Array.isArray(value)) return value as T[];
+/** The server wraps list payloads as `{ items, total, offset, limit }`; accept both shapes. */
+function collect<T>(value: unknown): ListPage<T> {
+  if (Array.isArray(value)) return { items: value as T[], total: value.length };
   if (value && typeof value === 'object') {
-    const items = (value as { items?: unknown }).items;
-    if (Array.isArray(items)) return items as T[];
+    const record = value as { items?: unknown; total?: unknown };
+    if (Array.isArray(record.items)) {
+      const total = typeof record.total === 'number' && Number.isFinite(record.total) ? record.total : record.items.length;
+      return { items: record.items as T[], total };
+    }
   }
-  return [];
+  return { items: [], total: 0 };
 }
 
 function messageOf(cause: unknown, fallback: string): string {
@@ -71,16 +93,48 @@ function textOf(value: unknown): string {
 
 async function loadDetail(id: string): Promise<BaseDetail> {
   const segment = `/knowledge-bases/${encodeURIComponent(id)}`;
-  const [baseResult, documentResult, bindingResult] = await Promise.all([
+  const [baseResult, documentResult, bindingResult] = await Promise.allSettled([
     api<{ base?: KnowledgeBase }>(segment),
     api<{ documents?: unknown }>(`${segment}/documents?offset=0&limit=100`),
     api<{ bindings?: unknown }>(`${segment}/bindings`),
   ]);
+
+  // Only surface a hard panel error when nothing at all could be read; otherwise
+  // render whatever succeeded and flag the failed sections inline.
+  if (baseResult.status === 'rejected' && documentResult.status === 'rejected' && bindingResult.status === 'rejected') {
+    throw baseResult.reason;
+  }
+
+  const documents = documentResult.status === 'fulfilled'
+    ? collect<KnowledgeDocument>(documentResult.value.documents)
+    : { items: [], total: 0 };
+  const bindings = bindingResult.status === 'fulfilled'
+    ? collect<KnowledgeBinding>(bindingResult.value.bindings)
+    : { items: [], total: 0 };
+
   return {
-    base: baseResult.base,
-    documents: listOf<KnowledgeDocument>(documentResult.documents),
-    bindings: listOf<KnowledgeBinding>(bindingResult.bindings),
+    base: baseResult.status === 'fulfilled' ? baseResult.value.base : undefined,
+    baseError: baseResult.status === 'rejected' ? messageOf(baseResult.reason, '读取知识库基础信息失败') : undefined,
+    documents: documents.items,
+    documentsTotal: documents.total,
+    documentsError: documentResult.status === 'rejected' ? messageOf(documentResult.reason, '读取文档列表失败') : undefined,
+    bindings: bindings.items,
+    bindingsError: bindingResult.status === 'rejected' ? messageOf(bindingResult.reason, '读取绑定列表失败') : undefined,
   };
+}
+
+/** Module-level field selectors keep the `useFiltered` memo dependencies stable. */
+const BASE_FIELDS = (base: KnowledgeBase): unknown[] => [base.name, base.id, base.description];
+const DOCUMENT_FIELDS = (doc: KnowledgeDocument): unknown[] => [doc.name, doc.id];
+
+/** Shared "primary label over a mono id" cell, reused by the base list and the document table. */
+function EntityCell({ primary, id, badge }: { primary: string; id: string; badge?: ReactNode }) {
+  return (
+    <td>
+      <div className="table-primary">{primary}{badge}</div>
+      <small className="muted-text mono">{id}</small>
+    </td>
+  );
 }
 
 export function Knowledge({ permissions }: PageProps) {
@@ -89,12 +143,14 @@ export function Knowledge({ permissions }: PageProps) {
 
   const basesState = useAsync(async () => {
     const result = await api<{ bases?: unknown }>('/knowledge-bases?offset=0&limit=100');
-    return listOf<KnowledgeBase>(result.bases);
+    return collect<KnowledgeBase>(result.bases);
   }, [], '读取知识库列表失败');
-  const bases = basesState.data ?? [];
+  const bases = basesState.data?.items ?? [];
+  const basesTotal = basesState.data?.total ?? 0;
 
   const [selectedId, setSelectedId] = useState('');
   const [filter, setFilter] = useState('');
+  const [docFilter, setDocFilter] = useState('');
   const [tab, setTab] = useState<DetailTab>('documents');
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState('');
@@ -119,6 +175,7 @@ export function Knowledge({ permissions }: PageProps) {
     setSubmitted('');
     setResults(null);
     setSearchError('');
+    setDocFilter('');
   }, [selectedId]);
 
   /* ----------------------------- 新建知识库 ----------------------------- */
@@ -130,7 +187,13 @@ export function Knowledge({ permissions }: PageProps) {
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState('');
 
-  const filteredBases = useFiltered(bases, filter, (base) => [base.name, base.id, base.description]);
+  const filteredBases = useFiltered(bases, filter, BASE_FIELDS);
+  const filteredDocuments = useFiltered(detail?.documents ?? [], docFilter, DOCUMENT_FIELDS);
+  const documentNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const doc of detail?.documents ?? []) map.set(doc.id, doc.name || doc.id);
+    return map;
+  }, [detail]);
 
   async function createBase() {
     const name = createName.trim();
@@ -302,7 +365,7 @@ export function Knowledge({ permissions }: PageProps) {
       const result = await api<{ results?: unknown }>(
         `${segment}?q=${encodeURIComponent(keyword)}&offset=0&limit=50`,
       );
-      setResults(listOf<SearchHit>(result.results));
+      setResults(collect<SearchHit>(result.results).items);
     } catch (cause) {
       setResults(null);
       setSearchError(messageOf(cause, '检索失败'));
@@ -369,7 +432,20 @@ export function Knowledge({ permissions }: PageProps) {
   }
 
   const selectedBase = detail?.base ?? bases.find((base) => base.id === selectedId);
+  const documents = detail?.documents ?? [];
   const listEmpty = filteredBases.length === 0;
+
+  const listDescription = `${basesTotal > bases.length
+    ? `已加载 ${formatNumber(bases.length)} / 共 ${formatNumber(basesTotal)} 个知识库`
+    : `${formatNumber(bases.length)} 个知识库`}${filter ? ` · 筛选中 ${formatNumber(filteredBases.length)} 个` : ''}`;
+
+  const detailDescription = detail?.base?.description || '管理该知识库的文档、关键词检索与机器人 / 角色绑定。';
+
+  const documentCountLabel = detail?.documentsError
+    ? '文档列表不可用'
+    : detail && detail.documentsTotal > detail.documents.length
+      ? `${formatNumber(detail.documents.length)} / ${formatNumber(detail.documentsTotal)} 个文档`
+      : `${formatNumber(documents.length)} 个文档`;
 
   return (
     <>
@@ -396,8 +472,8 @@ export function Knowledge({ permissions }: PageProps) {
 
       <div className="detail-split">
         <Panel
-          title={selectedBase?.name || '知识库详情'}
-          description={selectedId ? `ID：${selectedId}` : '从右侧列表选择一个知识库以查看文档、检索与绑定。'}
+          title={selectedBase?.name || selectedId || '知识库详情'}
+          description={selectedId ? detailDescription : '从右侧列表选择一个知识库以查看文档、检索与绑定。'}
           action={
             selectedId && canDelete ? (
               <Button variant="danger" busy={busy === 'base'} onClick={() => { if (selectedBase) void deleteBase(selectedBase); }}>
@@ -407,20 +483,34 @@ export function Knowledge({ permissions }: PageProps) {
           }
         >
           {!selectedId ? (
-            <EmptyState title="未选择知识库" detail="在右侧列表中选择或先创建一个知识库。" />
+            <EmptyState title="未选择知识库" detail="在右侧列表中选择一个知识库，或先创建一个知识库。" />
           ) : (
             <DataState loading={detailState.loading} error={detailState.error} onRetry={detailState.reload}>
-              {detail && (
+              {detail ? (
                 <>
+                  {detail.baseError && (
+                    <Notice tone="warning" icon={<AlertTriangle size={16} />}>
+                      基础信息读取失败：{detail.baseError}
+                    </Notice>
+                  )}
+
                   <Descriptions
                     columns={3}
                     items={[
-                      { label: 'ID', value: <span className="mono">{selectedId}</span> },
-                      { label: '文档数', value: formatNumber(detail.base?.documentCount ?? 0) },
-                      { label: '更新时间', value: formatRelative(detail.base?.updatedAt) },
-                      { label: '创建时间', value: formatDateTime(detail.base?.createdAt) },
-                      { label: '描述', value: detail.base?.description || '—' },
+                      {
+                        label: 'ID',
+                        value: (
+                          <span className="row gap-sm">
+                            <span className="mono">{selectedId}</span>
+                            <CopyButton value={selectedId} />
+                          </span>
+                        ),
+                      },
+                      { label: '文档数', value: formatNumber(detail.base?.documentCount ?? detail.documentsTotal) },
                       { label: '绑定数', value: formatNumber(detail.bindings.length) },
+                      { label: '创建时间', value: formatDateTime(detail.base?.createdAt) },
+                      { label: '更新时间', value: formatRelative(detail.base?.updatedAt) },
+                      { label: '描述', value: detail.base?.description || '—' },
                     ]}
                   />
 
@@ -438,9 +528,16 @@ export function Knowledge({ permissions }: PageProps) {
                   {tab === 'documents' && (
                     <>
                       <div className="toolbar">
-                        <span className="muted-text grow">
-                          {detail.documents.length} 个文档 · 正文按纯文本存储与展示
-                        </span>
+                        <div className="search-field grow">
+                          <Search size={15} />
+                          <input
+                            value={docFilter}
+                            aria-label="筛选文档"
+                            placeholder="按文档名称或 ID 筛选"
+                            onChange={(event) => setDocFilter(event.target.value)}
+                          />
+                        </div>
+                        <span className="muted-text nowrap">{documentCountLabel} · 正文按纯文本存储与展示</span>
                         {canWrite ? (
                           <Button variant="primary" onClick={openDocumentCreate}>
                             <Plus size={15} /> 新增 / 覆盖文档
@@ -449,12 +546,14 @@ export function Knowledge({ permissions }: PageProps) {
                           <span className="muted-text">只读</span>
                         )}
                       </div>
-                      <DataState
-                        empty={detail.documents.length === 0}
-                        emptyTitle="还没有文档"
-                        emptyDetail="新增纯文本文档后即可按关键词检索。"
-                      >
-                        <Table minWidth={560}>
+                      {detail.documentsError ? (
+                        <ErrorState message={detail.documentsError} retry={detailState.reload} />
+                      ) : detail.documents.length === 0 ? (
+                        <EmptyState title="还没有文档" detail="新增纯文本文档后即可按关键词检索。" />
+                      ) : filteredDocuments.length === 0 ? (
+                        <EmptyState title="没有匹配的文档" detail="调整筛选关键词后重试。" />
+                      ) : (
+                        <Table minWidth={640}>
                           <thead>
                             <tr>
                               <th>文档</th>
@@ -465,15 +564,12 @@ export function Knowledge({ permissions }: PageProps) {
                             </tr>
                           </thead>
                           <tbody>
-                            {detail.documents.map((doc) => (
+                            {filteredDocuments.map((doc) => (
                               <tr key={doc.id}>
-                                <td>
-                                  <div className="table-primary">{doc.name || doc.id}</div>
-                                  <small className="muted-text mono">{doc.id}</small>
-                                </td>
+                                <EntityCell primary={doc.name || doc.id} id={doc.id} />
                                 <td>{formatNumber(doc.chunkCount ?? 0)}</td>
-                                <td>{formatBytes(doc.textLength)}</td>
-                                <td>{formatRelative(doc.updatedAt)}</td>
+                                <td className="nowrap">{formatBytes(doc.textLength)}</td>
+                                <td className="nowrap">{formatRelative(doc.updatedAt)}</td>
                                 <td className="table-actions">
                                   <Button
                                     variant="ghost"
@@ -501,7 +597,7 @@ export function Knowledge({ permissions }: PageProps) {
                             ))}
                           </tbody>
                         </Table>
-                      </DataState>
+                      )}
                     </>
                   )}
 
@@ -528,21 +624,27 @@ export function Knowledge({ permissions }: PageProps) {
                       ) : results.length === 0 ? (
                         <EmptyState title="没有匹配的分块" detail={`关键词“${submitted}”没有命中任何分块。`} />
                       ) : (
-                        <div className="timeline">
-                          {results.map((hit) => (
-                            <div className="timeline-item" key={`${hit.documentId}:${hit.chunkId}`}>
-                              <span className="timeline-marker" />
-                              <div className="grow">
-                                <div className="row row-between">
-                                  <strong className="mono">{hit.documentId}</strong>
-                                  <Pill tone="info">得分 {formatNumber(hit.score)}</Pill>
+                        <>
+                          <p className="muted-text">关键词“{submitted}”命中 {formatNumber(results.length)} 个分块，按得分降序排列。</p>
+                          <div className="timeline">
+                            {results.map((hit) => (
+                              <div className="timeline-item" key={`${hit.documentId}:${hit.chunkId}`}>
+                                <span className="timeline-marker" />
+                                <div className="grow">
+                                  <div className="row row-between">
+                                    <div className="table-primary">
+                                      {documentNames.get(hit.documentId) ?? hit.documentId}
+                                      <small className="muted-text mono">{hit.documentId}</small>
+                                    </div>
+                                    <Pill tone="info">得分 {formatNumber(hit.score)}</Pill>
+                                  </div>
+                                  <p className="prewrap muted-text">{hit.text}</p>
+                                  <small className="muted-text">分块 #{formatNumber(hit.index)}</small>
                                 </div>
-                                <p className="prewrap muted-text">{hit.text}</p>
-                                <small className="muted-text">分块 #{formatNumber(hit.index)}</small>
                               </div>
-                            </div>
-                          ))}
-                        </div>
+                            ))}
+                          </div>
+                        </>
                       )}
                     </>
                   )}
@@ -579,12 +681,12 @@ export function Knowledge({ permissions }: PageProps) {
                       ) : (
                         <p className="muted-text">当前账号没有 knowledge.write 权限，无法创建绑定。</p>
                       )}
-                      <DataState
-                        empty={detail.bindings.length === 0}
-                        emptyTitle="暂无绑定"
-                        emptyDetail="把知识库绑定到机器人或角色后，检索结果会注入对应上下文。"
-                      >
-                        <Table minWidth={420}>
+                      {detail.bindingsError ? (
+                        <ErrorState message={detail.bindingsError} retry={detailState.reload} />
+                      ) : detail.bindings.length === 0 ? (
+                        <EmptyState title="暂无绑定" detail="把知识库绑定到机器人或角色后，检索结果会注入对应上下文。" />
+                      ) : (
+                        <Table minWidth={460}>
                           <thead>
                             <tr>
                               <th>类型</th>
@@ -602,7 +704,7 @@ export function Knowledge({ permissions }: PageProps) {
                                   </Pill>
                                 </td>
                                 <td className="mono">{binding.targetId}</td>
-                                <td>{formatRelative(binding.createdAt)}</td>
+                                <td className="nowrap">{formatRelative(binding.createdAt)}</td>
                                 <td className="table-actions">
                                   {canDelete ? (
                                     <Button
@@ -620,20 +722,18 @@ export function Knowledge({ permissions }: PageProps) {
                             ))}
                           </tbody>
                         </Table>
-                      </DataState>
+                      )}
                     </>
                   )}
                 </>
+              ) : (
+                <EmptyState title="暂无详情" detail="未读取到该知识库的详情数据。" />
               )}
             </DataState>
           )}
         </Panel>
 
-        <Panel
-          title="知识库列表"
-          description={`${bases.length} 个知识库${filter ? ` · 筛选中 ${filteredBases.length} 个` : ''}`}
-          action={<Button variant="ghost" busy={basesState.loading} onClick={refresh}><RefreshCw size={15} /> 刷新</Button>}
-        >
+        <Panel title="知识库列表" description={listDescription}>
           <div className="toolbar">
             <div className="search-field grow">
               <Search size={15} />
@@ -676,15 +776,13 @@ export function Knowledge({ permissions }: PageProps) {
                       }
                     }}
                   >
-                    <td>
-                      <div className="table-primary">
-                        {base.name || base.id}
-                        {base.id === selectedId && <> <Pill tone="success">已选</Pill></>}
-                      </div>
-                      <small className="muted-text mono">{base.id}</small>
-                    </td>
+                    <EntityCell
+                      primary={base.name || base.id}
+                      id={base.id}
+                      badge={base.id === selectedId ? <Pill tone="success">已选</Pill> : undefined}
+                    />
                     <td>{formatNumber(base.documentCount ?? 0)}</td>
-                    <td>{formatRelative(base.updatedAt)}</td>
+                    <td className="nowrap">{formatRelative(base.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -7,10 +7,12 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   root,
-  base: '/dashboard/',
+  // The React control center is the primary console now: it is served from the
+  // webui root, so assets resolve under `/assets/` on the same origin.
+  base: '/',
   plugins: [react()],
   build: {
-    outDir: path.resolve(root, '../webui/dashboard'),
+    outDir: path.resolve(root, '../webui'),
     emptyOutDir: true,
     sourcemap: true,
   },

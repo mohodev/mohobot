@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { AlertCircle, ChevronLeft, ChevronRight, History, MessageSquare, RefreshCw, ScrollText, Trash2, Wrench } from 'lucide-react';
+import { AlertCircle, Ban, ChevronLeft, ChevronRight, History, MessageSquare, RefreshCw, ScrollText, ShieldCheck, Trash2, Users, Wrench, XCircle } from 'lucide-react';
 import { ApiError, api, body, confirmedRequest, hasPermission } from '../lib/api';
 import type { OpsAudit, OpsPage, OpsSession, PageProps } from '../lib/types';
 import { useAsync, useDebouncedValue } from '../lib/hooks';
@@ -22,21 +22,24 @@ import {
 /**
  * 会话与审计（OBSERVABILITY）。
  *
- * 三个互相独立的只读视图：
- *  - 会话：`GET /api/ops/sessions` 的持久化会话分页列表，可展开聊天记录弹窗，
+ * 四个互相独立的只读视图，各带自己的 loading / error / empty 状态：
+ *  - 会话：`GET /api/ops/sessions` 的持久化会话分页，可展开聊天记录弹窗，
  *    并在二次确认后删除单条会话（`DELETE /api/ops/sessions/:id`）；
- *  - Discord 日志：`GET /api/ops/discord-chat-log` 的进程内收发环形缓冲；
  *  - 审计：`GET /api/admin/audit` 的管理面审计分页；
- *  - 运维：`GET /api/ops/operator-audit` 与 `GET /api/ops/operator-tools`。
+ *  - 运维：`GET /api/ops/operator-tools` 与 `GET /api/ops/operator-audit`；
+ *  - 社交披露：`GET /api/social/disclosure-audit` 的角色间咨询披露轨迹。
  *
- * 页面只做只读展示；唯一的写操作是删除会话，受 `sessions.chat.delete` 约束
- * 并走服务端确认 nonce。
+ * 同一视图内并置但不互相拖累的只读面：Discord 进程内环形缓冲日志。
+ * 页面只做只读展示；唯一的写操作是删除会话，受 `sessions.chat.delete`
+ * 约束并走服务端确认 nonce。
  */
 
 const PAGE_SIZE = 25;
 const LOG_LIMIT = 50;
+const DISCLOSURE_DEFAULT_LIMIT = 50;
+const DISCLOSURE_LIMIT_OPTIONS = [25, 50, 100, 200] as const;
 
-type TabValue = 'sessions' | 'audit' | 'operator';
+type TabValue = 'sessions' | 'audit' | 'operator' | 'disclosure';
 type OutcomeFilter = '' | 'allowed' | 'denied';
 type DirectionFilter = '' | 'in' | 'out';
 
@@ -86,12 +89,30 @@ interface OperatorToolDescriptor {
   confirm: boolean;
 }
 
+/**
+ * One `DisclosureAuditEntry` from `GET /api/social/disclosure-audit`
+ * (see `src/social/disclosure.ts`). Only abstract shared-scope summaries are
+ * stored — never private transcript material.
+ */
+interface DisclosureAuditEntry {
+  id: string;
+  at: string;
+  requesterCharacterId: string;
+  targetCharacterId: string;
+  subjectUserId: string;
+  topic: string;
+  gateResult: boolean;
+  outcome: string;
+  summary: string;
+}
+
 interface SessionsResponse { sessions?: OpsPage<OpsSession>; }
 interface AuditResponse { audit?: OpsPage<OpsAudit>; }
 interface ChatLogResponse { messages?: ChatLogRow[]; }
 interface DiscordChatResponse { messages?: DiscordChatEntry[]; }
 interface OperatorAuditResponse { entries?: OperatorAuditEntry[]; }
 interface OperatorToolsResponse { tools?: OperatorToolDescriptor[]; }
+interface DisclosureAuditResponse { entries?: DisclosureAuditEntry[]; }
 
 function errorText(cause: unknown, fallback: string): string {
   if (cause instanceof Error && cause.message) return cause.message;
@@ -122,6 +143,51 @@ function riskTone(risk: string): 'info' | 'warning' | 'danger' | 'neutral' {
 
 function chatLogTime(row: ChatLogRow): unknown {
   return row.ts ?? row.created_at;
+}
+
+/** Maps a consultation outcome to a state tone; unlisted values stay neutral. */
+function disclosureTone(outcome: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (outcome === 'answered') return 'success';
+  if (outcome === 'gate_denied') return 'warning';
+  if (outcome === 'error') return 'danger';
+  return 'neutral';
+}
+
+const DISCLOSURE_OUTCOME_LABEL: Record<string, string> = {
+  answered: '已答复',
+  gate_denied: '门控拒绝',
+  error: '出错',
+};
+
+function disclosureOutcomeLabel(outcome: string): string {
+  return DISCLOSURE_OUTCOME_LABEL[outcome] ?? outcome;
+}
+
+/**
+ * Shared prev/next footer for offset-paginated tables. Extracted so the
+ * sessions and admin-audit views stay behaviourally identical.
+ */
+function Pagination({ offset, hasMore, loading, moreLabel, onPrev, onNext }: {
+  offset: number;
+  hasMore: boolean;
+  loading: boolean;
+  moreLabel: string;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div className="row-between mt-3">
+      <span className="muted-text">{hasMore ? moreLabel : '已到最后一页'}</span>
+      <div className="row">
+        <Button onClick={onPrev} disabled={offset <= 0} busy={loading}>
+          <ChevronLeft size={15} /> 上一页
+        </Button>
+        <Button onClick={onNext} disabled={!hasMore} busy={loading}>
+          下一页 <ChevronRight size={15} />
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function Sessions({ permissions }: PageProps) {
@@ -275,6 +341,42 @@ export function Sessions({ permissions }: PageProps) {
   }, []);
 
   /* ------------------------------------------------------------------ *
+   * 社交披露审计（角色间咨询披露，只读）
+   * ------------------------------------------------------------------ */
+
+  const [disclosureBotInput, setDisclosureBotInput] = useState('');
+  const [disclosureLimit, setDisclosureLimit] = useState<number>(DISCLOSURE_DEFAULT_LIMIT);
+  const disclosureBotId = useDebouncedValue(disclosureBotInput.trim(), 250);
+
+  const disclosureState = useAsync<DisclosureAuditEntry[]>(async () => {
+    if (!canReadAudit) return [];
+    const params = new URLSearchParams();
+    params.set('limit', String(disclosureLimit));
+    if (disclosureBotId) params.set('botId', disclosureBotId);
+    const result = await api<DisclosureAuditResponse>(`/social/disclosure-audit?${params.toString()}`);
+    return Array.isArray(result.entries) ? result.entries : [];
+  }, [disclosureLimit, disclosureBotId, canReadAudit], '读取社交披露审计失败');
+
+  const disclosureEntries = disclosureState.data ?? [];
+
+  const disclosureStats = useMemo(() => {
+    let answered = 0;
+    let denied = 0;
+    let errored = 0;
+    for (const entry of disclosureEntries) {
+      if (entry.outcome === 'answered') answered += 1;
+      else if (entry.outcome === 'gate_denied') denied += 1;
+      else if (entry.outcome === 'error') errored += 1;
+    }
+    return { answered, denied, errored };
+  }, [disclosureEntries]);
+
+  const resetDisclosureFilters = useCallback(() => {
+    setDisclosureBotInput('');
+    setDisclosureLimit(DISCLOSURE_DEFAULT_LIMIT);
+  }, []);
+
+  /* ------------------------------------------------------------------ *
    * 运维审计与工具清单（并行读取，允许部分失败）
    * ------------------------------------------------------------------ */
 
@@ -314,9 +416,10 @@ export function Sessions({ permissions }: PageProps) {
     if (canReadAudit) {
       options.push({ value: 'audit', label: '审计', count: auditRows.length });
       options.push({ value: 'operator', label: '运维', count: operatorEntries.length });
+      options.push({ value: 'disclosure', label: '社交披露', count: disclosureEntries.length });
     }
     return options;
-  }, [canReadSessions, canReadAudit, rows.length, auditRows.length, operatorEntries.length]);
+  }, [canReadSessions, canReadAudit, rows.length, auditRows.length, operatorEntries.length, disclosureEntries.length]);
 
   const activeTab: TabValue = tabOptions.some((option) => option.value === tab)
     ? tab
@@ -325,21 +428,24 @@ export function Sessions({ permissions }: PageProps) {
   const refreshActive = useCallback(() => {
     if (activeTab === 'sessions') { sessionsState.reload(); discordState.reload(); return; }
     if (activeTab === 'audit') { auditState.reload(); return; }
+    if (activeTab === 'disclosure') { disclosureState.reload(); return; }
     operatorState.reload();
-  }, [activeTab, sessionsState, discordState, auditState, operatorState]);
+  }, [activeTab, sessionsState, discordState, auditState, disclosureState, operatorState]);
 
   const refreshing = activeTab === 'sessions'
     ? sessionsState.loading || discordState.loading
     : activeTab === 'audit'
       ? auditState.loading
-      : operatorState.loading;
+      : activeTab === 'disclosure'
+        ? disclosureState.loading
+        : operatorState.loading;
 
   return (
     <>
       <PageTitle
         eyebrow="SESSIONS & AUDIT"
         title="会话与审计"
-        description="查看持久化会话、物理聊天日志、管理面审计与运维工具轨迹；删除会话需要二次确认。"
+        description="查看持久化会话、物理聊天日志、管理面审计、运维工具轨迹与角色间咨询披露；删除会话需要二次确认。"
         actions={<Button onClick={refreshActive} busy={refreshing}><RefreshCw size={15} /> 刷新</Button>}
       />
 
@@ -465,80 +571,76 @@ export function Sessions({ permissions }: PageProps) {
                     </tbody>
                   </Table>
 
-                  <div className="row-between mt-3">
-                    <span className="muted-text">
-                      {sessions?.hasMore ? '还有更多会话' : '已到最后一页'}
-                    </span>
-                    <div className="row">
-                      <Button onClick={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))} disabled={(sessions?.offset ?? 0) <= 0} busy={sessionsState.loading}>
-                        <ChevronLeft size={15} /> 上一页
-                      </Button>
-                      <Button onClick={() => setOffset((value) => value + PAGE_SIZE)} disabled={!sessions?.hasMore} busy={sessionsState.loading}>
-                        下一页 <ChevronRight size={15} />
-                      </Button>
-                    </div>
-                  </div>
-                </Panel>
-
-                <Panel
-                  title="Discord 双向聊天日志"
-                  description={`进程内环形缓冲，最近 ${LOG_LIMIT} 条；进程重启即清空。`}
-                  action={
-                    <div className="row">
-                      <Select
-                        aria-label="消息方向"
-                        value={direction}
-                        onChange={(event) => setDirection(event.target.value === 'in' || event.target.value === 'out' ? event.target.value : '')}
-                      >
-                        <option value="">全部方向</option>
-                        <option value="in">收到 in</option>
-                        <option value="out">发出 out</option>
-                      </Select>
-                      <TextInput
-                        aria-label="Discord 频道过滤"
-                        placeholder="channelId"
-                        value={discordChannelInput}
-                        onChange={(event) => setDiscordChannelInput(event.target.value)}
-                      />
-                    </div>
-                  }
-                  flush
-                >
-                  {!canReadDiscord && (
-                    <Notice tone="warning" icon={<AlertCircle size={17} />}>
-                      当前账号缺少 chats.log.read 权限，无法读取 Discord 聊天日志。
-                    </Notice>
-                  )}
-                  <DataState
-                    loading={canReadDiscord && discordState.loading && discordState.data === undefined}
-                    error={discordState.error}
-                    empty={canReadDiscord && discordRows.length === 0}
-                    emptyTitle="暂无 Discord 聊天日志"
-                    emptyDetail="缓冲区为空，或当前过滤条件下没有收发记录。"
-                    onRetry={discordState.reload}
-                  >
-                    <Table minWidth={860}>
-                      <thead>
-                        <tr><th>#</th><th>时间</th><th>方向</th><th>botId</th><th>channelId</th><th>userId</th><th>结果</th><th>摘要</th></tr>
-                      </thead>
-                      <tbody>
-                        {discordRows.map((row) => (
-                          <tr key={row.seq}>
-                            <td className="mono nowrap">{row.seq}</td>
-                            <td className="mono nowrap" title={formatDateTime(row.time)}>{formatRelative(row.time)}</td>
-                            <td>{row.direction === 'in' ? <Pill tone="info">in</Pill> : <Pill tone="success">out</Pill>}</td>
-                            <td className="mono">{row.botId}</td>
-                            <td className="mono truncate-cell" title={row.channelId}>{row.channelId}</td>
-                            <td className="mono truncate-cell" title={row.userId}>{row.userId}</td>
-                            <td><Pill tone={levelTone(row.outcome)}>{row.outcome}</Pill></td>
-                            <td className="log-message truncate-cell" title={row.summary}>{row.summary || '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </Table>
-                  </DataState>
+                  <Pagination
+                    offset={sessions?.offset ?? 0}
+                    hasMore={sessions?.hasMore === true}
+                    loading={sessionsState.loading}
+                    moreLabel="还有更多会话"
+                    onPrev={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))}
+                    onNext={() => setOffset((value) => value + PAGE_SIZE)}
+                  />
                 </Panel>
               </DataState>
+
+              <Panel
+                title="Discord 双向聊天日志"
+                description={`进程内环形缓冲，最近 ${LOG_LIMIT} 条；进程重启即清空。`}
+                action={
+                  <div className="row">
+                    <Select
+                      aria-label="消息方向"
+                      value={direction}
+                      onChange={(event) => setDirection(event.target.value === 'in' || event.target.value === 'out' ? event.target.value : '')}
+                    >
+                      <option value="">全部方向</option>
+                      <option value="in">收到 in</option>
+                      <option value="out">发出 out</option>
+                    </Select>
+                    <TextInput
+                      aria-label="Discord 频道过滤"
+                      placeholder="channelId"
+                      value={discordChannelInput}
+                      onChange={(event) => setDiscordChannelInput(event.target.value)}
+                    />
+                  </div>
+                }
+                flush
+              >
+                {!canReadDiscord ? (
+                  <Notice tone="warning" icon={<AlertCircle size={17} />}>
+                    当前账号缺少 chats.log.read 权限，无法读取 Discord 聊天日志。
+                  </Notice>
+                ) : (
+                <DataState
+                  loading={discordState.loading && discordState.data === undefined}
+                  error={discordState.error}
+                  empty={discordRows.length === 0}
+                  emptyTitle="暂无 Discord 聊天日志"
+                  emptyDetail="缓冲区为空，或当前过滤条件下没有收发记录。"
+                  onRetry={discordState.reload}
+                >
+                  <Table minWidth={860}>
+                    <thead>
+                      <tr><th>#</th><th>时间</th><th>方向</th><th>botId</th><th>channelId</th><th>userId</th><th>结果</th><th>摘要</th></tr>
+                    </thead>
+                    <tbody>
+                      {discordRows.map((row) => (
+                        <tr key={row.seq}>
+                          <td className="mono nowrap">{row.seq}</td>
+                          <td className="mono nowrap" title={formatDateTime(row.time)}>{formatRelative(row.time)}</td>
+                          <td>{row.direction === 'in' ? <Pill tone="info">in</Pill> : <Pill tone="success">out</Pill>}</td>
+                          <td className="mono">{row.botId}</td>
+                          <td className="mono truncate-cell" title={row.channelId}>{row.channelId}</td>
+                          <td className="mono truncate-cell" title={row.userId}>{row.userId}</td>
+                          <td><Pill tone={levelTone(row.outcome)}>{row.outcome}</Pill></td>
+                          <td className="log-message truncate-cell" title={row.summary}>{row.summary || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </DataState>
+                )}
+              </Panel>
             </>
           )}
 
@@ -617,17 +719,14 @@ export function Sessions({ permissions }: PageProps) {
                     </tbody>
                   </Table>
 
-                  <div className="row-between mt-3">
-                    <span className="muted-text">{audit?.hasMore ? '还有更多审计记录' : '已到最后一页'}</span>
-                    <div className="row">
-                      <Button onClick={() => setAuditOffset((value) => Math.max(0, value - PAGE_SIZE))} disabled={(audit?.offset ?? 0) <= 0} busy={auditState.loading}>
-                        <ChevronLeft size={15} /> 上一页
-                      </Button>
-                      <Button onClick={() => setAuditOffset((value) => value + PAGE_SIZE)} disabled={!audit?.hasMore} busy={auditState.loading}>
-                        下一页 <ChevronRight size={15} />
-                      </Button>
-                    </div>
-                  </div>
+                  <Pagination
+                    offset={audit?.offset ?? 0}
+                    hasMore={audit?.hasMore === true}
+                    loading={auditState.loading}
+                    moreLabel="还有更多审计记录"
+                    onPrev={() => setAuditOffset((value) => Math.max(0, value - PAGE_SIZE))}
+                    onNext={() => setAuditOffset((value) => value + PAGE_SIZE)}
+                  />
                 </Panel>
               </DataState>
             </>
@@ -710,6 +809,109 @@ export function Sessions({ permissions }: PageProps) {
                 </Notice>
               </Panel>
             </DataState>
+          )}
+
+          {activeTab === 'disclosure' && (
+            <>
+              <div className="toolbar">
+                <TextInput
+                  aria-label="披露审计按 botId 过滤"
+                  placeholder="botId / 角色 ID"
+                  value={disclosureBotInput}
+                  onChange={(event) => setDisclosureBotInput(event.target.value)}
+                />
+                <Select
+                  aria-label="披露审计返回上限"
+                  value={String(disclosureLimit)}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setDisclosureLimit(DISCLOSURE_LIMIT_OPTIONS.includes(next as typeof DISCLOSURE_LIMIT_OPTIONS[number]) ? next : DISCLOSURE_DEFAULT_LIMIT);
+                  }}
+                >
+                  {DISCLOSURE_LIMIT_OPTIONS.map((value) => (
+                    <option key={value} value={value}>最近 {value} 条</option>
+                  ))}
+                </Select>
+                <Button
+                  onClick={resetDisclosureFilters}
+                  disabled={!disclosureBotInput && disclosureLimit === DISCLOSURE_DEFAULT_LIMIT}
+                >
+                  重置过滤
+                </Button>
+              </div>
+
+              <DataState
+                loading={disclosureState.loading && disclosureState.data === undefined}
+                error={disclosureState.error}
+                empty={disclosureState.data !== undefined && disclosureEntries.length === 0}
+                emptyTitle="暂无社交披露审计记录"
+                emptyDetail={disclosureBotId
+                  ? `角色 ${disclosureBotId} 没有作为请求方或目标方的披露记录。`
+                  : '还没有角色间咨询披露被写入审计；门控拒绝与出错同样会记录。'}
+                onRetry={disclosureState.reload}
+              >
+                <div className="stat-grid">
+                  <StatCard label="本批条目" value={formatNumber(disclosureEntries.length)} note={`最多 ${disclosureLimit} 条`} icon={<Users size={17} />} />
+                  <StatCard
+                    label="已答复"
+                    value={formatNumber(disclosureStats.answered)}
+                    note="共享范围事实答复"
+                    icon={<MessageSquare size={17} />}
+                    tone={disclosureStats.answered > 0 ? 'success' : undefined}
+                  />
+                  <StatCard
+                    label="门控拒绝"
+                    value={formatNumber(disclosureStats.denied)}
+                    note="未通过披露门控"
+                    icon={<Ban size={17} />}
+                    tone={disclosureStats.denied > 0 ? 'warning' : undefined}
+                  />
+                  <StatCard
+                    label="出错"
+                    value={formatNumber(disclosureStats.errored)}
+                    note="提示词或提供方失败"
+                    icon={<XCircle size={17} />}
+                    tone={disclosureStats.errored > 0 ? 'danger' : undefined}
+                  />
+                </div>
+
+                <Panel
+                  title="社交披露审计"
+                  description="角色间咨询披露轨迹：仅记录共享范围的抽象摘要，不含私密记录；botId 同时匹配请求方与目标方角色 ID。"
+                  action={<Pill tone="neutral"><ShieldCheck size={12} /> 只读</Pill>}
+                  flush
+                >
+                  <Table minWidth={1180}>
+                    <thead>
+                      <tr>
+                        <th>时间</th>
+                        <th>请求角色</th>
+                        <th>目标角色</th>
+                        <th>主体用户</th>
+                        <th>话题</th>
+                        <th>门控</th>
+                        <th>结果</th>
+                        <th>摘要</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {disclosureEntries.map((entry) => (
+                        <tr key={entry.id}>
+                          <td className="mono nowrap" title={formatDateTime(entry.at)}>{formatRelative(entry.at)}</td>
+                          <td className="mono truncate-cell" title={entry.requesterCharacterId}>{entry.requesterCharacterId || '—'}</td>
+                          <td className="mono truncate-cell" title={entry.targetCharacterId}>{entry.targetCharacterId || '—'}</td>
+                          <td className="mono truncate-cell" title={entry.subjectUserId}>{entry.subjectUserId || '—'}</td>
+                          <td className="truncate-cell" title={entry.topic}>{entry.topic || '—'}</td>
+                          <td>{entry.gateResult ? <Pill tone="success">通过</Pill> : <Pill tone="neutral">未通过</Pill>}</td>
+                          <td><Pill tone={disclosureTone(entry.outcome)}>{disclosureOutcomeLabel(entry.outcome)}</Pill></td>
+                          <td className="truncate-cell" title={entry.summary}>{entry.summary || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
+                </Panel>
+              </DataState>
+            </>
           )}
         </>
       )}

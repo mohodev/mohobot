@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
   Activity, Bot, Brain, Boxes, Cpu, Database, Globe2, GraduationCap, HeartPulse,
-  LayoutDashboard, Library, Logs, LogOut, MessageSquare, Plug, Puzzle, ScrollText,
+  LayoutDashboard, Library, Logs, LogOut, MessageSquare, Puzzle, ScrollText,
   Search, Settings2, ShieldCheck, Smartphone, Sparkles, Users, Workflow,
 } from 'lucide-react';
 import type { AdminPrincipal } from '../lib/types';
@@ -137,7 +137,6 @@ export function Shell({ children, view, setView, principal, permissions, onLogou
         <header className="topbar">
           <div className="breadcrumbs"><span>MohoBot</span><span className="breadcrumb-sep">/</span><strong>{current?.label ?? '控制台'}</strong></div>
           <div className="topbar-right">
-            <a className="topbar-link" href="/" title="打开经典控制台"><Plug size={14} /> 经典控制台</a>
             <span className="topbar-divider" />
             <span className="role-label">已鉴权 · {principal.role ?? 'admin'}</span>
           </div>

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -21,6 +21,7 @@ import {
   Button,
   DataState,
   Descriptions,
+  EmptyState,
   Notice,
   PageTitle,
   Panel,
@@ -28,6 +29,7 @@ import {
   StatCard,
   Switch,
   Table,
+  Tabs,
 } from '../components/ui';
 
 /* ------------------------------------------------------------------ *
@@ -68,13 +70,16 @@ interface HealthData {
   now: string;
   runtime: string;
   healthBots: number | undefined;
-  healthFailed: boolean;
   metrics: MetricsView | undefined;
   bots: BotSnapshot[] | undefined;
   actions: ActionRecord[] | undefined;
   failures: SectionFailure[];
 }
 
+/**
+ * Metrics keys this page understands structurally; anything else is surfaced
+ * as a labelled scalar fallback rather than a raw JSON dump.
+ */
 const KNOWN_LATENCY: Array<{ key: string; label: string }> = [
   { key: 'ai', label: 'AI 推理' },
   { key: 'embedding', label: '向量嵌入' },
@@ -178,11 +183,9 @@ async function loadHealth(): Promise<HealthData> {
   const loadedAt = new Date().toISOString();
 
   let healthValue: HealthSnapshot = {};
-  let healthFailed = false;
   if (health.status === 'fulfilled') {
     healthValue = health.value.health ?? {};
   } else {
-    healthFailed = true;
     failures.push({ section: '依赖健康', message: errorText(health.reason) });
   }
 
@@ -214,7 +217,6 @@ async function loadHealth(): Promise<HealthData> {
     now,
     runtime: String(healthValue.runtime ?? ''),
     healthBots: finite(healthValue.bots),
-    healthFailed,
     metrics: metricsValue,
     bots,
     actions: actionsValue,
@@ -237,21 +239,35 @@ function failureOf(data: HealthData | undefined, section: string): string {
   return data?.failures.find((failure) => failure.section === section)?.message ?? '读取失败';
 }
 
-function runtimeLabel(runtime: string): string {  if (runtime === 'up') return '运行中';
+function runtimeLabel(runtime: string): string {
+  if (runtime === 'up') return '运行中';
   if (runtime === 'idle') return '空闲';
   if (runtime === 'down') return '不可用';
   return runtime || '未知';
 }
 
+/** An instance is "unhealthy" when it is stopped or its gateway is offline. */
+function isUnhealthy(bot: BotSnapshot): boolean {
+  return !bot.running || !bot.gateway?.connected;
+}
+
+type InstanceFilter = 'all' | 'issues';
+
 export function Health({}: PageProps) {
   const state = useAsync(loadHealth, [], '读取服务健康失败');
   const [auto, setAuto] = useToggle(true);
+  const [instanceFilter, setInstanceFilter] = useState<InstanceFilter>('all');
   const reload = useCallback(() => state.reload(), [state]);
   usePolling(reload, 10000, auto);
 
   const data = state.data;
   const bots = data?.bots ?? [];
   const connected = useMemo(() => bots.filter((bot) => bot.gateway?.connected).length, [bots]);
+  const unhealthy = useMemo(() => bots.filter(isUnhealthy).length, [bots]);
+  const visibleBots = useMemo(
+    () => (instanceFilter === 'issues' ? bots.filter(isUnhealthy) : bots),
+    [bots, instanceFilter],
+  );
   const pings = useMemo(
     () => bots.map((bot) => bot.gateway?.ping).filter((ping): ping is number => typeof ping === 'number' && ping >= 0),
     [bots],
@@ -262,13 +278,14 @@ export function Health({}: PageProps) {
 
   const metrics = data?.metrics;
   const hasMetrics = Boolean(metrics && (metrics.latency.length || metrics.cache.length || metrics.scalars.length));
+  const failures = data?.failures ?? [];
 
   return (
     <>
       <PageTitle
         eyebrow="SERVICE HEALTH"
         title="服务健康"
-        description="读取依赖健康、运行指标、实例状态与能力清单。各数据源独立加载，单点失败不会清空页面。"
+        description="读取依赖健康、运行指标、实例状态与能力清单。四个数据源独立加载，单点失败只降级对应区块，不会清空页面。"
         actions={<>
           <Switch checked={auto} onChange={(next) => setAuto(next)} label="自动刷新" />
           <Button onClick={reload} busy={state.loading}><RefreshCw size={15} /> 刷新</Button>
@@ -281,13 +298,16 @@ export function Health({}: PageProps) {
         </Pill>
         <span className="muted-text">最近更新：{formatTime(data?.loadedAt)}</span>
         {data?.now && <span className="muted-text mono">快照时间 {formatTime(data.now)}</span>}
+        {data && (failures.length > 0
+          ? <Pill tone="warning">{failures.length} 个数据源不可用</Pill>
+          : <Pill tone="success">全部数据源正常</Pill>)}
       </div>
 
-      {data && data.failures.map((failure) => (
-        <Notice key={failure.section} tone="warning" icon={<HeartPulse size={17} />}>
-          {failure.section}不可用：{failure.message}
+      {failures.length > 0 && (
+        <Notice tone="warning" icon={<HeartPulse size={17} />}>
+          以下数据源暂不可用：{failures.map((failure) => failure.section).join('、')}。其余区块已独立降级展示。
         </Notice>
-      ))}
+      )}
 
       <DataState loading={state.loading && !data} error={state.error} onRetry={reload}>
         <div className="stat-grid">
@@ -301,15 +321,15 @@ export function Health({}: PageProps) {
           <StatCard
             label="Bot 数量"
             value={formatNumber(botCount)}
-            note="来自健康快照，回退统计实例列表"
+            note={data?.healthBots === undefined ? '来自实例列表' : '来自健康快照'}
             icon={<Bot size={17} />}
           />
           <StatCard
             label="连接中的网关"
             value={`${connected}/${bots.length}`}
-            note="平台连接状态"
+            note={unhealthy > 0 ? `${unhealthy} 个实例异常` : '平台连接状态'}
             icon={<Server size={17} />}
-            tone={bots.length > 0 && connected < bots.length ? 'warning' : undefined}
+            tone={unhealthy > 0 ? 'warning' : undefined}
           />
           <StatCard
             label="平均网关延迟"
@@ -320,32 +340,61 @@ export function Health({}: PageProps) {
         </div>
 
         <Panel title="实例健康" description={`${bots.length} 个已注册实例`}>
-          <DataState empty={bots.length === 0} emptyTitle="没有运行实例" emptyDetail="尚未发现可展示的 Bot 快照。">
-            <Table minWidth={760}>
-              <thead>
-                <tr><th>实例</th><th>平台</th><th>Provider</th><th>模型</th><th>网关</th><th>延迟</th><th>会话</th><th>状态</th></tr>
-              </thead>
-              <tbody>
-                {bots.map((bot) => (
-                  <tr key={bot.id}>
-                    <td>
-                      <div className="table-primary">{bot.name || bot.id}</div>
-                      <small className="muted-text mono">{bot.id}</small>
-                    </td>
-                    <td>{bot.adapter || '—'}</td>
-                    <td>{bot.provider || '—'}</td>
-                    <td><span className="mono truncate-cell">{bot.model || '—'}</span></td>
-                    <td>{bot.gateway?.connected
-                      ? <Pill tone="success"><Wifi size={12} /> 已连接</Pill>
-                      : <Pill tone="warning"><WifiOff size={12} /> 离线</Pill>}</td>
-                    <td>{bot.gateway?.ping == null || bot.gateway.ping < 0 ? '—' : `${bot.gateway.ping} ms`}</td>
-                    <td>{formatNumber(bot.sessions ?? 0)}</td>
-                    <td>{bot.running ? <Pill tone="success">运行中</Pill> : <Pill tone="danger">已停止</Pill>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          </DataState>
+          {data && data.bots === undefined ? (
+            <Notice tone="danger" icon={<WifiOff size={17} />}>
+              运行状态不可用：{failureOf(data, '运行状态')}
+            </Notice>
+          ) : bots.length === 0 ? (
+            <EmptyState title="没有运行实例" detail="尚未发现可展示的 Bot 快照。" />
+          ) : (
+            <>
+              <Tabs
+                value={instanceFilter}
+                options={[
+                  { value: 'all', label: '全部实例', count: bots.length },
+                  { value: 'issues', label: '异常实例', count: unhealthy },
+                ]}
+                onChange={setInstanceFilter}
+                ariaLabel="实例筛选"
+              />
+              {visibleBots.length === 0 ? (
+                <EmptyState title="没有异常实例" detail="所有实例均在运行且网关已连接。" />
+              ) : (
+                <Table minWidth={760}>
+                  <thead>
+                    <tr><th>实例</th><th>平台</th><th>Provider / 模型</th><th>网关</th><th>延迟</th><th>会话</th><th>状态</th></tr>
+                  </thead>
+                  <tbody>
+                    {visibleBots.map((bot) => (
+                      <tr key={bot.id}>
+                        <td>
+                          <div className="table-primary">{bot.name || bot.id}</div>
+                          <small className="muted-text mono">{bot.id}</small>
+                        </td>
+                        <td>{bot.adapter || '—'}</td>
+                        <td>
+                          {bot.provider || '—'}
+                          <br />
+                          <small className="muted-text mono truncate-cell">{bot.model || '—'}</small>
+                        </td>
+                        <td>
+                          {bot.gateway?.connected
+                            ? <Pill tone="success"><Wifi size={12} /> 已连接</Pill>
+                            : <Pill tone="warning"><WifiOff size={12} /> 离线</Pill>}
+                          {typeof bot.gateway?.reconnects === 'number' && bot.gateway.reconnects > 0 && (
+                            <div><small className="muted-text">重连 {formatNumber(bot.gateway.reconnects)} 次</small></div>
+                          )}
+                        </td>
+                        <td>{bot.gateway?.ping == null || bot.gateway.ping < 0 ? '—' : `${bot.gateway.ping} ms`}</td>
+                        <td>{formatNumber(bot.sessions ?? 0)}</td>
+                        <td>{bot.running ? <Pill tone="success">运行中</Pill> : <Pill tone="danger">已停止</Pill>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              )}
+            </>
+          )}
         </Panel>
 
         <Panel
@@ -359,7 +408,10 @@ export function Health({}: PageProps) {
               运行指标不可用：{failureOf(data, '运行指标')}
             </Notice>
           )}
-          {metrics && (
+          {metrics && !hasMetrics && (
+            <EmptyState title="暂无运行指标" detail="指标快照已返回，但尚未记录延迟、缓存或标量指标。" />
+          )}
+          {metrics && hasMetrics && (
             <>
               {metrics.latency.length > 0 ? (
                 <Table minWidth={640}>
@@ -369,7 +421,10 @@ export function Health({}: PageProps) {
                   <tbody>
                     {metrics.latency.map((row) => (
                       <tr key={row.key}>
-                        <td className="table-primary">{row.label}<br /><small className="muted-text mono">{row.key}</small></td>
+                        <td>
+                          <div className="table-primary">{row.label}</div>
+                          <small className="muted-text mono">{row.key}</small>
+                        </td>
                         <td>{formatNumber(row.value.count)}</td>
                         <td>{row.value.failures > 0
                           ? <Pill tone="danger">{formatNumber(row.value.failures)}</Pill>
@@ -388,11 +443,29 @@ export function Health({}: PageProps) {
               {metrics.cache.length > 0 && (
                 <>
                   <h3 className="mt-2"><Database size={14} /> 缓存命中</h3>
-                  <Descriptions columns={3} items={metrics.cache.flatMap((row) => [
-                    { label: `${row.label} · 命中`, value: formatNumber(row.value.hits) },
-                    { label: `${row.label} · 未命中`, value: formatNumber(row.value.misses) },
-                    { label: `${row.label} · 命中率`, value: formatPercent(row.value.ratio) },
-                  ])} />
+                  <Table minWidth={520}>
+                    <thead>
+                      <tr><th>缓存</th><th>命中</th><th>未命中</th><th>命中率</th></tr>
+                    </thead>
+                    <tbody>
+                      {metrics.cache.map((row) => (
+                        <tr key={row.key}>
+                          <td>
+                            <div className="table-primary">{row.label}</div>
+                            <small className="muted-text mono">{row.key}</small>
+                          </td>
+                          <td>{formatNumber(row.value.hits)}</td>
+                          <td>{formatNumber(row.value.misses)}</td>
+                          <td>
+                            <div className="row row-between"><span>{formatPercent(row.value.ratio)}</span></div>
+                            <div className="meter">
+                              <span style={{ width: `${Math.round(row.value.ratio * 100)}%` }} />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </Table>
                 </>
               )}
 
