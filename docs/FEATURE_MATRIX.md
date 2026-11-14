@@ -67,8 +67,8 @@
 
 | 能力 | 状态 | 当前实现 | 差距 / 后续 |
 |---|---|---|---|
-| World 状态机 | 已实现 | SQLite、事件来源链、信任/确认、phase、trace、replay、domain | 完善长期运行和多实例缓存一致性 |
-| Device 状态 | 已实现 | SQLite、设备状态与习惯 | 多实例 2 秒 TTL cache 可能短暂陈旧 |
+| World 状态机 | 已实现 | SQLite、事件来源链、信任/确认、phase、trace、replay、domain；读无本地缓存，写使用 CAS/retry | 后续压测高并发 tick 与 schedule 的重试公平性 |
+| Device 状态 | 已实现 | SQLite、设备状态与习惯；读取直达 DB，transition 使用 CAS/retry，显式 save 拒绝 stale snapshot | 后续压测高并发 transition 与历史 JSON 导入冲突 |
 | DailyLife | 基础已实现 | 规则回退与 World tick 接线 | 增强跨天一致性、任务取消和异常恢复 |
 | Talk Governor | 基础已实现 | Quiet hours、topic relevance、focus lease、SQLite state | 主动消息队列和 Future Task 出站二次治理 |
 | Future Tasks | 基础已实现 | SQLite、CAS claim、lease recovery、retry/uncertain、受限 handler | 扩展 handler 必须先做安全白名单和 owner scope |
@@ -102,7 +102,7 @@
 
 2026-11-14 在 Node.js v24.21.0 下，依赖安装后曾验证：
 - TypeScript typecheck 通过；
-- 后端 165 个 Vitest 文件、1,149 个测试通过；
+- 后端 166 个 Vitest 文件、1,153 个测试通过；
 - React Dashboard 2 个测试文件、8 个用例通过；
 - React Dashboard 独立 TypeScript 检查通过；
 - SQLite preflight 通过；

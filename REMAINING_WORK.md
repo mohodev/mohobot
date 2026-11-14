@@ -81,9 +81,9 @@
 - [x] DailyLife 接线：已接入 `WorldStore.tick()` — 无活动日自动 propose + 规则回退 + 写回 + best-effort 失败不阻断
 - [x] Guild Plan 控制面：AdminServer 已有 inventory/plan/apply API + route-policy + RBAC + 二次确认 + 幂等 key + 部分失败结果
 - [x] 配置发布持久化与激活：Runtime 已使用 `SqlitePublicationStateStore`；重启恢复 revision/ACK/pending/rollback；`onActivated` hook 触发 config reload + 组件重建；activation receipt 区分"已发布"与"实际生效"
-- [ ] 世界/设备并发一致性：WorldStore/DeviceStore 已迁移 SQLite（WAL 模式），仍有 2 秒 TtlCache；多实例部署需补跨进程 stale cache 策略
+- [x] 世界/设备并发一致性第一轮：WorldStore/DeviceStore 移除 2 秒 TtlCache；读直达 SQLite；schedule/event/tick/Device transition 使用 CAS retry；显式 save 依赖 get() 快照并拒绝 stale overwrite；新增双实例并发与 stale snapshot 测试。后续继续压测高并发 tick 的重试公平性边界。
 - [x] 角色互询已实现：`consultPeer()` 完整链路（gate + shared-only prompt + 抽象回答 + audit）；与 cross-chat 的管理员驱动公开对聊分离
 - [x] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；`chat_log` 保留期/容量/摘要长度已通过 `chatLog` 全局配置化（内存 buffer + SQLite 定期清理）；热重载已支持新增/删除/禁用 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
 
 ## 当前状态（2026-11-14 复核）
-历史第一至第四批功能继续保留。无人值守重建分支新增 AffinityStore SQLite 化：由 Runtime 复用共享 SQLite Storage，旧 `data/memory/affinity.json` 作为只读迁移输入，写入使用 SQLite compare-and-set 避免多实例更新丢失。验证基线为 Node.js 24.21.0：typecheck、dashboard typecheck、165 个后端测试文件 1,149 用例 + Dashboard 2 个测试文件 8 用例、preflight、secret scan、包含 React Dashboard 的 build 全部通过。新 Dashboard 已在隔离 MemoryStorage 的 AdminServer 上完成登录/总览/Bot/日志浏览器冒烟。当前已知的跨实例状态一致性问题仍是 World/Device 的 2 秒进程内 TTL cache，需要引入 revision/cache invalidation 策略。
+历史第一至第四批功能继续保留。无人值守重建分支新增 AffinityStore SQLite 化：由 Runtime 复用共享 SQLite Storage，旧 `data/memory/affinity.json` 只读导入，写入使用 CAS。World/Device 已移除 2 秒本地 TTL cache，读直达 SQLite；World schedule/event/tick 与 Device transition 使用 CAS/retry，显式 save 拒绝 stale snapshot，并新增双实例一致性测试。验证基线为 Node.js 24.21.0：typecheck、dashboard typecheck、166 个后端测试文件 1,153 用例 + Dashboard 2 个测试文件 8 用例、preflight、secret scan、包含 React Dashboard 的 build 全部通过。新 Dashboard 已在隔离 MemoryStorage 的 AdminServer 上完成浏览器冒烟。后续仍需压测高并发 tick/transition 的重试公平性边界。

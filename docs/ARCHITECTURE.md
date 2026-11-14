@@ -9,7 +9,7 @@
 
 ## 数据分层：SQLite（唯一存储）
 
-持久化只使用 SQLite：`storage.driver` 默认且唯一内置 `sqlite`（WAL、TTL、聊天索引），数据文件为 `data/mohobot.db`，备份在 `data/backups/`。会话、World、Device、Affinity、记忆、任务、配置发布与管理审计均通过 SQLite 持久化。World/Device 使用 2 秒进程内 TTL cache，跨进程的新鲜度仍是已知边界。历史 JSON 文件只作为一次性/只读迁移输入，不再写回；`VersionedJsonStore` 不得用于新生产状态。注册表仍允许插件注册额外驱动（`storage.driver` 是开放字符串），运行时不再内置 memory / MySQL / Redis / Kafka 驱动或异步镜像。
+持久化只使用 SQLite：`storage.driver` 默认且唯一内置 `sqlite`（WAL、TTL、聊天索引），数据文件为 `data/mohobot.db`，备份在 `data/backups/`。会话、World、Device、Affinity、记忆、任务、配置发布与管理审计均通过 SQLite 持久化。World/Device 读取直达 SQLite，无进程内 TTL cache；World schedule/event/tick 与 Device transition 使用 CAS/retry，显式 save 拒绝过期快照。历史 JSON 文件只作为一次性/只读迁移输入，不再写回；`VersionedJsonStore` 不得用于新生产状态。注册表仍允许插件注册额外驱动（`storage.driver` 是开放字符串），运行时不再内置 memory / MySQL / Redis / Kafka 驱动或异步镜像。
 
 ### SQLite 承载的内容
 
@@ -59,7 +59,7 @@ AdminServer 同样拆分为 HTTP/auth/policy/nonce/audit 入口、ApiRouter 和 
 
 - `RelationshipGraph`：好感、熟悉、信任、尊重、边界、共同经历；跨私聊/群聊仅共享允许跨域的非敏感画像。
 - `DeviceState`：电量、充电、网络、屏幕、勿扰、通知队列、习惯；是沉浸状态，非现实身份/设备声明。
-- `WorldState`：已实现 SQLite 状态、事件来源链、信任/确认、阶段演化、Future Task 的受限 tick handler、trace/replay 与 bot domain 隔离基础。World/Device 仍有 2 秒进程内 TTL cache，多实例需补跨进程 stale-cache 策略。新闻只能进入候选情报库，经过来源、时间、注入清洗和置信度校验。
+- `WorldState`：已实现 SQLite 状态、事件来源链、信任/确认、阶段演化、Future Task 的受限 tick handler、trace/replay 与 bot domain 隔离基础。跨实例写入使用 CAS/retry，读取不经过进程缓存；后续压力测试关注高并发 tick 的重试公平性。新闻只能进入候选情报库，经过来源、时间、注入清洗和置信度校验。
 - `GroupStyle`：只允许短期调整句长、口语程度、表情和回复频率，不得改变安全规则或核心人格。
 
 ## 视觉与情报

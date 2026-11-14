@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
 import type { Storage } from '../storage/types.js';
@@ -21,7 +20,7 @@ export class DeviceStore {
   readonly #storage: Storage;
   readonly #key: string;
   readonly #legacyFile: string;
-  readonly #cache = new TtlCache<DeviceState>(2_000);
+  readonly #snapshots = new WeakMap<DeviceState, unknown>();
   #ready?: Promise<void>;
 
   constructor(rootDir: string, botId?: string) {
@@ -35,39 +34,68 @@ export class DeviceStore {
       : path.join(rootDir, 'data', 'world', 'device.json');
   }
 
+  /** Every read reaches SQLite; the returned object is tracked as a CAS snapshot. */
   async get(): Promise<DeviceState> {
-    const cached = this.#cache.get();
-    if (cached) return structuredClone(cached);
     await this.#init();
-    const current = await this.#storage.get<DeviceState>(this.#key);
-    if (current !== undefined) {
-      const value = normalizeDevice(current);
-      this.#cache.set(value);
-      return structuredClone(value);
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const current = await this.#storage.get<DeviceState>(this.#key);
+      if (current !== undefined) {
+        const snapshot = structuredClone(normalizeDevice(current));
+        this.#snapshots.set(snapshot, current);
+        return snapshot;
+      }
+      const legacy = await readLegacy(this.#legacyFile);
+      const initial = normalizeDevice(legacy ?? structuredClone(DEFAULT));
+      if (await this.#compareAndSet(undefined, initial)) continue;
     }
-    const legacy = await readLegacy(this.#legacyFile);
-    const value = normalizeDevice(legacy ?? structuredClone(DEFAULT));
-    await this.#storage.save(this.#key, value);
-    this.#cache.set(value);
-    return structuredClone(value);
+    throw new Error('device state initialization did not converge');
   }
 
+  /** Reject stale snapshots rather than overwriting another Runtime's update. */
   async save(state: DeviceState): Promise<void> {
-    const normalized = normalizeDevice(state);
     await this.#init();
-    await this.#storage.save(this.#key, normalized);
-    this.#cache.set(normalized);
+    const expected = this.#snapshots.get(state);
+    if (expected === undefined) throw new Error('DeviceStore.save requires a snapshot returned by get()');
+    const next = normalizeDevice(state);
+    if (!await this.#compareAndSet(expected, next)) {
+      throw new Error('device state changed in another runtime; refusing to overwrite a stale snapshot');
+    }
+    const snapshot = structuredClone(next);
+    this.#snapshots.set(snapshot, next);
   }
 
+  /** Apply patches against the latest DB value and retry concurrent writers. */
   async transition(patch: Partial<DeviceState>): Promise<DeviceState> {
-    const state = await this.get();
-    const next = { ...state, ...patch, habits: { ...state.habits, ...(patch.habits ?? {}) }, battery: clamp(patch.battery ?? state.battery), lastSeenAt: new Date().toISOString() };
-    if (next.charging) next.activity = 'charging';
-    const normalized = normalizeDevice(next);
     await this.#init();
-    await this.#storage.save(this.#key, normalized);
-    this.#cache.set(normalized);
-    return structuredClone(normalized);
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const current = await this.#storage.get<DeviceState>(this.#key);
+      if (current === undefined) {
+        await this.get();
+        continue;
+      }
+      const state = normalizeDevice(current);
+      const next = normalizeDevice({
+        ...state,
+        ...patch,
+        habits: { ...state.habits, ...(patch.habits ?? {}) },
+        battery: clamp(patch.battery ?? state.battery),
+        lastSeenAt: new Date().toISOString(),
+      });
+      if (next.charging) next.activity = 'charging';
+      if (await this.#compareAndSet(current, next)) {
+        const snapshot = structuredClone(next);
+        this.#snapshots.set(snapshot, next);
+        return snapshot;
+      }
+    }
+    throw new Error('device state update contention exceeded retry limit');
+  }
+
+  async close(): Promise<void> { await this.#storage.close(); }
+
+  #compareAndSet(expected: unknown, value: DeviceState): Promise<boolean> {
+    if (!this.#storage.compareAndSet) throw new Error('DeviceStore requires a storage driver with compareAndSet support');
+    return this.#storage.compareAndSet(this.#key, expected, value);
   }
 
   shouldDelay(state: DeviceState): boolean { return state.doNotDisturb || state.network === 'offline' || (state.charging && !state.habits.checksPhoneWhileCharging) || state.habits.ignoresNotificationsWhile.includes(state.activity); }

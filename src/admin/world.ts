@@ -5,7 +5,6 @@ import { activeScheduledEvent, validateScheduledEvent } from './world-events.js'
 import { evolveWorld, type EvolutionPhase } from './world-evolution.js';
 import { DailyLifeSimulator } from './daily-life.js';
 import type { DailyLifeEvent } from './daily-life.js';
-import { TtlCache } from '../core/ttl-cache.js';
 import { createNullLogger } from '../core/logger.js';
 import { SqliteStorage } from '../storage/sqlite.js';
 import type { Storage } from '../storage/types.js';
@@ -38,7 +37,7 @@ export class WorldStore {
   readonly #key: string;
   readonly #botId: string;
   readonly #legacyFile: string;
-  readonly #cache = new TtlCache<WorldState>(2_000);
+  readonly #snapshots = new WeakMap<WorldState, unknown>();
   #ready?: Promise<void>;
 
   constructor(rootDir: string, botId?: string) {
@@ -54,45 +53,125 @@ export class WorldStore {
       : path.join(rootDir, 'data', 'world', 'state.json');
   }
 
+  /** Every read reaches SQLite; the returned snapshot is the CAS base for save(). */
   async get(): Promise<WorldState> {
-    const cached = this.#cache.get();
-    if (cached) return structuredClone(cached);
     await this.#init();
-    const current = await this.#storage.get<WorldState>(this.#key);
-    if (current !== undefined) {
-      const value = normalizeWorld(current);
-      this.#cache.set(value);
-      return structuredClone(value);
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const current = await this.#storage.get<WorldState>(this.#key);
+      if (current !== undefined) {
+        const snapshot = structuredClone(normalizeWorld(current));
+        this.#snapshots.set(snapshot, current);
+        return snapshot;
+      }
+
+      // Legacy JSON is input-only. CAS elects one process to publish the import.
+      const legacy = await readLegacy(this.#legacyFile);
+      const initial = normalizeWorld(legacy ?? structuredClone(DEFAULT_WORLD));
+      if (await this.#compareAndSet(undefined, initial)) continue;
     }
-    const legacy = await readLegacy(this.#legacyFile);
-    const value = normalizeWorld(legacy ?? structuredClone(DEFAULT_WORLD));
-    await this.#storage.save(this.#key, value);
-    this.#cache.set(value);
-    return structuredClone(value);
+    throw new Error('world state initialization did not converge');
   }
 
+  /**
+   * Save only a snapshot obtained from this store. A stale snapshot is rejected
+   * rather than overwriting a newer value from another Runtime/process.
+   */
   async save(state: WorldState): Promise<void> {
-    const normalized = normalizeWorld(state);
     await this.#init();
-    await this.#storage.save(this.#key, normalized);
-    this.#cache.set(normalized);
+    const expected = this.#snapshots.get(state);
+    if (expected === undefined) {
+      throw new Error('WorldStore.save requires a snapshot returned by get()');
+    }
+    const next = normalizeWorld(state);
+    if (!await this.#compareAndSet(expected, next)) {
+      throw new Error('world state changed in another runtime; refusing to overwrite a stale snapshot');
+    }
+    const snapshot = structuredClone(next);
+    this.#snapshots.set(snapshot, next);
   }
 
-  async #update(mutator: (state: WorldState) => void): Promise<WorldState> {
-    const state = await this.get();
-    mutator(state);
-    const normalized = normalizeWorld(state);
-    await this.#init();
-    await this.#storage.save(this.#key, normalized);
-    this.#cache.set(normalized);
-    return structuredClone(normalized);
+  async close(): Promise<void> {
+    releaseWorldIsolation(this.#storage);
+    await this.#storage.close();
   }
 
-  async schedule(input: Partial<ScheduledWorldEvent>): Promise<WorldState> { const event=validateScheduledEvent(input);return this.#update((state)=>{state.schedule=[...state.schedule.filter((item)=>item.id!==event.id),event].sort((a,b)=>Date.parse(a.startsAt)-Date.parse(b.startsAt)).slice(-500);}); }
+  #compareAndSet(expected: unknown, value: WorldState): Promise<boolean> {
+    if (!this.#storage.compareAndSet) {
+      throw new Error('WorldStore requires a storage driver with compareAndSet support');
+    }
+    return this.#storage.compareAndSet(this.#key, expected, value);
+  }
 
-  async confirmScheduled(id: string, trust: ScheduledWorldEvent['trust']): Promise<WorldState> { return this.#update((state)=>{const event=state.schedule.find((item)=>item.id===id);if(!event)throw new Error('scheduled event not found');event.trust=trust;if(trust==='confirmed'){for(const other of state.schedule){if(other.id===id||other.trust!=='confirmed'||!overlaps(event,other))continue;other.trust='rejected';const domain=getWorldForBot(this.#botId);recordTrace({domainId:domain.id,botId:this.#botId,at:new Date().toISOString(),kind:'schedule',before:{eventId:other.id,trust:'confirmed'},after:{eventId:other.id,trust:'rejected'},detail:`preempted by later confirmation ${id}`});}}}); }
+  async #init(): Promise<void> {
+    this.#ready ??= this.#storage.init();
+    await this.#ready;
+  }
 
-  /** Later confirmation wins deterministically; the older overlapping event is rejected and traced. */
+  async #update<T>(mutator: (state: WorldState) => T | Promise<T>): Promise<{ state: WorldState; result: T }> {
+    await this.#init();
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      const current = await this.#storage.get<WorldState>(this.#key);
+      if (current === undefined) {
+        await this.get();
+        continue;
+      }
+      const state = normalizeWorld(structuredClone(current));
+      const result = await mutator(state);
+      const next = normalizeWorld(state);
+      if (await this.#compareAndSet(current, next)) {
+        const snapshot = structuredClone(next);
+        this.#snapshots.set(snapshot, next);
+        return { state: snapshot, result };
+      }
+    }
+    throw new Error('world state update contention exceeded retry limit');
+  }
+
+  async schedule(input: Partial<ScheduledWorldEvent>): Promise<WorldState> {
+    const event = validateScheduledEvent(input);
+    const { state } = await this.#update((current) => {
+      current.schedule = [
+        ...current.schedule.filter((item) => item.id !== event.id),
+        event,
+      ].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)).slice(-500);
+    });
+    return state;
+  }
+
+  async confirmScheduled(id: string, trust: ScheduledWorldEvent['trust']): Promise<WorldState> {
+    let preemptedIds: string[] = [];
+    const { state } = await this.#update((current) => {
+      const event = current.schedule.find((item) => item.id === id);
+      if (!event) throw new Error('scheduled event not found');
+      event.trust = trust;
+      const conflicts: string[] = [];
+      if (trust === 'confirmed') {
+        for (const other of current.schedule) {
+          if (other.id === id || other.trust !== 'confirmed' || !overlaps(event, other)) continue;
+          other.trust = 'rejected';
+          conflicts.push(other.id);
+        }
+      }
+      // Only the conflict list from the successful CAS attempt is used below.
+      preemptedIds = conflicts;
+    });
+
+    const domain = getWorldForBot(this.#botId);
+    for (const eventId of preemptedIds) {
+      recordTrace({
+        domainId: domain.id,
+        botId: this.#botId,
+        at: new Date().toISOString(),
+        kind: 'schedule',
+        before: { eventId, trust: 'confirmed' },
+        after: { eventId, trust: 'rejected' },
+        detail: `preempted by later confirmation ${id}`,
+      });
+    }
+    return state;
+  }
+
+  /** Later confirmation wins deterministically; overlapping events are rejected and traced. */
   async dryRun(input: Partial<ScheduledWorldEvent>, at: number): Promise<WorldState> {
     const state = await this.get();
     const event = validateScheduledEvent({ ...input, trust: 'confirmed' });
@@ -102,64 +181,108 @@ export class WorldStore {
   }
 
   async tick(at = Date.now()): Promise<WorldState> {
-    const state = await this.get();
-    const before = structuredClone(state);
-    const active = activeScheduledEvent(state.schedule, at);
-    state.clock = new Date(at).toISOString();
-    if (active) {
-      const start = Date.parse(active.startsAt), end = Date.parse(active.endsAt), progress = (at-start)/(end-start);
-      const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
-      const evolved = evolveWorld(state, active, phase as EvolutionPhase);
-      Object.assign(state, evolved.state);
-      if (active.kind === 'concert') {
-        state.activity = phase === 'start' ? `演出准备：${active.title}` : phase === 'middle' ? `参加演出：${active.title}` : `演出结束，正在收尾：${active.title}`;
-      } else if (active.kind === 'trip') {
-        state.activity = phase === 'start' ? `前往${active.location}` : phase === 'middle' ? `出差中：${active.title}` : `准备返程：${active.title}`;
-      } else state.activity = active.title;
-    } else {
-      const dateKey = `daily:${new Date(at).toISOString().slice(0, 10)}`;
-      if (!state.appliedPhases.includes(dateKey)) {
-        try {
-          const sim = new DailyLifeSimulator();
-          const evt: DailyLifeEvent = await sim.propose(state, '角色');
-          state.location = evt.location;
-          state.activity = evt.activity;
-          state.mood.energy = clampMood((state.mood.energy ?? 0.65) + evt.energyDelta);
-          state.mood.stress = clampMood((state.mood.stress ?? 0.2) + evt.stressDelta);
-          state.appliedPhases = [...state.appliedPhases, dateKey].slice(-1000);
-        } catch { /* best-effort: daily life failure does not block tick */ }
-      }
-    }
-    const normalized = normalizeWorld(state);
-    await this.#init();
-    await this.#storage.save(this.#key, normalized);
-    this.#cache.set(normalized);
     const domain = getWorldForBot(this.#botId);
-    recordTrace({ domainId: domain.id, botId: this.#botId, at: new Date(at).toISOString(), kind: active ? 'evolution' : 'daily-life', phaseKey: normalized.appliedPhases.at(-1), before: { location: before.location, activity: before.activity, mood: before.mood }, after: { location: normalized.location, activity: normalized.activity, mood: normalized.mood } });
-    return structuredClone(normalized);
-  }
+    const { state, result } = await this.#update(async (current) => {
+      const before = structuredClone(current);
+      const active = activeScheduledEvent(current.schedule, at);
+      current.clock = new Date(at).toISOString();
+      if (active) {
+        const start = Date.parse(active.startsAt);
+        const end = Date.parse(active.endsAt);
+        const progress = (at - start) / (end - start);
+        const phase = progress < .25 ? 'start' : progress < .8 ? 'middle' : 'end';
+        const evolved = evolveWorld(current, active, phase as EvolutionPhase);
+        Object.assign(current, evolved.state);
+        if (active.kind === 'concert') {
+          current.activity = phase === 'start'
+            ? `演出准备：${active.title}`
+            : phase === 'middle'
+              ? `参加演出：${active.title}`
+              : `演出结束，正在收尾：${active.title}`;
+        } else if (active.kind === 'trip') {
+          current.activity = phase === 'start'
+            ? `前往${active.location}`
+            : phase === 'middle'
+              ? `出差中：${active.title}`
+              : `准备返程：${active.title}`;
+        } else {
+          current.activity = active.title;
+        }
+      } else {
+        const dateKey = `daily:${new Date(at).toISOString().slice(0, 10)}`;
+        if (!current.appliedPhases.includes(dateKey)) {
+          try {
+            const sim = new DailyLifeSimulator();
+            const event: DailyLifeEvent = await sim.propose(current, '角色');
+            current.location = event.location;
+            current.activity = event.activity;
+            current.mood.energy = clampMood((current.mood.energy ?? .65) + event.energyDelta);
+            current.mood.stress = clampMood((current.mood.stress ?? .2) + event.stressDelta);
+            current.appliedPhases = [...current.appliedPhases, dateKey].slice(-1000);
+          } catch {
+            // Best-effort: daily-life proposal failure must not block the tick.
+          }
+        }
+      }
+      return {
+        before,
+        active: Boolean(active),
+        phaseKey: current.appliedPhases.at(-1),
+      };
+    });
 
-  async close(): Promise<void> {
-    this.#cache.clear();
-    releaseWorldIsolation(this.#storage);
-    await this.#storage.close();
+    recordTrace({
+      domainId: domain.id,
+      botId: this.#botId,
+      at: new Date(at).toISOString(),
+      kind: result.active ? 'evolution' : 'daily-life',
+      phaseKey: result.phaseKey,
+      before: { location: result.before.location, activity: result.before.activity, mood: result.before.mood },
+      after: { location: state.location, activity: state.activity, mood: state.mood },
+    });
+    return state;
   }
 
   async context(at = Date.now()): Promise<string> {
     const state = await this.tick(at);
     const active = activeScheduledEvent(state.schedule, at);
-    return ['[角色世界状态 - 系统注入，非现实身份声明]', `时间：${state.clock}`, `地点：${state.location}`, `活动：${state.activity}`, `天气：${state.weather}`, `能量：${(state.mood.energy ?? .65).toFixed(2)}，压力：${(state.mood.stress ?? .2).toFixed(2)}`, active ? `已确认日程：${active.title}（${active.kind}）` : '当前没有进行中的已确认特殊日程', '这些是沉浸式模拟状态；不要声称为现实人物的真实行踪或设备情况。'].join('\n');
+    return [
+      '[角色世界状态 - 系统注入，非现实身份声明]',
+      `时间：${state.clock}`,
+      `地点：${state.location}`,
+      `活动：${state.activity}`,
+      `天气：${state.weather}`,
+      `能量：${(state.mood.energy ?? .65).toFixed(2)}，压力：${(state.mood.stress ?? .2).toFixed(2)}`,
+      active ? `已确认日程：${active.title}（${active.kind}）` : '当前没有进行中的已确认特殊日程',
+      '这些是沉浸式模拟状态；不要声称为现实人物的真实行踪或设备情况。',
+    ].join('\\n');
   }
 
-  async event(type: string, text: string): Promise<WorldState> { return this.#update((state)=>{
-    const mood={energy:state.mood.energy??0.65,sociability:state.mood.sociability??0.55,curiosity:state.mood.curiosity??0.7,stress:state.mood.stress??0.2};state.mood=mood;
-    const event={id:`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,type,text,at:new Date().toISOString()};state.clock=event.at;state.events=[event,...state.events].slice(0,100);
-    if(type==='social')mood.sociability=Math.min(1,mood.sociability+0.08);if(type==='conflict')mood.stress=Math.min(1,mood.stress+0.15);if(type==='rest'){mood.energy=Math.min(1,mood.energy+0.2);mood.stress=Math.max(0,mood.stress-0.15);}
-  }); }
-
-  async #init(): Promise<void> {
-    this.#ready ??= this.#storage.init();
-    await this.#ready;
+  async event(type: string, text: string): Promise<WorldState> {
+    const { state } = await this.#update((current) => {
+      const mood = {
+        energy: current.mood.energy ?? .65,
+        sociability: current.mood.sociability ?? .55,
+        curiosity: current.mood.curiosity ?? .7,
+        stress: current.mood.stress ?? .2,
+      };
+      current.mood = mood;
+      const event = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        text,
+        at: new Date().toISOString(),
+      };
+      current.clock = event.at;
+      current.events = [event, ...current.events].slice(0, 100);
+      if (type === 'social') mood.sociability = Math.min(1, mood.sociability + .08);
+      if (type === 'conflict') mood.stress = Math.min(1, mood.stress + .15);
+      if (type === 'rest') {
+        mood.energy = Math.min(1, mood.energy + .2);
+        mood.stress = Math.max(0, mood.stress - .15);
+      }
+    });
+    return state;
   }
 }
 

@@ -17,7 +17,9 @@ describe('World SQLite persistence', () => {
     await fs.writeFile(file, raw);
     const first = new WorldStore(root);
     expect(await first.get()).toMatchObject({ weather: 'rain', activity: 'reading' });
-    await first.save({ ...(await first.get()), location: 'library' });
+    const state = await first.get();
+    state.location = 'library';
+    await first.save(state);
     const second = new WorldStore(root);
     expect(await second.get()).toMatchObject({ weather: 'rain', location: 'library' });
     expect(await fs.readFile(file, 'utf8')).toBe(raw);
