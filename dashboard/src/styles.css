@@ -370,3 +370,9 @@ code { color: #a6c8ff; background: rgba(140,174,255,.08); border: 1px solid rgba
 .topbar-link:hover { color: var(--accent); border-color: rgba(117,213,192,.4); }
 .footer-legend { display: inline-flex; align-items: center; gap: 6px; }
 .app-footer .footer-legend svg, .app-footer span svg { vertical-align: -2px; }
+
+/* First-run setup wizard extras */
+.inline-warning { display: flex; gap: 9px; align-items: flex-start; color: #e8c17e; background: rgba(220,166,78,.08); border: 1px solid rgba(220,166,78,.18); border-radius: 8px; padding: 10px 12px; font-size: 10px; margin-bottom: 18px; line-height: 1.6; }
+.inline-warning svg { flex: 0 0 auto; margin-top: 1px; }
+.token-reveal { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid rgba(117,213,192,.22); border-radius: 9px; background: rgba(117,213,192,.05); margin-bottom: 8px; }
+.token-reveal code { color: #b5f0e4; background: transparent; border: 0; font-size: 11px; word-break: break-all; }

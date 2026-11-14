@@ -84,10 +84,10 @@
 | 经典管理 WebUI | 已实现 | 原生 HTML/CSS/JS，23 个权限门控导航页，保留于 `/` | 继续作为完整回退入口；前端单体约 66 KB，后续逐页迁移后再退役 |
 | Debug Chat | 已实现 | 单次模型调试、权限门控 | 不能当作面向用户的本地聊天产品 |
 | Model Operations UI | 已实现 | 模型健康、用量、fallback/circuit 事件等 | 增加筛选、时间区间和路由解释 |
-| 插件管理 UI | 基础已实现 | 经典 UI 与 React Dashboard 均显示按 Bot 分组的本地插件状态；重载由 `plugin.reload` + nonce + 审计保护 | 新 UI 仍需迁移插件配置表单；缺远程市场、签名、安装、升级和回滚 |
-| WebUI 新前端 | 基础已实现 | `dashboard/`：React 19 + TypeScript + Vite；复用现有 Session Token、Admin API 与 RBAC；已迁移总览、Bot、Provider、模型、日志、角色、记忆元数据、插件、MCP | 其余页面继续迁移；补更完整的组件测试、浏览器 E2E 和首次部署向导 |
+| 插件管理 UI | 已实现 | 经典 UI 与 React Dashboard 均显示按 Bot 分组的本地插件状态；重载由 `plugin.reload` + nonce + 审计保护 | 新 UI 仍需迁移插件配置表单；缺远程市场、签名、安装、升级和回滚 |
+| WebUI 新前端 | 已实现 | `dashboard/`：React 19 + TypeScript + Vite；复用现有 Session Token、Admin API 与 RBAC；21 个权限门控页面（总览、Bot、Provider、模型、日志、角色、语义记忆、表达/黑话、知识库、世界、设备、好感度、任务、Future Tasks、插件、MCP、会话审计、管理员、配置发布、服务健康、调试）；共享 `lib/`（types/hooks/format/api）+ `components/ui` 契约 + jsdom 组件测试；含首次部署向导 | 补浏览器 E2E、OpenAPI 生成的类型化 client 与页面级 response schema；经典控制台继续作为回退入口 |
 | 生成式 API Client | 未实现 | 前端请求路径手写 | 先由 Admin API 输出 OpenAPI，再生成 TS client |
-| 浏览器 E2E | 未实现 | 主要是 API/contract/单元测试 | Playwright 覆盖登录、配置、聊天、角色、插件和危险确认 |
+| 浏览器 E2E | 未实现 | 主要是 API/contract/单元测试 + Dashboard jsdom 组件测试 | Playwright 覆盖登录、配置、聊天、角色、插件和危险确认 |
 
 ## 非功能要求（重建期间不得退化）
 

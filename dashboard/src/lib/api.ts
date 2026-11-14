@@ -118,6 +118,44 @@ export async function currentAdmin(): Promise<AdminMe> {
   return api<AdminMe>('/auth/me');
 }
 
+/* ------------------------------------------------------------------ *
+ * First-run deployment setup (unauthenticated, loopback trust model). *
+ * ------------------------------------------------------------------ */
+
+export interface SetupStatus {
+  ok?: boolean;
+  initialized: boolean;
+  users: number;
+}
+
+export async function fetchSetupStatus(): Promise<SetupStatus> {
+  const response = await fetch('/api/setup/status', { headers: { accept: 'application/json' } });
+  const payload = await parseResponse(response);
+  if (!response.ok) throw new ApiError(String(payload.error ?? '无法读取初始化状态'), response.status, payload);
+  return { initialized: payload.initialized === true, users: Number(payload.users ?? 0), ok: payload.ok === true };
+}
+
+export interface SetupInitResult {
+  token: string;
+  masterToken: string;
+  username?: string;
+}
+
+export async function initializeDeployment(username: string, password: string): Promise<SetupInitResult> {
+  const response = await fetch('/api/setup/init', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) throw new ApiError(String(payload.error ?? payload.message ?? '初始化失败'), response.status, payload);
+  const token = String(payload.token ?? payload.sessionToken ?? '');
+  const masterToken = String(payload.masterToken ?? '');
+  if (!token) throw new ApiError('初始化响应缺少会话令牌', 500, payload);
+  setSessionToken(token);
+  return { token, masterToken, username };
+}
+
 export function body(value: unknown): string {
   return JSON.stringify(value);
 }
