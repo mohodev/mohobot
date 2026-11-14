@@ -9,7 +9,7 @@
 
 ## 数据分层：SQLite（唯一存储）
 
-持久化目标只使用 SQLite：`storage.driver` 默认且唯一内置 `sqlite`（WAL、TTL、聊天索引），数据文件为 `data/mohobot.db`，备份在 `data/backups/`。当前 `WorldStore`/`DeviceStore` 仍保留历史 `VersionedJsonStore` 文件实现，属于已知迁移技术债，见 `REMAINING_WORK.md`；新功能不得继续新增 JSON 持久化。注册表仍允许插件注册额外驱动（`storage.driver` 是开放字符串），但运行时不再内置 memory / MySQL / Redis / Kafka 任何驱动、镜像或 Outbox。
+持久化只使用 SQLite：`storage.driver` 默认且唯一内置 `sqlite`（WAL、TTL、聊天索引），数据文件为 `data/mohobot.db`，备份在 `data/backups/`。会话、World、Device、Affinity、记忆、任务、配置发布与管理审计均通过 SQLite 持久化。World/Device 使用 2 秒进程内 TTL cache，跨进程的新鲜度仍是已知边界。历史 JSON 文件只作为一次性/只读迁移输入，不再写回；`VersionedJsonStore` 不得用于新生产状态。注册表仍允许插件注册额外驱动（`storage.driver` 是开放字符串），运行时不再内置 memory / MySQL / Redis / Kafka 驱动或异步镜像。
 
 ### SQLite 承载的内容
 
@@ -32,7 +32,7 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 - 上游 429、日志与延迟统计未来可建议下调预算，但不能自动修改生产配置；需管理员确认。
 - 背景任务被优先限流，用户直接消息、视觉和管理读取保留能力。
 
-模型运营平面还包括 model catalog、health coordinator、circuit breaker、fallback、availability overlay 和 usage/cost 统计；这些组件目前分散在 `src/ai/`，统一运营视图和跨 Bot/provider 管理契约仍在路线中。
+模型运营平面包括 model catalog、health coordinator、circuit breaker、fallback、availability overlay 和 usage/cost 统计，并已有跨 Bot Model Operations API/WebUI。当前主要差距是路由 trace 可解释性、端到端运营契约和持续评测。
 
 ## 统一发言管线
 
@@ -43,13 +43,13 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 
 模型输出只能得到 `ReplyPlan`：`ignore` 或受限 segments；发送器处理 Discord 限制、禁止 mass mention、分段和失败降级。
 
-输入侧的用户文本、附件观察、OCR/VLM、MCP 返回、工具结果和长期记忆均属于不可信数据；它们不得因为被放入 system/data block 就获得 instruction 权限。当前各模块已有局部标记和防护，统一协议与全链路回归测试仍在路线中。
+输入侧用户文本、附件观察、OCR/VLM、MCP 返回、工具结果和长期记忆均属于不可信数据；它们不得因为被放入 system/data block 就获得 instruction 权限。当前 `wrapUntrusted` 与 provenance 已接入 pipeline、AI tools、MCP bridge、media OCR/VLM 和 memory recall，并有跨来源注入回归测试；新增数据入口必须沿用该协议。
 
 ## 拟人化状态域
 
 - `RelationshipGraph`：好感、熟悉、信任、尊重、边界、共同经历；跨私聊/群聊仅共享允许跨域的非敏感画像。
 - `DeviceState`：电量、充电、网络、屏幕、勿扰、通知队列、习惯；是沉浸状态，非现实身份/设备声明。
-- `WorldState`：当前已实现时间、活动、天气、日程、事件和基础 mood 阶段；完整的事件来源链、持续演化、Future Task 执行、回放和多世界域仍在 `REMAINING_WORK.md` 的世界模拟路线中。新闻只能进入候选情报库，经过来源、时间、注入清洗和置信度校验。
+- `WorldState`：已实现 SQLite 状态、事件来源链、信任/确认、阶段演化、Future Task 的受限 tick handler、trace/replay 与 bot domain 隔离基础。World/Device 仍有 2 秒进程内 TTL cache，多实例需补跨进程 stale-cache 策略。新闻只能进入候选情报库，经过来源、时间、注入清洗和置信度校验。
 - `GroupStyle`：只允许短期调整句长、口语程度、表情和回复频率，不得改变安全规则或核心人格。
 
 ## 视觉与情报

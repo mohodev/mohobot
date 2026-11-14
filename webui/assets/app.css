@@ -824,3 +824,5 @@ dialog::backdrop { background: color-mix(in srgb, #000 55%, transparent); }
   .section-bar { align-items: flex-start; flex-direction: column; }
   .actions { white-space: normal; }
 }
+
+.modern-ui-link{display:inline-flex;align-items:center;padding:7px 10px;border:1px solid var(--outline,#435467);border-radius:999px;color:var(--primary,#7dd7c3);font-size:12px;text-decoration:none;white-space:nowrap}.modern-ui-link:hover{background:color-mix(in srgb,var(--primary,#7dd7c3) 10%,transparent)}

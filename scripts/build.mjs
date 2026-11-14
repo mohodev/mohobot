@@ -11,6 +11,10 @@ await rm(dist, { recursive: true, force: true });
 const compiled = spawnSync(tsc, ['tsc', '-p', 'tsconfig.build.json'], { cwd: root, stdio: 'inherit' });
 if (compiled.status !== 0) process.exit(compiled.status ?? 1);
 
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const dashboard = spawnSync(npm, ['run', 'dashboard:build'], { cwd: root, stdio: 'inherit' });
+if (dashboard.status !== 0) process.exit(dashboard.status ?? 1);
+
 const pluginsDir = path.join(root, 'plugins');
 for (const entry of await readdir(pluginsDir, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue;

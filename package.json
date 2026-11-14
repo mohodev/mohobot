@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=22.12.0"
   },
+  "workspaces": [
+    "dashboard"
+  ],
   "scripts": {
     "start": "node app.js",
     "dev": "tsx watch src/index.ts",
@@ -19,7 +22,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "scan-secrets": "tsx scripts/scan-secrets.ts",
-    "acp": "tsx src/acp/index.ts"
+    "acp": "tsx src/acp/index.ts",
+    "dashboard:dev": "npm run dev --workspace=@mohobot/dashboard",
+    "dashboard:typecheck": "npm run typecheck --workspace=@mohobot/dashboard",
+    "dashboard:build": "npm run build --workspace=@mohobot/dashboard"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

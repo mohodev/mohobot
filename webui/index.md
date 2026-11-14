@@ -1,36 +1,64 @@
 # MohoBot WebUI 状态与交付范围
 
-> 本文件于 2026-10-17 按代码实况重写；早前版本严重过时。
+最后核对：2026-11-14。
 
-本文件最初是对一份“所有功能已一次性写入完成”的 Markdown 清单的纠偏——那份清单没有前端应用、后端 API、鉴权或测试。此后项目在 `src/admin/` + `webui/` 真实落地了绝大部分能力，但本文件长期未更新，反而成了误导源。现状：`webui/index.html` + `assets/app.js` 是可运行的单页应用，含登录面板与 21 个按权限门控的标签页；后端是 `src/admin/server.ts`（路由/权限/风险/二次确认全部登记在 `src/admin/route-policy.ts`，角色矩阵在 `src/admin/rbac.ts`：viewer/operator/admin/developer），默认绑定 `127.0.0.1:3210`，所有请求写审计日志。
+## 当前入口
 
-## 功能矩阵
+MohoBot 现在同时保留两套管理界面，使用同一个 Admin API、Session Token、RBAC、Route Policy、确认 nonce 和审计服务：
 
-| 功能 | 状态 | 备注 |
-|---|---|---|
-| 登录/配置面板 | 已实现 | `src/admin/auth-service.ts`（账号/scrypt 口令/会话/临时令牌）+ WebUI 登录面板（含本地初始化令牌模式）；密钥仍只走 env |
-| 角色管理 | 已实现 | CRUD：`GET/POST /api/characters`、`GET/PUT /api/characters/:id` + `CharacterCatalog`；批量导入：`POST /api/characters/import`（校验/去重/dryRun/冲突策略）；角色页 UI 含新建/编辑/批量导入 |
-| 短期记忆 | 已实现 | `GET/DELETE /api/ops/sessions`、`GET /api/ops/chat-log`、`/api/ops/discord-chat-log`；删除需二次确认并审计 |
-| 中长期记忆 | 已实现 | `SemanticMemoryAdapter`（`src/memory/semantic-memory.ts`）+ `/api/memory`（列表/读取/删除，scope 隔离，删除为 dangerous 需确认） |
-| 世界模拟器 | 基础已实现，完整系统进行中 | `WorldStore`（`src/admin/world.ts`）+ `/api/world`（状态/schedule/trust 确认/tick/events/day-plan）；当前仍缺 SQLite 迁移、持续事件演化、Future Task 执行、回放和多世界域隔离 |
-| 行为引擎 | 已实现 | `POST /api/behavior/dry-run` + `src/admin/behavior-dry-run.ts`、`day-planner.ts`、`event-intelligence.ts` |
-| 日志查看器 | 已实现 | `GET /api/logs`（level/component/after/limit 分页）+ `LogBuffer`（`src/core/log-buffer.ts`） |
-| 插件管理器 | 已实现 | `GET /api/bots/:id/plugins` + `POST .../plugins/:id/reload`（`plugin.reload` 权限 + 二次确认）；WebUI「插件管理」页 |
-| MCP 工具管理 | 已实现 | `src/mcp/`：client/permissions/audit + 真实 transport（stdio/http）+ `McpManager`，config 驱动（`mcp.enabled` 默认关闭，见 `docs/MCP.md`）；管理面 `GET /api/mcp/policy\|tools\|audit` + `POST /api/mcp/call`（二次确认）+ WebUI「MCP 工具」页；`src/ai/mcp-tools.ts` 已将 MCP 工具桥接进模型 pipeline，模型调用固定走 `viewer` 权限。 |
-| 测试聊天 | 已实现 | `POST /api/debug/chat`（+ capabilities）经 `DebugChatFacade`（`src/admin/debug-chat.ts`）；WebUI「调试聊天」页，`debug.chat` 权限 |
-| 角色互聊 | 已实现 | `src/characters/cross-chat.ts` + `POST /api/characters/cross-chat`（轮转调度、硬回合上限、重复检测、超时熔断、沙箱 system prompt）；角色页 UI 含互聊入口 |
-| Bot 操作面板 | 已实现 | RBAC（`src/admin/rbac.ts`）+ 二次确认（`POST /api/confirmations`）+ 审计（`GET /api/admin/audit`）；重启 `POST /api/bots/:id/restart`（dangerous） |
-| 系统状态监控 | 已实现 | `GET /api/status`（Bot 快照）、`GET /api/metrics`、`GET /api/admin/health`（healthSnapshot）；WebUI「仪表盘/服务健康/性能指标」页 |
+- **经典控制台**：`/`，原生 HTML/CSS/JavaScript 单页应用，23 个既有权限门控页面。仍是功能最完整的稳定入口。
+- **新控制台**：`/dashboard/`，React 19 + TypeScript + Vite 独立工程，作为逐页迁移中的新前端。由 `npm run build` 输出到 `webui/dashboard/`，不覆盖经典控制台。
 
-矩阵之外已落地的门控功能（见 `webui/index.html` 导航与 `route-policy.ts`）：知识库（`/api/knowledge-bases` 全套 CRUD/搜索/绑定）、配置发布（publish/ack/rollback）、用户管理（`/api/admin/users`）、临时令牌、供应商探测、模型阵列、任务控制（`/api/tasks`）、运维审计（`/api/ops/operator-audit` + `operator-tools`）、设备与好感度（`/api/device`、`/api/affinity`）。
+管理 API 仍由 `src/admin/server.ts` 提供，默认绑定 `127.0.0.1:3210`。后端权限事实源为 `src/admin/route-policy.ts` 和 `src/admin/rbac.ts`。前端隐藏菜单/按钮只是 UX，不能替代服务端授权。
 
-## 推荐交付顺序
+## 新控制台已迁移页面
 
-1. **管理 API 基座** ✅ — `src/admin/server.ts`，仅绑定 localhost，强制账号/令牌鉴权，状态、Provider 健康、插件列表齐备。
-2. **只读仪表盘** ✅ — 仪表盘/机器人与平台/性能指标/服务健康/模型阵列页。
-3. **受控操作** ✅ — 重启 Bot、重载插件、删会话、任务暂停/恢复；RBAC + 二次确认 + 审计日志。
-4. **角色域模型** ✅ — Schema/存储/API/UI + 批量导入（`POST /api/characters/import`）+ 角色互聊（`POST /api/characters/cross-chat`）均已落地。
-5. **长期记忆与测试聊天** ✅ — `/api/memory` 隔离与删除审计、`/api/debug/chat` 均已交付。
-6. **MCP/行为/世界模拟** — 行为 ✅；MCP ✅（`src/mcp/`：权限+审计+stdio/http transport + `McpManager`，管理面 API + WebUI 页，默认关闭、最小权限；`src/ai/mcp-tools.ts` 已桥接模型 pipeline）；世界模拟基础层 ✅，完整持续模拟仍按 `REMAINING_WORK.md` 分阶段推进。
+| 页面 | 实际接入 |
+|---|---|
+| 登录 | 账号密码登录、旧初始化令牌交换、Session Token 复用 |
+| 运行总览 | `GET /api/status`，Bot/网关/会话快照 |
+| 机器人 | `GET /api/bots`、受控重启（服务端确认 nonce） |
+| 模型供应商 | `GET /api/providers`、连接探测 |
+| 模型运营 | `GET /api/models`、`/api/models/health`、`/api/models/dashboard` |
+| 实时日志 | `GET /api/logs`、级别/关键字过滤、JSONL 导出 |
+| 角色档案 | `GET /api/characters` |
+| 记忆元数据 | `GET /api/memory`，不展示超出权限的原始记忆正文 |
 
-验收标准：每个功能必须同时具备后端实现、前端交互、权限边界、错误处理和自动化测试；只有页面文字不算完成。
+新控制台当前使用桌面侧栏、响应式小屏布局、统一组件和加载/错误/空状态。角色编辑、完整记忆治理、MCP、插件、任务、配置发布、世界/设备等尚未迁移的功能会明确跳转至经典控制台。
+
+## 经典控制台仍提供的功能
+
+| 分区 | 页面与能力 |
+|---|---|
+| 总览 | 仪表盘、运行状态 |
+| 运行 | Bot、插件、扩展、MCP、运行数据、日志、指标、健康 |
+| 治理 | Operator 审计、记忆管理、知识库、用户、临时令牌 |
+| 调试 | 行为 dry-run、Debug Chat |
+| 配置 | 模型目录、Model Operations、Provider、配置发布、角色、世界、设备与关系 |
+
+详细功能矩阵见本文件所在仓库的 `docs/FEATURE_MATRIX.md`。
+
+## 明确的产品边界
+
+- **已有 Debug Chat 不等于正式 WebChat。** 当前尚无面向终端用户的独立 WebChat Gateway、会话身份、历史工作台和流式聊天产品。
+- **插件管理不等于插件市场。** 当前能管理本地插件并执行受控重载，不提供远程市场、签名、安装、升级和回滚分发服务。
+- **静态资源生成不等于浏览器 E2E 已覆盖。** 新前端已有独立 TypeScript 检查和产物构建；仍需引入组件测试、Playwright 端到端门禁和初始化向导测试。
+
+## 本地开发与构建
+
+```bash
+npm run dashboard:dev       # Vite，http://127.0.0.1:5174/dashboard/
+npm run dashboard:typecheck # 前端 TypeScript 检查
+npm run dashboard:build     # 构建 webui/dashboard/
+npm run build               # Runtime / plugins + React Dashboard
+```
+
+## 下一步顺序
+
+1. 完成 Dashboard 登录状态、首次部署向导和统一错误/通知体验。
+2. 迁移插件、MCP、任务和配置发布页面，危险操作全部使用统一的服务端确认协议。
+3. 完成正式 WebChat：独立会话模型、历史、流式传输、角色选择与附件能力。
+4. 完成角色/记忆治理的编辑、审核、删除、回收站、恢复和导出流程。
+5. 增加 React 组件测试与 Playwright E2E，覆盖登录、RBAC、确认 nonce、错误和移动端布局。
+
+验收标准：每个页面必须同时具备 API 契约、权限门控、加载/空/错误状态、成功反馈和自动化测试；危险动作必须使用服务端确认与审计。只显示静态卡片或按钮不算交付。

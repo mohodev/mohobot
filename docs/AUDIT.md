@@ -1,5 +1,7 @@
 # MohoBot 代码审计（2026-08-13）
 
+> 历史审计记录：以下问题与基线是 2026-08 至 2026-10 的时间点结论，不能代表当前完整状态。当前实现状态以 [`FEATURE_MATRIX.md`](FEATURE_MATRIX.md) 为准；仍需处理的事项以 [`REMAINING_WORK.md`](../REMAINING_WORK.md) 和当前代码/测试为准。
+
 ## 已验证基线
 
 - `npm run typecheck`：通过

@@ -1,4 +1,6 @@
-# 遗留清单（2026-10-18 更新）
+# 遗留清单（2026-11-14 复核）
+
+> 当前功能与实现状态以 [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md) 为准。本文件保留分批施工记录；旧批次中的完成描述是历史过程，不应覆盖当前代码事实。
 
 ## 全部完成 ✅
 - [x] 终极闭环：Discord 群里 @墨染荷韵 说话 → `GET /api/ops/discord-chat-log` 出现 in+out 记录
@@ -16,7 +18,7 @@
 - [x] Phase 5 部分：审计 API（`GET /api/ops/operator-audit`）
 - [x] 已知 bug 修复：`<@id>` mention 残留；好感度数字滞后（cooldown/interval 默认调优）
 - [x] 第一批拟人化基础：Expression Memory（规则抽取、隔离、TTL、去重、安全过滤）+ Talk Governor（默认关闭的主动发言预算/冷却）
-- [x] 第一批接线整合：WorldStore/DeviceStore SQLite 迁移、删除联动 Runtime 接线、GuildPlanner 控制面、不可信数据全链路接入、配置发布激活接线
+- [x] 第一批接线整合：WorldStore/DeviceStore SQLite 迁移、AffinityStore SQLite CAS 迁移（旧 JSON 只读导入）、删除联动 Runtime 接线、GuildPlanner 控制面、不可信数据全链路接入、配置发布激活接线
 - [x] 第二批治理能力：Expression Memory 完整治理 API（批量删除/回收站/恢复/脱敏导出/7 个管理 API）、Talk Governor SQLite 持久化、消息级 Planner、DailyLife 接入 World tick、Social Disclosure 完整调用链
 
 ## Operator Agent Phase 5 ✅（2026-10-17 全部收口）
@@ -83,5 +85,5 @@
 - [x] 角色互询已实现：`consultPeer()` 完整链路（gate + shared-only prompt + 抽象回答 + audit）；与 cross-chat 的管理员驱动公开对聊分离
 - [x] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；`chat_log` 保留期/容量/摘要长度已通过 `chatLog` 全局配置化（内存 buffer + SQLite 定期清理）；热重载已支持新增/删除/禁用 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
 
-## 当前状态（2026-10-18 第四批收口完成）
-第一、二、三批保持已完成。第四批收口：semantic memory 治理（批量删除/回收站/审计/导出/导入 dry-run）、世界模拟 Phase 3/4（来源链确认流、trace/domain 持久化、抢占、dry-run、replay）、Model Operations（lane 路由、dashboard 事件、WebUI）、chat_log 配置化与 Bot 热重载增删、Discord 投递对账。验证：typecheck、158 测试文件 1126 测试、build、secret scan 全部通过。剩余 `[ ]` 项仅有多实例部署的 World/Device 2 秒缓存一致性（单实例部署不受影响）。
+## 当前状态（2026-11-14 复核）
+历史第一至第四批功能继续保留。无人值守重建分支新增 AffinityStore SQLite 化：由 Runtime 复用共享 SQLite Storage，旧 `data/memory/affinity.json` 作为只读迁移输入，写入使用 SQLite compare-and-set 避免多实例更新丢失。验证基线为 Node.js 24.21.0：typecheck、dashboard typecheck、159 测试文件 1,134 用例、preflight、secret scan、包含 React Dashboard 的 build 全部通过。新 Dashboard 已在隔离 MemoryStorage 的 AdminServer 上完成登录/总览/Bot/日志浏览器冒烟。当前已知的跨实例状态一致性问题仍是 World/Device 的 2 秒进程内 TTL cache，需要引入 revision/cache invalidation 策略。

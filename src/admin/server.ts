@@ -189,7 +189,7 @@ export class AdminServer {
     this.#auth = new AdminAuthService({ storage: opts.storage });
     this.#characters = new CharacterCatalog(opts.rootDir);
     this.#world = new WorldStore(opts.rootDir);
-    this.#affinity = new AffinityStore(opts.rootDir);
+    this.#affinity = new AffinityStore(opts.rootDir, opts.storage);
     this.#device = new DeviceStore(opts.rootDir);
     this.#catalog = new ModelCatalogStore(opts.rootDir);
     this.#memories=new MemoryAdminService(opts.storage);
@@ -795,7 +795,7 @@ export class AdminServer {
   #ok(value: Record<string, unknown>): ApiResult { return { status: 200, body: { ok: true, ...value } }; }
 
   async #static(res: ServerResponse, pathname: string): Promise<void> {
-    const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const relative = pathname === '/' ? 'index.html' : pathname === '/dashboard' || pathname === '/dashboard/' ? 'dashboard/index.html' : pathname.replace(/^\/+/, '');
     const root = path.resolve(this.#opts.rootDir, 'webui');
     const file = path.resolve(root, relative);
     if (!file.startsWith(`${root}${path.sep}`) && file !== path.join(root, 'index.html')) return json(res, 403, { error: 'forbidden' });

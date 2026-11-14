@@ -15,7 +15,7 @@ npm run setup -- --non-interactive
 npm start
 ```
 
-首次启动向导会创建 `data/.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖，根目录遗留的 `.env*` 与 `config/` 会被自动迁移到 `data/`。管理 WebUI 默认在 `127.0.0.1:3210`，使用 `MOHO_ADMIN_TOKEN` 登录。
+首次启动向导会创建 `data/.env.local`、随机管理员 Token、运行目录和 SQLite；已有 `.env.local` 不会被覆盖，根目录遗留的 `.env*` 与 `config/` 会被自动迁移到 `data/`。管理服务默认在 `127.0.0.1:3210`。经典控制台位于 `/`；重建中的 React 控制台位于 `/dashboard/`，两者共用 Admin API、登录会话和服务端 RBAC。
 
 **也可以完全跳过 CLI**：`npm start` 后在浏览器打开管理 WebUI。未初始化的部署会直接进入「首次部署」向导——创建第一个管理员账号（developer 角色）即自动完成 setup（生成部署主密钥写入 `data/.env.local`、初始化 SQLite），主密钥仅在向导完成页显示一次，请妥善保存。已有部署不受影响；`GET /api/setup/status` 可随时查询初始化状态。
 
@@ -36,7 +36,9 @@ printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 | `npm run preflight` | 离线检查配置、目录写权限与 SQLite 迁移 |
 | `npm run typecheck` | TypeScript 类型检查 |
 | `npm test` | Vitest 回归测试 |
-| `npm run build` | 构建到 `dist/` |
+| `npm run build` | 构建 Runtime/插件到 `dist/`，并构建 React Dashboard 到 `webui/dashboard/` |
+| `npm run dashboard:dev` | 启动新 React WebUI（默认 Vite 端口 5174） |
+| `npm run dashboard:typecheck` | 新 WebUI 独立 TypeScript 检查 |
 | `npm run check-update` | 只检查本地 Git/Node 状态，不联网、不修改 |
 | `npm run update` | 保守生产更新（会 fetch、备份、验证，详见下文） |
 | `npx tsx scripts/verify-hotreload.ts` | 验证插件热加载 |

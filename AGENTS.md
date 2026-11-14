@@ -7,6 +7,8 @@ MohoBot is a TypeScript ESM, Node.js >= 22.12 Discord AI runtime. It has no appl
 - `npm run dev` runs `src/index.ts` with `tsx watch`.
 - `npm start` runs `app.js`, which loads compiled `dist/`; run `npm run build` after source changes or `npm start` will run stale code.
 - `npm run typecheck` checks only `src/**/*.ts` and `scripts/setup.ts`.
+- `npm run dashboard:dev` starts the React dashboard at `/dashboard/` (Vite port 5174); `npm run dashboard:typecheck` type-checks the independent frontend; `npm run dashboard:build` builds it into `webui/dashboard/`.
+- `npm run build` now builds the Node runtime/plugins and the dashboard workspace. The generated dashboard bundle is ignored by Git and is recreated by the build.
 - `npm test` runs `src/**/*.test.ts` with Vitest. Focus a test with `npx vitest run src/path/file.test.ts`.
 - `npm run build` runs the broader build config (`src`, `plugins`, `extensions`) and copies plugin manifests; use it to verify plugin/extension TypeScript.
 - `npm run scan-secrets` scans tracked files; `npm run scan-secrets -- --history` also scans added lines in git history.
@@ -33,7 +35,7 @@ MohoBot is a TypeScript ESM, Node.js >= 22.12 Discord AI runtime. It has no appl
 - `SessionManager` is the live model context. `ContextArchiver` is audit/archive storage and never feeds the model. Persisted sessions are record version 1 or 2; newer records are read-only/future data.
 - Message processing is serialized per session. Direct DM/@/reply handling has higher priority than ordinary group participation; keep peer-bot privilege restricted to configured `discord.peerBots`.
 - `MemoryStorage` is a test fixture, not a production storage driver. SQLite is the only built-in persistent driver.
-- World/Device state currently uses `VersionedJsonStore` and is a documented SQLite migration debt; do not add new JSON persistence. See `REMAINING_WORK.md` and `docs/REVERSE_AUDIT_2026-10-18.md`.
+- World/Device/Affinity state is persisted through the shared SQLite store. World/Device retain a short in-process TTL cache; multi-instance freshness is still a known consistency boundary. Legacy JSON files are read-only migration inputs. `VersionedJsonStore` is a compatibility utility, not a production persistence path. Never add new JSON persistence. See `docs/FEATURE_MATRIX.md` and `REMAINING_WORK.md`.
 - Expression Memory and Talk Governor are opt-in foundations. Expression Memory is separate from semantic exchange memory; Talk Governor is default-off and must not block direct summons.
 - MCP is default-off. Model-initiated MCP calls use the fixed low-privilege `viewer` role and must pass MCP permission/audit checks. Operator and admin APIs are separate privilege planes.
 
