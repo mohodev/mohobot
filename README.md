@@ -35,7 +35,7 @@ printf 'hello\n' | MOHO_ADAPTER=console AI_API_KEY= npx tsx src/index.ts
 | `npm run dev` | 监听源码并重启 |
 | `npm run preflight` | 离线检查配置、目录写权限与 SQLite 迁移 |
 | `npm run typecheck` | TypeScript 类型检查 |
-| `npm test` | Vitest 回归测试 |
+| `npm test` | Runtime/API 与 React Dashboard 双套 Vitest 回归测试 |
 | `npm run build` | 构建 Runtime/插件到 `dist/`，并构建 React Dashboard 到 `webui/dashboard/` |
 | `npm run dashboard:dev` | 启动新 React WebUI（默认 Vite 端口 5174） |
 | `npm run dashboard:typecheck` | 新 WebUI 独立 TypeScript 检查 |

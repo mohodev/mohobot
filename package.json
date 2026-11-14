@@ -20,12 +20,13 @@
     "update": "tsx scripts/update.ts",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && npm run dashboard:test",
     "scan-secrets": "tsx scripts/scan-secrets.ts",
     "acp": "tsx src/acp/index.ts",
     "dashboard:dev": "npm run dev --workspace=@mohobot/dashboard",
     "dashboard:typecheck": "npm run typecheck --workspace=@mohobot/dashboard",
-    "dashboard:build": "npm run build --workspace=@mohobot/dashboard"
+    "dashboard:build": "npm run build --workspace=@mohobot/dashboard",
+    "dashboard:test": "npm run test --workspace=@mohobot/dashboard"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

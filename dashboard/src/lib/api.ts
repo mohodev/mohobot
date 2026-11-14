@@ -1,7 +1,16 @@
 import type { AdminMe } from './types';
 
 const SESSION_KEY = 'moho-admin-session';
-let sessionToken = sessionStorage.getItem(SESSION_KEY) ?? '';
+
+function sessionStore(): Storage | undefined {
+  try {
+    return typeof window === 'undefined' ? undefined : window.sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+let sessionToken = sessionStore()?.getItem(SESSION_KEY) ?? '';
 let unauthorizedHandler: (() => void) | undefined;
 
 export class ApiError extends Error {
@@ -21,8 +30,9 @@ export function setUnauthorizedHandler(handler: (() => void) | undefined): void 
 
 export function setSessionToken(token: string): void {
   sessionToken = token;
-  if (token) sessionStorage.setItem(SESSION_KEY, token);
-  else sessionStorage.removeItem(SESSION_KEY);
+  const storage = sessionStore();
+  if (token) storage?.setItem(SESSION_KEY, token);
+  else storage?.removeItem(SESSION_KEY);
 }
 
 export function getSessionToken(): string {

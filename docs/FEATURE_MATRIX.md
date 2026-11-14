@@ -101,7 +101,8 @@
 
 2026-11-14 在 Node.js v24.21.0 下，依赖安装后曾验证：
 - TypeScript typecheck 通过；
-- 159 个 Vitest 文件、1,134 个测试通过；
+- 后端 159 个 Vitest 文件、1,134 个测试通过；
+- React Dashboard 2 个测试文件、8 个用例通过；
 - React Dashboard 独立 TypeScript 检查通过；
 - SQLite preflight 通过；
 - secret scan 未发现密钥；

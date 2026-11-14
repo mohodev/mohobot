@@ -86,4 +86,4 @@
 - [x] `docs/AUDIT.md`「仍需处理」中的 Medium 工程项：插件 AbortSignal 生命周期已实现（`PluginLifecycle` token）；`chat_log` 保留期/容量/摘要长度已通过 `chatLog` 全局配置化（内存 buffer + SQLite 定期清理）；热重载已支持新增/删除/禁用 Bot；全局配置变更后组件重建已通过 `onActivated` hook 实现
 
 ## 当前状态（2026-11-14 复核）
-历史第一至第四批功能继续保留。无人值守重建分支新增 AffinityStore SQLite 化：由 Runtime 复用共享 SQLite Storage，旧 `data/memory/affinity.json` 作为只读迁移输入，写入使用 SQLite compare-and-set 避免多实例更新丢失。验证基线为 Node.js 24.21.0：typecheck、dashboard typecheck、159 测试文件 1,134 用例、preflight、secret scan、包含 React Dashboard 的 build 全部通过。新 Dashboard 已在隔离 MemoryStorage 的 AdminServer 上完成登录/总览/Bot/日志浏览器冒烟。当前已知的跨实例状态一致性问题仍是 World/Device 的 2 秒进程内 TTL cache，需要引入 revision/cache invalidation 策略。
+历史第一至第四批功能继续保留。无人值守重建分支新增 AffinityStore SQLite 化：由 Runtime 复用共享 SQLite Storage，旧 `data/memory/affinity.json` 作为只读迁移输入，写入使用 SQLite compare-and-set 避免多实例更新丢失。验证基线为 Node.js 24.21.0：typecheck、dashboard typecheck、159 个后端测试文件 1,134 用例 + Dashboard 2 个测试文件 8 用例、preflight、secret scan、包含 React Dashboard 的 build 全部通过。新 Dashboard 已在隔离 MemoryStorage 的 AdminServer 上完成登录/总览/Bot/日志浏览器冒烟。当前已知的跨实例状态一致性问题仍是 World/Device 的 2 秒进程内 TTL cache，需要引入 revision/cache invalidation 策略。
