@@ -12,6 +12,8 @@ import { Models } from './pages/models';
 import { Logs } from './pages/logs';
 import { Characters } from './pages/characters';
 import { Memory } from './pages/memory';
+import { Plugins } from './pages/plugins';
+import { Mcp } from './pages/mcp';
 import { LegacyFeature } from './pages/legacy';
 
 const validViews: ViewId[] = ['overview', 'bots', 'providers', 'models', 'logs', 'characters', 'memory', 'plugins', 'mcp', 'world', 'device', 'tasks', 'users', 'settings', 'health', 'debug'];
@@ -87,6 +89,8 @@ export function App() {
       case 'logs': return <Logs />;
       case 'characters': return <Characters />;
       case 'memory': return <Memory />;
+      case 'plugins': return <Plugins permissions={permissions} />;
+      case 'mcp': return <Mcp permissions={permissions} />;
       default: return <LegacyFeature view={view} title={titles[view]} />;
     }
   })();

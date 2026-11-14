@@ -45,7 +45,7 @@
 | Model Catalog / Health / Usage | 已实现 | `src/ai/`、model-catalog 插件、Model Operations | Provider 配置体验和自动化回归继续完善 |
 | OpenCode CLI | 已实现 | `src/ai/opencode-cli.ts` | 明确 CLI Agent / Provider / ACP 的契约边界 |
 | LLM Tool Calling | 已实现 | ChatToolRegistry、有界轮次和 allowlist | 扩展工具结果审计、超时与取消 |
-| MCP | 已实现 | stdio/HTTP transport、权限、审计、viewer bridge；默认关闭 | 插件能力授权与用户可视化管理 |
+| MCP | 已实现 | stdio/HTTP transport、权限、审计、viewer bridge；默认关闭；经典与 React Dashboard 均有策略/Server/工具/脱敏审计视图，调用受 `mcp.call` RBAC + nonce + MCP tool policy 约束 | 新 UI 仍需补更多异常状态和 schema 表单体验 |
 | ACP | 已实现 | `src/acp/` | 兼容性和恢复/取消行为继续完善 |
 | Operator Agent | 已实现 | 受控诊断/写操作暂存/确认，独立权限平面 | 增加工具执行 trace UI 和更细能力范围 |
 | 本地插件 | 已实现 | `plugins/<id>/plugin.json`、热加载、生命周期回收 | SDK 文档、manifest schema、兼容性契约 |
@@ -83,8 +83,8 @@
 | 经典管理 WebUI | 已实现 | 原生 HTML/CSS/JS，23 个权限门控导航页，保留于 `/` | 继续作为完整回退入口；前端单体约 66 KB，后续逐页迁移后再退役 |
 | Debug Chat | 已实现 | 单次模型调试、权限门控 | 不能当作面向用户的本地聊天产品 |
 | Model Operations UI | 已实现 | 模型健康、用量、fallback/circuit 事件等 | 增加筛选、时间区间和路由解释 |
-| 插件管理 UI | 基础已实现 | 本地插件状态、配置、重载 | 缺市场、安装、签名、升级和回滚 |
-| WebUI 新前端 | 基础已实现 | `dashboard/`：React 19 + TypeScript + Vite；复用现有 Session Token、Admin API 与 RBAC；已迁移总览、Bot、Provider、模型、日志、角色和记忆元数据 | 其余页面继续迁移；补组件测试、浏览器 E2E 和完整初始化向导 |
+| 插件管理 UI | 基础已实现 | 经典 UI 与 React Dashboard 均显示按 Bot 分组的本地插件状态；重载由 `plugin.reload` + nonce + 审计保护 | 新 UI 仍需迁移插件配置表单；缺远程市场、签名、安装、升级和回滚 |
+| WebUI 新前端 | 基础已实现 | `dashboard/`：React 19 + TypeScript + Vite；复用现有 Session Token、Admin API 与 RBAC；已迁移总览、Bot、Provider、模型、日志、角色、记忆元数据、插件、MCP | 其余页面继续迁移；补更完整的组件测试、浏览器 E2E 和首次部署向导 |
 | 生成式 API Client | 未实现 | 前端请求路径手写 | 先由 Admin API 输出 OpenAPI，再生成 TS client |
 | 浏览器 E2E | 未实现 | 主要是 API/contract/单元测试 | Playwright 覆盖登录、配置、聊天、角色、插件和危险确认 |
 
