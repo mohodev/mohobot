@@ -29,7 +29,9 @@ MohoBot is a TypeScript ESM, Node.js >= 22.12 Discord AI runtime. It has no appl
 
 ## Architecture Boundaries
 
-- `discord.js` belongs only under `src/discord/`. Core types, pipeline policy, storage, memory, and AI code must remain platform-neutral.
+- `discord.js` belongs only under `src/discord/`. Platform-neutral contracts live under `src/platform/`; Runtime and registries must import `Gateway` from `src/platform/types.ts`, not from the legacy Discord path.
+- `src/platform/index.ts` is the gateway composition root. It resolves built-ins and extension adapters from the Runtime-injected gateway registry; `src/discord/index.ts` remains a backward-compatible export surface.
+- `src/platform/guild.ts` contains optional workspace/guild management contracts. A platform that does not support these capabilities must omit the optional methods instead of faking them.
 - There are four extension registries: providers, gateways, storages, and memories. Unknown configured names degrade to safe built-ins; preserve this behavior instead of throwing on typos.
 - `extensions/*.ts` auto-loads an exported `register`; `plugins/<id>/` loads through `plugin.json` and is reaped on unload. A new pipeline stage or event kind still requires a core `src/` change.
 - `SessionManager` is the live model context. `ContextArchiver` is audit/archive storage and never feeds the model. Persisted sessions are record version 1 or 2; newer records are read-only/future data.

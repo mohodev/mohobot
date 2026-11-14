@@ -57,6 +57,7 @@
 | 能力 | 状态 | 当前实现 | 差距 / 后续 |
 |---|---|---|---|
 | Discord 原生交互 | 已实现 | Mention、DM、Thread/Forum、Slash/受限管理入口 | 优先保证现有行为不变 |
+| Platform Adapter Contract | 基础已实现 | `src/platform/types.ts`、open platform ID、runtime-scoped gateway registry、可选 guild capability | 仍需入站归一化 SDK、能力清单和真实 OneBot/QQ/WebChat adapter |
 | Console | 已实现 | 纯文本终端入口 | 保留自动化验收用途 |
 | OneBot v11 / QQ | 未实现 | 参考仓库中有 Python 实现，不属于当前项目 | 先做 Platform Adapter contract，再单独评估实现 |
 | WebChat 平台 Adapter | 未实现 | 管理 API 的 Debug Chat 不等同于聊天 Gateway | 以统一消息 envelope 设计正式 WebChat |
@@ -101,7 +102,7 @@
 
 2026-11-14 在 Node.js v24.21.0 下，依赖安装后曾验证：
 - TypeScript typecheck 通过；
-- 后端 159 个 Vitest 文件、1,134 个测试通过；
+- 后端 160 个 Vitest 文件、1,136 个测试通过；
 - React Dashboard 2 个测试文件、8 个用例通过；
 - React Dashboard 独立 TypeScript 检查通过；
 - SQLite preflight 通过；

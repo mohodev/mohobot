@@ -12,7 +12,7 @@ import type { Logger } from '../core/logger.js';
 import type { BotId, OutboundMessage } from '../core/types.js';
 import type { ResolvedBotConfig } from '../config/schema.js';
 import { sanitizeOutbound, toMohoMessage } from './adapter.js';
-import type { DeliveryResult, Gateway, GatewayStatus } from './types.js';
+import type { DeliveryResult, Gateway, GatewayStatus } from '../platform/types.js';
 import { persistChat } from '../pipeline/persist.js';
 
 export const CONSOLE_CHANNEL_ID = 'console';

@@ -9,7 +9,8 @@ export type BotId = string;
 export type PluginId = string;
 
 /** Where a message came from. Discord today, other gateways later. */
-export type Platform = 'discord' | 'console' | 'webhook';
+/** Built-in platform IDs plus extension-provided adapter IDs. */
+export type Platform = 'discord' | 'console' | 'webhook' | (string & {});
 
 export interface MohoUser {
   /** Platform-native user id (Discord snowflake). */

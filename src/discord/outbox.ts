@@ -1,5 +1,5 @@
 import type { Storage } from '../storage/types.js';
-import type { DeliveryResult } from './types.js';
+import type { DeliveryResult } from '../platform/types.js';
 
 export type DeliveryRecordStatus = 'sending' | 'delivered' | 'rejected' | 'unknown';
 

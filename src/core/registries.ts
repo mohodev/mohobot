@@ -13,7 +13,7 @@
 
 import type { AIConfig, ResolvedBotConfig, StorageConfig } from '../config/schema.js';
 import type { AIProvider } from '../ai/types.js';
-import type { Gateway } from '../discord/types.js';
+import type { Gateway } from '../platform/types.js';
 import type { MemoryAdapter, Storage } from '../storage/types.js';
 import type { EventBus } from './event.js';
 import type { Logger } from './logger.js';

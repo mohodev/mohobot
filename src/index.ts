@@ -48,7 +48,7 @@ import { FutureTaskStore } from './tasks/future-task.js';
 import { WorldStore } from './admin/world.js';
 import { chatLogPurgeExpired } from './storage/chatlog.js';
 import { DiscordDeliveryOutbox } from './discord/outbox.js';
-import type { DeliveryResult } from './discord/types.js';
+import type { DeliveryResult } from './platform/types.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** src/ -> project root */

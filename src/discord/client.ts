@@ -31,11 +31,11 @@ import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';
 import type { BotId, EmbedCard, MohoMessageDelete, MohoMessageLocation, MohoMessageUpdate, MohoThreadLifecycle, OutboundMessage } from '../core/types.js';
 import { chunkContent, sanitizeOutbound, toMohoMessage } from './adapter.js';
-import type { DeliveryResult, Gateway, GatewayStatus } from './types.js';
+import type { DeliveryResult, Gateway, GatewayStatus } from '../platform/types.js';
 import { persistChat } from '../pipeline/persist.js';
 import { WorldStore } from '../admin/world.js';
 import { presenceFromWorld } from './presence.js';
-import type { GuildInventory, GuildPlan } from './guild-admin.js';
+import type { GuildInventory, GuildPlan } from '../platform/guild.js';
 
 export interface DiscordGatewayOptions {
   botId: BotId;

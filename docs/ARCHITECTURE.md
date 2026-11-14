@@ -34,6 +34,14 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 
 模型运营平面包括 model catalog、health coordinator、circuit breaker、fallback、availability overlay 和 usage/cost 统计，并已有跨 Bot Model Operations API/WebUI。当前主要差距是路由 trace 可解释性、端到端运营契约和持续评测。
 
+## 平台适配器边界
+
+平台无关契约位于 `src/platform/`：`Gateway`、投递结果、连接状态和可选 workspace/guild capability。`BotRuntime` 与 Gateway registry 只依赖该契约，不导入 `discord.js`。
+
+`src/platform/index.ts` 是组合根，负责将内置 Discord/Console adapter 与 Runtime 注入的 gateway registry 连接起来；插件/extension 可使用同一注册表添加任意平台 ID。`src/discord/` 只保存 Discord/Console 具体实现和原生事件归一化。旧 `src/discord/types.ts`、`src/discord/index.ts` 保留兼容导出，新增代码应使用 `src/platform/`。
+
+目前内置且实际可运行的平台仍只有 Discord 与 Console；OneBot/QQ/WebChat 没有被这次类型迁移自动实现。新增 Adapter 必须提供入站 MohoMessage 归一化、出站 DeliveryResult、连接状态、取消/停止语义和平台能力声明，并覆盖断线、重连、重复/不确定投递测试。
+
 ## 统一发言管线
 
 ```text

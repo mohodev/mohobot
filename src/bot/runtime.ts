@@ -18,8 +18,8 @@ import { createProvider } from '../ai/index.js';
 import type { AIProvider } from '../ai/types.js';
 import { MultiProviderRouter } from '../ai/multi-router.js';
 import { HealthCoordinator, type HealthSnapshot } from '../ai/health-coordinator.js';
-import { createGateway } from '../discord/index.js';
-import type { Gateway, GatewayStatus } from '../discord/types.js';
+import { createGateway } from '../platform/index.js';
+import type { Gateway, GatewayStatus } from '../platform/types.js';
 import { SessionManager } from '../session/manager.js';
 import { createProviderSummarizer } from '../session/summarizer.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
@@ -166,7 +166,7 @@ export class BotRuntime implements Managed {
       memory,
     });
 
-    this.#gateway = createGateway(cfg, { events: this.#deps.events, logger: this.#logger, rootDir: this.#deps.rootDir });
+    this.#gateway = createGateway(cfg, { events: this.#deps.events, logger: this.#logger, rootDir: this.#deps.rootDir, registries: this.#deps.registries });
 
     const send = async (out: OutboundMessage): Promise<void> => {
       if (!this.#gateway) throw new Error('gateway not started');

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { buildInternalGuildPlan, type GuildInventory, type GuildPlan } from '../discord/guild-admin.js';
+import { buildInternalGuildPlan } from '../discord/guild-admin.js';
+import type { GuildInventory, GuildPlan } from '../platform/guild.js';
 
 export function inventoryDigest(inventory: GuildInventory): string {
   const stable = {
