@@ -3,7 +3,7 @@ import { currentAdmin, getSessionToken, setSessionToken, setUnauthorizedHandler,
 import type { AdminMe } from './lib/types';
 import { principalOf } from './lib/types';
 import { Login } from './components/login';
-import { Shell, type ViewId } from './components/shell';
+import { Shell, MENU_ITEMS, isViewAllowed, type ViewId } from './components/shell';
 import { Loading } from './components/ui';
 import { Overview } from './pages/overview';
 import { Bots } from './pages/bots';
@@ -12,27 +12,27 @@ import { Models } from './pages/models';
 import { Logs } from './pages/logs';
 import { Characters } from './pages/characters';
 import { Memory } from './pages/memory';
+import { Jargon } from './pages/jargon';
+import { Knowledge } from './pages/knowledge';
 import { Plugins } from './pages/plugins';
 import { Mcp } from './pages/mcp';
-import { LegacyFeature } from './pages/legacy';
+import { World } from './pages/world';
+import { Device } from './pages/device';
+import { Affinity } from './pages/affinity';
+import { Tasks } from './pages/tasks';
+import { FutureTasks } from './pages/futuretasks';
+import { Sessions } from './pages/sessions';
+import { Users } from './pages/users';
+import { Settings } from './pages/settings';
+import { Health } from './pages/health';
+import { Debug } from './pages/debug';
 
-const validViews: ViewId[] = ['overview', 'bots', 'providers', 'models', 'logs', 'characters', 'memory', 'plugins', 'mcp', 'world', 'device', 'tasks', 'users', 'settings', 'health', 'debug'];
-const titles: Record<ViewId, string> = {
-  overview: '运行总览', bots: '机器人', providers: '模型供应商', models: '模型运营',
-  logs: '实时日志', characters: '角色档案', memory: '长期记忆', plugins: '插件管理',
-  mcp: 'MCP 工具', world: '世界模拟', device: '设备与关系', tasks: '任务队列',
-  users: '管理员', settings: '配置发布', health: '服务健康', debug: '调试工作台',
-};
-
-function initialView(): ViewId {
-  const hash = window.location.hash.replace(/^#\/?/, '');
-  return validViews.includes(hash as ViewId) ? hash as ViewId : 'overview';
-}
+const validViews = MENU_ITEMS.map((item) => item.id) as ViewId[];
 
 export function App() {
   const [me, setMe] = useState<AdminMe | null>(null);
   const [loading, setLoading] = useState(Boolean(getSessionToken()));
-  const [view, setViewState] = useState<ViewId>(initialView);
+  const [view, setViewState] = useState<ViewId>(() => initialView());
 
   const logout = useCallback(async () => {
     try { await api('/auth/logout', { method: 'POST' }); } catch { /* local token is cleared either way */ }
@@ -72,7 +72,16 @@ export function App() {
   }, []);
 
   const permissions = useMemo(() => me?.permissions ?? [], [me]);
-  const principal = principalOf(me ?? {});
+  const principal = useMemo(() => principalOf(me ?? {}), [me]);
+
+  // Redirect to the first view the principal may actually open.
+  useEffect(() => {
+    if (!me) return;
+    if (!isViewAllowed(view, permissions)) {
+      const fallback = validViews.find((candidate) => isViewAllowed(candidate, permissions));
+      if (fallback && fallback !== view) setView(fallback);
+    }
+  }, [me, view, permissions, setView]);
 
   if (loading) return <div className="boot-screen"><Loading label="正在验证管理员会话" /></div>;
   if (!me) return <Login onLoggedIn={(result) => {
@@ -80,32 +89,51 @@ export function App() {
     sessionStorage.setItem('moho-admin-permissions', JSON.stringify(result.permissions ?? []));
   }} />;
 
-  const content = (() => {
-    switch (view) {
-      case 'overview': return <Overview />;
-      case 'bots': return <Bots />;
-      case 'providers': return <Providers />;
-      case 'models': return <Models />;
-      case 'logs': return <Logs />;
-      case 'characters': return <Characters />;
-      case 'memory': return <Memory />;
-      case 'plugins': return <Plugins permissions={permissions} />;
-      case 'mcp': return <Mcp permissions={permissions} />;
-      default: return <LegacyFeature view={view} title={titles[view]} />;
-    }
-  })();
-
-  const allowed = validViews.some((candidate) => {
-    const permissionByView: Record<ViewId, string> = {
-      overview: 'status.read', bots: 'status.read', providers: 'providers.read', models: 'models.read',
-      logs: 'logs.read', characters: 'characters.read', memory: 'memory.metadata.read',
-      plugins: 'plugin.read', mcp: 'mcp.read', world: 'world.read', device: 'device.read',
-      tasks: 'tasks.read', users: 'users.read', settings: 'config.publish', health: 'status.read', debug: 'debug.chat',
-    };
-    return candidate === view && permissions.includes(permissionByView[candidate]);
-  });
-
-  if (!allowed) return <div className="boot-screen"><div className="access-denied"><strong>当前账号没有访问此页面的权限</strong><button className="button button-primary" onClick={() => setView('overview')}>返回总览</button></div></div>;
+  const restricted = !isViewAllowed(view, permissions);
+  const content = restricted ? <AccessDenied onBack={() => setView(validViews.find((candidate) => isViewAllowed(candidate, permissions)) ?? 'overview')} /> : renderView(view, permissions);
 
   return <Shell view={view} setView={setView} principal={principal} permissions={permissions} onLogout={() => void logout()}>{content}</Shell>;
+}
+
+function renderView(view: ViewId, permissions: string[]) {
+  switch (view) {
+    case 'overview': return <Overview permissions={permissions} />;
+    case 'bots': return <Bots permissions={permissions} />;
+    case 'providers': return <Providers permissions={permissions} />;
+    case 'models': return <Models permissions={permissions} />;
+    case 'characters': return <Characters permissions={permissions} />;
+    case 'memory': return <Memory permissions={permissions} />;
+    case 'jargon': return <Jargon permissions={permissions} />;
+    case 'knowledge': return <Knowledge permissions={permissions} />;
+    case 'world': return <World permissions={permissions} />;
+    case 'device': return <Device permissions={permissions} />;
+    case 'affinity': return <Affinity permissions={permissions} />;
+    case 'tasks': return <Tasks permissions={permissions} />;
+    case 'futuretasks': return <FutureTasks permissions={permissions} />;
+    case 'plugins': return <Plugins permissions={permissions} />;
+    case 'mcp': return <Mcp permissions={permissions} />;
+    case 'logs': return <Logs permissions={permissions} />;
+    case 'health': return <Health permissions={permissions} />;
+    case 'sessions': return <Sessions permissions={permissions} />;
+    case 'users': return <Users permissions={permissions} />;
+    case 'settings': return <Settings permissions={permissions} />;
+    case 'debug': return <Debug permissions={permissions} />;
+    default: return null;
+  }
+}
+
+function AccessDenied({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="boot-screen">
+      <div className="access-denied">
+        <strong>当前账号没有访问此页面的权限</strong>
+        <button className="button button-primary" onClick={onBack}>返回可用页面</button>
+      </div>
+    </div>
+  );
+}
+
+function initialView(): ViewId {
+  const hash = window.location.hash.replace(/^#\/?/, '').split('?')[0];
+  return validViews.includes(hash as ViewId) ? hash as ViewId : 'overview';
 }
