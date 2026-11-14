@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { AlertTriangle, Copy, KeyRound, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
+import { AlertTriangle, Copy, KeyRound, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { ApiError, currentAdmin, fetchSetupStatus, initializeDeployment, loginWithBootstrapToken, loginWithPassword } from '../lib/api';
 import type { AdminMe } from '../lib/types';
 import { Button } from './ui';
@@ -54,15 +54,13 @@ export function Login({ onLoggedIn }: { onLoggedIn: (me: AdminMe) => void }) {
   if (masterToken) {
     return (
       <main className="login-screen">
-        <div className="login-art">
-          <div className="login-emblem"><ShieldCheck size={27} /></div>
-          <div className="login-brand">初始化完成<span>DEPLOYMENT READY</span></div>
-          <p>请立即保存下方的部署主令牌；它只在本次初始化时返回一次。</p>
-        </div>
         <div className="login-card">
-          <div className="login-card-icon"><KeyRound size={19} /></div>
+          <div className="login-brand">
+            <div className="login-emblem">墨</div>
+            <div><strong>MohoBot</strong><span>部署初始化</span></div>
+          </div>
           <h1>保存部署主令牌</h1>
-          <p className="login-description">该令牌是破坏性恢复凭据，写入 data/.env.local，不会再次回显。</p>
+          <p className="login-description">该令牌是破坏性恢复凭据，写入 data/.env.local，不会再次回显。请立即保存；它只在本次初始化时返回一次。</p>
           <div className="token-reveal">
             <code className="prewrap">{masterToken}</code>
             <button type="button" className="text-button" onClick={() => void navigator.clipboard?.writeText(masterToken)}><Copy size={14} /> 复制令牌</button>
@@ -75,17 +73,11 @@ export function Login({ onLoggedIn }: { onLoggedIn: (me: AdminMe) => void }) {
 
   return (
     <main className="login-screen">
-      <div className="login-art">
-        <div className="login-orbit orbit-one" />
-        <div className="login-orbit orbit-two" />
-        <div className="login-emblem"><Sparkles size={27} /></div>
-        <div className="login-brand">MOHOBOT<span>CONTROL CENTER</span></div>
-        <p>让每个角色稳定运行，让每一次管理操作都有迹可循。</p>
-        <div className="login-version">MODULAR RUNTIME · SQLITE · ROLE-BASED ACCESS</div>
-      </div>
       <form className="login-card" onSubmit={submit}>
-        <div className="login-card-icon">{needsSetup ? <ShieldCheck size={19} /> : <LockKeyhole size={19} />}</div>
-        <div className="eyebrow">{needsSetup ? 'FIRST-RUN SETUP' : 'ADMINISTRATOR ACCESS'}</div>
+        <div className="login-brand">
+          <div className="login-emblem">{needsSetup ? <ShieldCheck size={20} /> : <LockKeyhole size={20} />}</div>
+          <div><strong>MohoBot</strong><span>{needsSetup ? '首次部署' : '管理控制台'}</span></div>
+        </div>
         <h1>{needsSetup ? '初始化部署' : '欢迎回来'}</h1>
         <p className="login-description">
           {needsSetup ? '创建第一个管理员账号以完成初始化。此操作只能执行一次。' : '登录 MohoBot 管理控制台。'}
