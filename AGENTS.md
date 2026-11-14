@@ -9,7 +9,8 @@ MohoBot is a TypeScript ESM, Node.js >= 22.12 Discord AI runtime. It has no appl
 - `npm run typecheck` checks only `src/**/*.ts` and `scripts/setup.ts`.
 - `npm run dashboard:dev` starts the React dashboard at `/dashboard/` (Vite port 5174); `npm run dashboard:typecheck` type-checks the independent frontend; `npm run dashboard:build` builds it into `webui/dashboard/`.
 - `npm run build` now builds the Node runtime/plugins and the dashboard workspace. The generated dashboard bundle is ignored by Git and is recreated by the build.
-- `npm test` runs the backend `src/**/*.test.ts` suite and the isolated React Dashboard Vitest suite (`dashboard/src/**/*.test.ts(x)`). Focus a test with `npx vitest run src/path/file.test.ts`.
+- `npm test` runs the backend `src/**/*.test.ts` suite and the isolated React Dashboard Vitest suite (`dashboard/src/**/*.test.ts(x)`).
+- Pipeline module boundaries are documented in `docs/PIPELINE.md`. Keep `pipeline.ts` as orchestration; put context assembly, bounded tool loops, and reply delivery in their respective modules. Preserve the characterization/integration tests before changing message semantics. Focus a test with `npx vitest run src/path/file.test.ts`.
 - `npm run build` runs the broader build config (`src`, `plugins`, `extensions`) and copies plugin manifests; use it to verify plugin/extension TypeScript.
 - `npm run scan-secrets` scans tracked files; `npm run scan-secrets -- --history` also scans added lines in git history.
 - `npm run preflight` is the offline config, directory-write, and SQLite migration smoke test.

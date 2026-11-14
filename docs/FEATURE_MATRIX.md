@@ -17,7 +17,7 @@
 | Discord Gateway | 已实现 | `src/discord/`、`discord.js`、出入站投递状态与聊天日志 | 继续作为第一优先级，不能因多平台抽象而回归 |
 | Console Gateway | 已实现 | `src/discord/console.ts`、离线完整管线测试 | 维持为平台无关测试入口 |
 | 多 Bot Runtime | 已实现 | `src/bot/runtime.ts`、Supervisor、Bot 热重载 | 继续压测 7–8 个角色 Bot + 管理 Bot |
-| 统一消息 Pipeline | 已实现 | `src/pipeline/pipeline.ts`、ReplyPlan、TopicBuffer、社交决策、持久化 | 单文件过大，需要 characterization tests 后拆分 |
+| 统一消息 Pipeline | 已实现 | `pipeline.ts` 编排；上下文、工具循环、回复交付、流式缓冲、限流、提示词和命令 token 已拆为独立模块 | 主编排文件仍有 1,142 行；管理命令/Persona A-B/若干策略仍可继续拆分，行为边界见 `docs/PIPELINE.md` |
 | 上下文压缩 | 已实现 | Session rolling summary、Summarizer | 继续补长对话和异常恢复测试 |
 | 消息编辑/删除同步 | 已实现 | MessageSync tombstone、memory deletion coordinator | 检查所有派生画像/向量记录的来源追踪 |
 | 本地 WebChat 产品页 | 未实现 | 当前只有管理员 Debug Chat（`POST /api/debug/chat`） | 建立独立会话、历史、流式通信和用户身份模型 |
@@ -102,7 +102,7 @@
 
 2026-11-14 在 Node.js v24.21.0 下，依赖安装后曾验证：
 - TypeScript typecheck 通过；
-- 后端 160 个 Vitest 文件、1,136 个测试通过；
+- 后端 165 个 Vitest 文件、1,149 个测试通过；
 - React Dashboard 2 个测试文件、8 个用例通过；
 - React Dashboard 独立 TypeScript 检查通过；
 - SQLite preflight 通过；

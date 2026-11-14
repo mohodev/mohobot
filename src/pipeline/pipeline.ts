@@ -19,18 +19,17 @@ import type { ResolvedBotConfig } from '../config/schema.js';
 import type { EventBus } from '../core/event.js';
 import type { Logger } from '../core/logger.js';
 import type { ChatMessage, EmbedCard, EmbedField, MohoMessage, OutboundMessage } from '../core/types.js';
-import type { AIProvider, AIResponse } from '../ai/types.js';
+import type { AIProvider } from '../ai/types.js';
 import { AIError } from '../ai/types.js';
-import { executeToolCall, type ChatToolRegistry } from '../ai/tools.js';
-import { stripReplyArtifacts } from './reply-filter.js';
+import type { ChatToolRegistry } from '../ai/tools.js';
 import type { SessionManagerLike } from '../session/types.js';
 import type { PluginManager } from '../plugins/manager.js';
-import { decodeReplyPlan, deliverySegments, planText, type ReplyPlan } from './reply-plan.js';
+import { decodeReplyPlan, planText, type ReplyPlan } from './reply-plan.js';
 import type { AbEvaluationOutcome, AbSide, AbVote, PersonaAbRecord, PersonaAbStats, PersonaSnapshot, AbEvaluateOptions } from './persona-ab.js';
 import { TopicBuffer } from './topic-buffer.js';
 import { ChatTraceStore, type ChatTrace } from './chat-trace.js';
 import { ProfileReflectionWorker } from '../memory/profile-reflection.js';
-import { JargonMemory, buildJargonBlock } from '../memory/jargon-memory.js';
+import { JargonMemory } from '../memory/jargon-memory.js';
 import { decideSocially } from './social-decision.js';
 import { TalkGovernor } from './talk-governor.js';
 import type { TalkGovernorStateStore } from './talk-governor-state.js';
@@ -42,83 +41,25 @@ import type { Storage } from '../storage/types.js';
 import { preprocessAttachments } from '../media/attachments.js';
 import type { MediaRuntime } from '../media/runtime.js';
 import { runtimeMetrics } from '../core/runtime-metrics.js';
-import { markUntrusted, formatUntrustedData } from '../security/untrusted-data.js';
 import { discordChatLog } from '../core/discord-chat-log.js';
-import { chatLogInsert } from '../storage/chatlog.js';
 import { effectiveSessionChannelId } from '../session/context-policy.js';
 import { ContextArchiver, type ContextEntry } from '../context-archiver/index.js';
 import { BanError, BanStore, formatDuration, looksLikeDuration, parseDuration } from './ban-store.js';
 import { RepeatGuard } from './repeat-guard.js';
 import { MessagePlanner } from './message-planner.js';
+import { RateLimiter } from './rate-limiter.js';
+import { StreamingDelivery } from './streaming-delivery.js';
+import { ADMIN_COMMAND_ALIASES, normalizeAbVote } from './command-tokens.js';
+import { buildConversationContext } from './conversation-context.js';
+import { chatWithTools } from './chat-with-tools.js';
+import { deliverReply, deliverReplyPlan } from './reply-delivery.js';
+import type { UsageBridge, SongBridge, BroadcastBridge, EmotionBridge, PersonaAbBridge } from './bridges.js';
+export type { UsageBridge, SongBridge, BroadcastBridge, EmotionBridge, PersonaAbBridge } from './bridges.js';
+export { buildContextAnchor, buildHistorySummaryBlock } from './context-prompts.js';
+export { ADMIN_COMMAND_ALIASES, normalizeAbVote } from './command-tokens.js';
 
 /** MohoBot brand color for rich embed cards (hex 0x6a5acd). */
 const EMBED_THEME_COLOR = 0x6a5acd;
-
-/**
- * Live time + context anchor injected as a second system message on every
- * AI call. The static systemPrompt (persona) never changes; this carries the
- * current wall-clock so the model is never temporally disoriented and can
- * reference "today", "this afternoon", relative times correctly.
- *
- * Timezone is Asia/Shanghai (UTC+8) - the bot's primary audience. If you need
- * per-user timezone, resolve it from the session and pass it in here.
- */
-export function buildContextAnchor(): string {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    weekday: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-  const parts = fmt.formatToParts(now);
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-  const date = `${get('year')}年${get('month')}${get('day')}日`;
-  const weekday = get('weekday');
-  const time = `${get('hour')}:${get('minute')}`;
-  return [
-    '[上下文锚点 - 系统注入，非用户发言]',
-    `当前时间：${date} ${weekday} ${time}（北京时间 UTC+8）`,
-    '你不知道确切时间，除非用户明确告知或本锚点提供。涉及时间请以上述为准，不要臆测日期或时刻。',
-    '对话历史已按时间顺序提供，请基于上下文连贯回应，记得用户刚才说过的内容。',
-  ].join('\n');
-}
-
-/** Wrap a rolling summary so the model reads it as memory, not as a speaker. */
-export function buildHistorySummaryBlock(summary: string): string {
-  return [
-    '[历史对话摘要 - 系统注入，非用户发言]',
-    '以下是更早之前对话的压缩记忆，其后的消息才是最近的原始对话。请把它当作已知背景自然地衔接，不要逐字复述，也不要把它当成用户刚说的话。',
-    summary.trim(),
-  ].join('\n');
-}
-
-/** Chinese aliases for `?` admin commands; handlers use the English keys. */
-export const ADMIN_COMMAND_ALIASES: Record<string, string> = {
-  '好感度': 'favor',
-  '关系阶段': 'stage',
-  '好感排行': 'favor-rank',
-  '设好感': 'set-favor',
-  '设亲密': 'set-intimacy',
-  '用量': 'usage',
-  '广播': 'broadcast',
-  '广播预告': 'broadcast',
-  '广播确认': 'broadcast-confirm',
-  '广播取消': 'broadcast-cancel',
-  '同步歌曲': 'songsync',
-};
-
-/** Normalizes a `?ab` vote token; returns null for anything that is not a vote. */
-export function normalizeAbVote(token: string): AbVote | null {  const text = token.trim();
-  if (text === 'A' || text === 'a') return 'A';
-  if (text === 'B' || text === 'b') return 'B';
-  if (text === '平局' || text === '都不好' || text === '跳过') return text;
-  return null;
-}
 
 export interface PipelineDeps {
   config: ResolvedBotConfig;
@@ -169,162 +110,12 @@ export interface PipelineDeps {
   talkGovernorStore?: TalkGovernorStateStore;
 }
 
-/** The slice of the usage recorder the pipeline needs. */
-export interface UsageBridge {
-  report(days: number): Promise<string>;
-  /** Per-session (group/DM) ranking, busiest first. */
-  sessionReport(days: number): Promise<string>;
-}
-
-/** The slice of the song library the pipeline needs. */
-export interface SongBridge {
-  /** Returns the 【歌曲信息】 block for chat text, or undefined. Never throws. */
-  match(text: string): Promise<string | undefined>;
-  status(): Promise<{ songs: number; updatedAt: number; syncing: boolean }>;
-  /** Starts a background sync; completion is reported to the channel. */
-  startSync(channelId: string): Promise<{ accepted: boolean; message: string }>;
-}
-
-/**
- * The slice of the broadcast manager the pipeline needs.
- */
-export interface BroadcastBridge {
-  preview(content: string, authorId: string): Promise<string>;
-  confirm(): Promise<string>;
-  cancel(): Promise<string>;
-}
-
-/** The slice of the emotion manager the pipeline needs. */
-export interface EmotionBridge {
-  buildContextBlock(userKey: string): Promise<string>;
-  scheduleTurn(userKey: string, userText: string, aiReply: string): void;
-  /** Read-only snapshot for `?好感度` / `?关系阶段`. */
-  getSnapshot(userKey: string): Promise<{
-    userKey: string; favor: number; intimacy: number; stageName: string; stageDescription: string;
-    compositeScore: number; progressToNext: number; nextStageName: string; nextStageThreshold: number | null;
-    dominantMood: string; attitude: string; relationship: string;
-    interactions: { total: number; positive: number; negative: number; positiveRatio: number };
-    advice: string;
-  }>;
-  /** Leaderboard rows for `?好感排行`. */
-  ranking(limit: number, direction: 'top' | 'bottom'): Promise<Array<{ userKey: string; averageScore: number; favor: number; intimacy: number; stage: string }>>;
-  setFavor(userKey: string, value: number): void;
-  setIntimacy(userKey: string, value: number): void;
-}
-
-/**
- * The slice of the persona A/B service the pipeline needs. The concrete
- * PersonaAbService satisfies this structurally; tests inject fakes.
- */
-export interface PersonaAbBridge {
-  reserve(input: {
-    userId: string;
-    sourceMessageId: string;
-    contextSide: AbSide;
-    baseline: PersonaSnapshot;
-    test: PersonaSnapshot;
-  }): Promise<PersonaAbRecord | null>;
-  evaluate(
-    record: PersonaAbRecord,
-    generate: (personaContent: string) => Promise<string>,
-    opts?: AbEvaluateOptions,
-  ): Promise<AbEvaluationOutcome>;
-  snapshot(side: AbSide, fallbackContent: string, fallbackLabel: string): Promise<PersonaSnapshot>;
-  preference(userId: string): Promise<AbSide | null>;
-  loadVotable(userId: string, identifier?: string): Promise<PersonaAbRecord | null>;
-  vote(userId: string, identifier: string | undefined, choice: AbVote): Promise<PersonaAbRecord>;
-  switchPersona(userId: string, identifier: string, choice: 'A' | 'B'): Promise<PersonaAbRecord>;
-  stats(): Promise<PersonaAbStats>;
-}
-
 export interface PipelineStats {
   handled: number;
   replied: number;
   skipped: number;
   aiFailures: number;
   rateLimited: number;
-}
-
-/** Simple sliding-window per-user rate limiter. */
-const STREAM_SOFT_LIMIT = 180;
-const STREAM_HARD_LIMIT = 480;
-
-/** Buffers model deltas and emits natural sentence-sized Discord messages. */
-class StreamingDelivery {
-  #buffer = '';
-  #sent = 0;
-  #tail: Promise<void> = Promise.resolve();
-
-  constructor(private readonly flush: (text: string, first: boolean) => Promise<boolean>) {}
-
-  push(delta: string): void {
-    this.#buffer += delta;
-    if (this.#shouldFlush()) this.#enqueue(false);
-  }
-
-  async finish(): Promise<boolean> {
-    this.#enqueue(true);
-    await this.#tail;
-    return this.#sent > 0;
-  }
-
-  get sent(): number { return this.#sent; }
-  get received(): boolean { return this.#buffer.length > 0 || this.#sent > 0; }
-
-  #shouldFlush(): boolean {
-    if (this.#buffer.length >= STREAM_HARD_LIMIT) return true;
-    return this.#buffer.length >= STREAM_SOFT_LIMIT && /[。！？!?…]\s*$/.test(this.#buffer);
-  }
-
-  #enqueue(final: boolean): void {
-    const text = this.#take(final);
-    if (!text) return;
-    this.#tail = this.#tail.then(async () => { if (await this.flush(text, this.#sent === 0)) this.#sent += 1; });
-  }
-
-  #take(final: boolean): string {
-    const value = this.#buffer;
-    if (!value.trim()) return '';
-    let index = -1;
-    if (!final) {
-      for (const mark of ['。', '！', '？', '!', '?', '…', '\n']) index = Math.max(index, value.lastIndexOf(mark));
-      if (index < 0 && value.length < STREAM_HARD_LIMIT) return '';
-      if (index < 0) index = Math.min(STREAM_SOFT_LIMIT, value.length) - 1;
-    } else index = value.length - 1;
-    const text = value.slice(0, index + 1).trim();
-    this.#buffer = value.slice(index + 1);
-    return text;
-  }
-}
-
-class RateLimiter {
-  readonly #hits = new Map<string, number[]>();
-  constructor(
-    private readonly windowMs: number,
-    private readonly max: number,
-  ) {}
-
-  allow(key: string): boolean {
-    const now = Date.now();
-    const list = (this.#hits.get(key) ?? []).filter((t) => now - t < this.windowMs);
-    if (list.length >= this.max) {
-      this.#hits.set(key, list);
-      return false;
-    }
-    list.push(now);
-    this.#hits.set(key, list);
-    return true;
-  }
-
-  /** Drop stale buckets so the map cannot grow without bound. */
-  sweep(): void {
-    const now = Date.now();
-    for (const [key, list] of this.#hits) {
-      const live = list.filter((t) => now - t < this.windowMs);
-      if (live.length === 0) this.#hits.delete(key);
-      else this.#hits.set(key, live);
-    }
-  }
 }
 
 export class MessagePipeline {
@@ -685,123 +476,27 @@ export class MessagePipeline {
 
     const key = { botId: cfg.id, channelId: effectiveSessionChannelId(cfg.session, message), userId: message.author.id };
 
-    // Persist the user turn BEFORE building context, so the model sees its
-    // own prior replies in the right order (no "echo bot" / repetition bugs).
-    try {
-      await this.#deps.sessions.append(key, {
-        role: 'user',
-        content: prompt,
-        name: message.author.username,
-        sourceMessageId: message.id,
-        sourcePlatform: message.platform,
-        createdAt: message.createdAt,
-      });
-    } catch (error) {
-      this.#logger.warn({ err: String(error) }, 'failed to persist user turn');
-    }
-
-    // Build the context window.
-    let messages: ChatMessage[] = [];
-    let ctxCount = 0;
-    try {
-      messages = await this.#deps.sessions.buildContext(key, cfg.systemPrompt);
-      ctxCount = messages.length;
-    } catch (error) {
-      this.#logger.warn({ channelId: message.channel.id, error: String(error) }, 'session context build failed; using empty context');
-    }
-
-    // Inject a live time/context anchor so the model is never temporally
-    // disoriented. Appended to (not replacing) the static system prompt.
-    let mediaContext: string | undefined;
-    if (cfg.media.enabled && this.#deps.media && attachments.accepted.length > 0) {
-      try {
-        const observed = await this.#deps.media.process(attachments.accepted, content.trim() || undefined);
-        if (observed.items.some((item) => item.status === 'observed' || item.status === 'degraded')) mediaContext = observed.context;
-      } catch (error) {
-        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'media observation failed; using attachment metadata');
-      }
-    }
-    // Live time anchor, character world state and the user's relationship state
-    // are all separate system blocks: the persona prompt stays untouched.
-    const [anchor, worldContext] = await Promise.all([Promise.resolve(buildContextAnchor()), this.#world.context().catch(() => '')]);
-    // Relationship state for this user. Never fatal: a broken store must not
-    // cost the reply, it only means the bot forgets how it feels about them.
-    let emotionBlock: string | undefined;
-    if (this.#deps.emotion) {
-      try {
-        emotionBlock = await this.#deps.emotion.buildContextBlock(message.author.id);
-      } catch (error) {
-        log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'emotion block build failed; continuing without it');
-      }
-    }
-    // Song recognition: titles and lyric fragments in the user's text resolve
-    // to a 【歌曲信息】 block (intro + credits + lyrics), request-scoped only.
-    let songBlock: string | undefined;
-    if (this.#deps.songs) {
-      try {
-        songBlock = await this.#deps.songs.match(prompt);
-      } catch (error) {
-        log.warn({ err: error instanceof Error ? error.message : String(error) }, 'song match failed; continuing without it');
-      }
-    }
-    // Older turns that were compacted out of the live window. Optional on the
-    // session contract, and a lookup failure must never cost the reply.
-    let historySummary: string | undefined;
-    try {
-      historySummary = await this.#deps.sessions.getSummary?.(key);
-    } catch (error) {
-      log.warn({ err: error instanceof Error ? error.message : String(error) }, 'history summary lookup failed; continuing without it');
-    }
-    // A/B switch binding: when this DM user picked the challenger persona, the
-    // normal chat keeps using it until they switch again. Never fatal: a broken
-    // lookup falls back to the live persona.
-    let personaText = cfg.systemPrompt;
-    if (this.#deps.personaAb && message.channel.dm && !message.author.bot) {
-      try {
-        if ((await this.#deps.personaAb.preference(message.author.id)) === 'test') {
-          personaText = (await this.#deps.personaAb.snapshot('test', cfg.systemPrompt, cfg.name)).content;
-        }
-      } catch (error) {
-        log.warn({ err: error instanceof Error ? error.message : String(error), user: message.author.id }, 'persona-ab preference lookup failed; using live persona');
-        personaText = cfg.systemPrompt;
-      }
-    }
-    // Separate recalled memory entries from the system prompt; they carry
-    // untrusted long-term recall data. Semantic memory uses '[Recalled …]',
-    // expression memory uses '[表达风格参考]'. The system prompt itself is the
-    // first entry (personaText) and must not be wrapped.
-    const isRecalledMemory = (m: ChatMessage): boolean =>
-      m.role === 'system' && m.content !== cfg.systemPrompt &&
-      (m.content.startsWith('[Recalled ') || m.content.startsWith('[表达风格参考]'));
-    const recalledMemories = messages.filter(isRecalledMemory).map((m) => ({
-      ...m,
-      content: formatUntrustedData(markUntrusted('memory', m.content)),
-    }));
-    // Mark user-role turns as untrusted data before they enter the model
-    // context. This is a non-invasive annotation: the original session store
-    // is unchanged; only the prompt array sent to the AI provider is wrapped.
-    const contextTurns = messages.filter((m) => m.role !== 'system').map((m) => {
-      if (m.role === 'user') {
-        return { ...m, content: formatUntrustedData(markUntrusted('user', m.content)) };
-      }
-      return m;
-    });
-    messages = [
-      { role: 'system', content: personaText },
-      { role: 'system', content: anchor },
-      { role: 'system', content: worldContext },
-      ...(this.#deps.jargonMemory ? [buildJargonBlock(await this.#deps.jargonMemory.recall(message.channel.id, message.channel.guildId, cfg.jargonMemory.recallLimit))].filter((x): x is NonNullable<typeof x> => Boolean(x)).map((m) => ({ ...m, content: formatUntrustedData(markUntrusted('memory', m.content)) })) : []),
-      ...(historySummary ? [{ role: 'system' as const, content: buildHistorySummaryBlock(historySummary) }] : []),
-      ...recalledMemories,
-      ...(mediaContext ? [{ role: 'system' as const, content: mediaContext }] : []),
-      ...(emotionBlock ? [{ role: 'system' as const, content: emotionBlock }] : []),
-      ...(songBlock ? [{ role: 'system' as const, content: songBlock }] : []),
-      ...contextTurns,
-    ];
-
-    if (this.#deps.plugins) {
-      await this.#deps.plugins.runBeforeAI(message, messages, cfg.disabledPlugins);
-    }
+    const { messages, personaText } = await buildConversationContext(
+      {
+        message,
+        key,
+        prompt,
+        rawContent: content.trim(),
+        attachments,
+      },
+      {
+        config: cfg,
+        sessions: this.#deps.sessions,
+        world: this.#world,
+        logger: log,
+        media: this.#deps.media,
+        emotion: this.#deps.emotion,
+        songs: this.#deps.songs,
+        personaAb: this.#deps.personaAb,
+        jargonMemory: this.#deps.jargonMemory,
+        plugins: this.#deps.plugins,
+      },
+    );
 
     let reply: string;
     // Register the live generation so a newer direct summon can abort it.
@@ -838,7 +533,18 @@ export class MessagePipeline {
     const protocolDeltas: string[] = [];
     this.#trace(trace, 'model_started', { model: this.#deps.provider.model, contextMessages: messages.length, stream: cfg.ai.stream, protocol: 'reply-plan' });
     try {
-      const response = await this.#chatMaybeWithTools(messages, cfg, controller.signal, message, trace, protocolDeltas);
+      const response = await chatWithTools({
+        messages,
+        config: cfg,
+        provider: this.#deps.provider,
+        tools: this.#deps.chatTools,
+        signal: controller.signal,
+        message,
+        trace,
+        logger: this.#logger,
+        onTrace: (target, stage, detail) => this.#trace(target, stage, detail),
+        onDelta: (delta) => { protocolDeltas.push(delta); },
+      });
       reply = response.content.trim() || protocolDeltas.join('').trim();
       stopThinkingTyping();
       runtimeMetrics.ai.record(Date.now() - aiStarted, true);
@@ -1388,129 +1094,31 @@ export class MessagePipeline {
     await this.#reply(message, '用法：`?ab`（查看待投票）· `?ab A/B/平局/都不好/跳过`（投票）· `?ab switch <编号> A`（切换人设）· `?ab stats`（管理员统计）。');
   }
 
-  /**
-   * Model call for a reply. When LLM tool-calling is enabled and at least one
-   * tool survives the allowlist, runs a bounded non-streaming tool loop;
-   * otherwise the single (optionally streaming) call is byte-identical to before.
-   */
-  async #chatMaybeWithTools(
-    messages: ChatMessage[],
-    cfg: ResolvedBotConfig,
-    signal: AbortSignal,
-    message: MohoMessage,
-    trace: ChatTrace,
-    protocolDeltas: string[],
-  ): Promise<AIResponse> {
-    const toolDefs = this.#toolDefs(cfg);
-    if (toolDefs.length === 0) {
-      return this.#deps.provider.chat(messages, {
-        temperature: cfg.ai.temperature,
-        timeoutMs: cfg.ai.timeoutMs,
-        stream: cfg.ai.stream,
-        signal,
-        // Accounting hint only: lets `?用量 会话` rank rooms by real spend.
-        channelId: message.channel.id,
-        onDelta: cfg.ai.stream ? (delta) => { protocolDeltas.push(delta); this.#trace(trace, 'delta', { length: delta.length }); } : undefined,
-      });
-    }
-    // Tool-calling forces non-streaming (see openai-compatible); the final text
-    // answer is returned whole, so reply-plan buffering is unaffected.
-    const registry = this.#deps.chatTools!;
-    const ctx = { botId: cfg.id, channelId: message.channel.id, userId: message.author.id };
-    const thread: ChatMessage[] = [...messages];
-    let last: AIResponse | undefined;
-    for (let round = 0; round < cfg.ai.tools.maxRounds; round += 1) {
-      const response = await this.#deps.provider.chat(thread, {
-        temperature: cfg.ai.temperature,
-        timeoutMs: cfg.ai.timeoutMs,
-        stream: false,
-        signal,
-        channelId: message.channel.id,
-        tools: toolDefs,
-      });
-      last = response;
-      if (!response.toolCalls || response.toolCalls.length === 0) return response;
-      this.#trace(trace, 'model_tool_calls', { round, count: response.toolCalls.length });
-      thread.push({ role: 'assistant', content: response.content, toolCalls: response.toolCalls });
-      for (const call of response.toolCalls) {
-        const output = await executeToolCall(registry, call, ctx);
-        this.#logger.info({ tool: call.name, traceId: trace.id }, 'llm tool executed');
-        // The concrete provider accepts tool messages; the AIProvider interface
-        // stays narrow, so the tool turn is cast at this seam only.
-        thread.push({ role: 'tool', toolCallId: call.id, name: call.name, content: output } as unknown as ChatMessage);
-      }
-    }
-    // Rounds exhausted: return the last response; an empty content falls back
-    // to the configured fallback reply downstream.
-    return last!;
-  }
-
-  /** Tool definitions honoured by the allowlist; empty = feature off. */
-  #toolDefs(cfg: ResolvedBotConfig): ReturnType<ChatToolRegistry['definitions']> {
-    const registry = this.#deps.chatTools;
-    if (!cfg.ai.tools.enabled || !registry || registry.size === 0) return [];
-    const allow = cfg.ai.tools.allow;
-    const defs = registry.definitions();
-    return allow.length === 0 ? defs : defs.filter((d) => allow.includes(d.function.name));
-  }
-
   async #replyPlan(message: MohoMessage, plan: ReplyPlan, traceId?: string): Promise<boolean> {
-    let delivered = 0;
-    let segments = deliverySegments(plan, message.channel.dm);
-    if (this.#deps.config.ai.replyFilter) {
-      // Strip model-invented artifact tags (think/tool_call/format/voice) from
-      // delivered text; drop segments that become empty. The TTS half of a
-      // voice tag has no consumer on Discord, so it is discarded.
-      segments = segments
-        .map((s) => ({ ...s, text: stripReplyArtifacts(s.text).display }))
-        .filter((s) => s.text.trim().length > 0);
-      if (segments.length === 0) return false;
-    }
-    for (let i = 0; i < segments.length; i += 1) {
-      const segment = segments[i]!;
-      if (this.#deps.config.discord.typingIndicator && this.#deps.typing && segment.typingMs > 0) {
-        void this.#deps.typing(message.channel.id).catch(() => {});
-        await new Promise<void>((resolve) => setTimeout(resolve, segment.typingMs));
-      }
-      if (await this.#reply(message, segment.text, plan.quote && i === 0, false, traceId)) delivered += 1;
-      else break;
-      if (segment.pauseAfterMs > 0 && i < segments.length - 1) {
-        await new Promise<void>((resolve) => setTimeout(resolve, segment.pauseAfterMs));
-      }
-    }
-    return delivered === segments.length;
+    return deliverReplyPlan(
+      message,
+      plan,
+      (target, text, quote, mentionAuthor, id) => this.#reply(target, text, quote, mentionAuthor, id),
+      { config: this.#deps.config, typing: this.#deps.typing },
+      traceId,
+    );
   }
 
   async #reply(message: MohoMessage, content: string | EmbedCard, quote = true, mentionAuthor = false, traceId?: string): Promise<boolean> {
-    const embed = typeof content === 'object' ? content : undefined;
-    const text = typeof content === 'object' ? '' : content;
-    const safeContent = embed && text.length === 0 ? (embed.description ?? '') : text;
-    try {
-      const delivery = await this.#deps.send({
-        channelId: message.channel.id,
-        content: safeContent,
-        embed,
-        replyToId: !quote || message.channel.dm ? undefined : message.id,
-        suppressMentions: true,
-        mentionUserId: mentionAuthor ? message.author.id : undefined,
-      });
-      try {
-        chatLogInsert({ channelId: message.channel.id, messageId: `outbound:${message.id}:${Date.now()}`, authorId: this.#deps.config.id, username: this.#deps.config.name, content: safeContent, mentionsBot: false, botId: this.#deps.config.id });
-      } catch (error) {
-        this.#logger.warn({ err: error instanceof Error ? error.message : String(error), channel: message.channel.id }, 'outbound chat log write failed');
-      }
-      const deliveryStatus = delivery && typeof delivery === 'object' ? delivery.status : 'delivered';
-      this.#chatLog('out', message, safeContent, deliveryStatus === 'delivered' ? 'delivered' : deliveryStatus === 'unknown' ? 'unknown' : 'delivery_failed', traceId);
-      if (traceId) this.#traceById(traceId, deliveryStatus === 'delivered' ? 'delivered' : deliveryStatus === 'unknown' ? 'delivery_unknown' : 'delivery_failed', delivery && typeof delivery === 'object' && delivery.messageId ? { messageId: delivery.messageId } : undefined);
-      return deliveryStatus === 'delivered';
-    } catch (error) {
-      this.#chatLog('out', message, safeContent, 'delivery_failed', traceId);
-      this.#logger.error(
-        { err: error instanceof Error ? error.message : String(error), channel: message.channel.id },
-        'send failed',
-      );
-      return false;
-    }
+    return deliverReply(
+      message,
+      content,
+      {
+        config: this.#deps.config,
+        logger: this.#logger,
+        send: this.#deps.send,
+        chatLog: (direction, target, text, outcome, id) => this.#chatLog(direction, target, text, outcome, id),
+        trace: (id, stage, detail) => this.#traceById(id, stage, detail),
+      },
+      quote,
+      mentionAuthor,
+      traceId,
+    );
   }
 
   #friendlyError(kind: string, fallback: string): string {
