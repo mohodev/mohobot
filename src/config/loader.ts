@@ -14,7 +14,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parse as parseYaml } from 'yaml';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 import type { EventBus } from '../core/event.js';
 import { registerSecret, type Logger } from '../core/logger.js';

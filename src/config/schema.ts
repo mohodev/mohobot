@@ -6,7 +6,7 @@
  *  - Every field has a safe default so a bare data/config/global.yaml still boots.
  */
 
-import { z } from 'zod';
+import { z } from 'zod/v3';
 
 export const LogLevelSchema = z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']);
 
