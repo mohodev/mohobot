@@ -80,7 +80,7 @@
 |---|---|---|---|
 | Admin Auth / Setup | 已实现 | 首次部署、账号/口令、会话、临时令牌 | 增加登录限流与 E2E |
 | RBAC / Route Policy | 已实现 | `src/admin/rbac.ts`、`route-policy.ts`、审计、确认 nonce | 建立从路由到前端权限的自动契约校验 |
-| Admin API | 已实现 | `src/admin/server.ts` | 810 行路由文件需按领域模块化并输出 OpenAPI |
+| Admin API | 已实现 | `server.ts` 统一处理 HTTP/auth/RBAC/Route Policy/nonce/audit；`api-router.ts` 协调；`api-routes/` 按 Models/Ops/Config-Users/Characters-MCP/Memory/Knowledge/World 拆分 | 后续输出 OpenAPI、生成 TypeScript client、补 response schema contract |
 | 经典管理 WebUI | 已实现 | 原生 HTML/CSS/JS，23 个权限门控导航页，保留于 `/` | 继续作为完整回退入口；前端单体约 66 KB，后续逐页迁移后再退役 |
 | Debug Chat | 已实现 | 单次模型调试、权限门控 | 不能当作面向用户的本地聊天产品 |
 | Model Operations UI | 已实现 | 模型健康、用量、fallback/circuit 事件等 | 增加筛选、时间区间和路由解释 |

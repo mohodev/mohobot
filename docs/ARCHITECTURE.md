@@ -51,6 +51,8 @@ SQLite 是用户回复路径的唯一真相来源。初始化失败时按 `stora
 
 模型输出只能得到 `ReplyPlan`：`ignore` 或受限 segments；发送器处理 Discord 限制、禁止 mass mention、分段和失败降级。Pipeline 已拆为 orchestration、conversation context、tool loop、streaming buffer 与 reply delivery 等模块，边界和必须保持的不变量见 [`PIPELINE.md`](PIPELINE.md)。
 
+AdminServer 同样拆分为 HTTP/auth/policy/nonce/audit 入口、ApiRouter 和 Models/Ops/Config-Users/Characters-MCP/Memory/Knowledge/World 领域 handler。鉴权链路与 handler 边界见 [`ADMIN_API.md`](ADMIN_API.md)。
+
 输入侧用户文本、附件观察、OCR/VLM、MCP 返回、工具结果和长期记忆均属于不可信数据；它们不得因为被放入 system/data block 就获得 instruction 权限。当前 `wrapUntrusted` 与 provenance 已接入 pipeline、AI tools、MCP bridge、media OCR/VLM 和 memory recall，并有跨来源注入回归测试；新增数据入口必须沿用该协议。
 
 ## 拟人化状态域

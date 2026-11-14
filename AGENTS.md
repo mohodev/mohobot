@@ -53,6 +53,7 @@ MohoBot is a TypeScript ESM, Node.js >= 22.12 Discord AI runtime. It has no appl
 
 - Admin WebUI binds to `127.0.0.1:3210` and requires `MOHO_ADMIN_TOKEN` plus persistent storage.
 - Write operations in the admin/control plane require RBAC and, for dangerous/reversible actions, confirmation and audit. Do not expose arbitrary shell, callbacks, Discord targets, or admin principals to model tools.
+- Admin API module boundaries are documented in `docs/ADMIN_API.md`. Keep HTTP/auth/policy/nonce/audit in `server.ts` and endpoint behavior in `api-routes/*.ts`; handlers must not bypass the shared authorization chain.
 - Do not reset, checkout, or discard user changes. Do not edit runtime `data/` or rotate credentials unless explicitly requested.
 - Production updates use the repository's guarded flow: `npm run check-update`, then authorized `npm run update`; it performs ff-only update, SQLite backup, setup, preflight, typecheck, test, and build. Do not start a second production process outside the managed service.
 
