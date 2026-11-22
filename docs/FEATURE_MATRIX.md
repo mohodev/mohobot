@@ -80,13 +80,13 @@
 |---|---|---|---|
 | Admin Auth / Setup | 已实现 | 首次部署、账号/口令、会话、临时令牌 | 增加登录限流与 E2E |
 | RBAC / Route Policy | 已实现 | `src/admin/rbac.ts`、`route-policy.ts`、审计、确认 nonce | 建立从路由到前端权限的自动契约校验 |
-| Admin API | 已实现 | `server.ts` 统一处理 HTTP/auth/RBAC/Route Policy/nonce/audit；`api-router.ts` 协调；`api-routes/` 按 Models/Ops/Config-Users/Characters-MCP/Memory/Knowledge/World 拆分 | 后续输出 OpenAPI、生成 TypeScript client、补 response schema contract |
+| Admin API | 已实现 | `server.ts` 统一处理 HTTP/auth/RBAC/Route Policy/nonce/audit；`api-router.ts` 协调；`api-routes/` 按 Models/Ops/Config-Users/Characters-MCP/Memory/Knowledge/World 拆分；OpenAPI 3.0.3 规范见 `docs/openapi.yaml`（116 个操作，105 条路径），运行时经 `GET /api/openapi.json`（需登录）输出，契约测试 `src/admin/openapi-contract.test.ts` 强制 spec 与 Route Policy 一致（2026-11-22） | 后续生成 TypeScript client、补逐个 response schema contract |
 | 经典管理 WebUI | 已实现 | 原生 HTML/CSS/JS，23 个权限门控导航页，保留于 `/` | 继续作为完整回退入口；前端单体约 66 KB，后续逐页迁移后再退役 |
 | Debug Chat | 已实现 | 单次模型调试、权限门控 | 不能当作面向用户的本地聊天产品 |
 | Model Operations UI | 已实现 | 模型健康、用量、fallback/circuit 事件等 | 增加筛选、时间区间和路由解释 |
 | 插件管理 UI | 已实现 | 经典 UI 与 React Dashboard 均显示按 Bot 分组的本地插件状态；重载由 `plugin.reload` + nonce + 审计保护 | 新 UI 仍需迁移插件配置表单；缺远程市场、签名、安装、升级和回滚 |
 | WebUI 新前端 | 已实现 | `dashboard/`：React 19 + TypeScript + Vite；复用现有 Session Token、Admin API 与 RBAC；21 个权限门控页面（总览、Bot、Provider、模型、日志、角色、语义记忆、表达/黑话、知识库、世界、设备、好感度、任务、Future Tasks、插件、MCP、会话审计、管理员、配置发布、服务健康、调试）；共享 `lib/`（types/hooks/format/api）+ `components/ui` 契约 + jsdom 组件测试；含首次部署向导；视觉层重写为与经典控制台一致的 AstrBot 风格 Material 3 设计系统（浅色优先、主色 `#3C96CA`、`--md-*` token、`prefers-color-scheme` + `[data-theme="dark"]` 深色），21 个页面组件零改动 | 补浏览器 E2E、OpenAPI 生成的类型化 client 与页面级 response schema；经典控制台继续作为回退入口 |
-| 生成式 API Client | 未实现 | 前端请求路径手写 | 先由 Admin API 输出 OpenAPI，再生成 TS client |
+| 生成式 API Client | 未实现 | 前端请求路径手写 | OpenAPI 已输出（`docs/openapi.yaml` + `GET /api/openapi.json`，2026-11-22），下一步按 `docs/OPENAPI.md` §9 选生成器生成 TS client |
 | 浏览器 E2E | 未实现 | 主要是 API/contract/单元测试 + Dashboard jsdom 组件测试 | Playwright 覆盖登录、配置、聊天、角色、插件和危险确认 |
 
 ## 非功能要求（重建期间不得退化）

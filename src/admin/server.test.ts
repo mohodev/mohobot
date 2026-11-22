@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNullLogger, registerSecret, clearSecrets } from '../core/logger.js';
 import { LogBuffer } from '../core/log-buffer.js';
@@ -88,6 +89,19 @@ describe('AdminServer production authorization chain', () => {
     expect(result.status).toBe(201);
     return result.data.confirmation.nonce as string;
   }
+
+  it('serves the OpenAPI document to authenticated admins', async () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+    await fs.mkdir(path.join(root, 'docs'), { recursive: true });
+    await fs.copyFile(path.join(repoRoot, 'docs', 'openapi.yaml'), path.join(root, 'docs', 'openapi.yaml'));
+    expect((await request('GET', '/api/openapi.json')).status).toBe(401);
+    const admin = await bootstrap();
+    const doc = await request('GET', '/api/openapi.json', { token: admin });
+    expect(doc.status).toBe(200);
+    expect(doc.data.openapi).toBe('3.0.3');
+    expect(Object.keys(doc.data.paths)).toHaveLength(105);
+    expect(doc.data.paths['/api/status'].get.operationId).toBe('runtime.status');
+  });
 
   it('serves the React control center at root with its assets, and keeps /dashboard/ as an alias', async () => {
     const root = await fetch(`${base}/`);

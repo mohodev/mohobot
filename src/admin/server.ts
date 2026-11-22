@@ -48,6 +48,7 @@ import { FutureTaskStore } from '../tasks/future-task.js';
 import { listPersistentDomains, queryPersistentTraces } from './world-isolation.js';
 import { DiscordDeliveryOutbox } from '../discord/outbox.js';
 import { AdminApiRouter } from './api-router.js';
+import { parse as parseYaml } from 'yaml';
 import type { ApiResult } from './api-types.js';
 import { HttpError } from './api-errors.js';
 
@@ -267,6 +268,9 @@ export class AdminServer {
       }
 
       const policy = routePolicy(method, pathname);
+      if (method === 'GET' && pathname === '/api/openapi.json') {
+        return await this.#openApi(res, authenticated);
+      }
       if (!policy) {
         await this.#audit(authenticated, method, pathname, 403, 'denied', 'route policy missing');
         return json(res, 403, { ok: false, error: 'forbidden' });
@@ -327,6 +331,23 @@ export class AdminServer {
   async #setupStatus(res: ServerResponse): Promise<void> {
     const status = await this.#setup.status();
     json(res, 200, { ok: true, ...status });
+  }
+
+  /**
+   * Serve the OpenAPI document (docs/openapi.yaml, parsed to JSON).
+   * Authenticated only, any role; intentionally not in ROUTE_POLICIES and
+   * not listed as an operation in the spec itself (see docs/OPENAPI.md §3).
+   */
+  async #openApi(res: ServerResponse, auth: AuthenticatedAdmin): Promise<void> {
+    try {
+      const raw = await fs.readFile(path.join(this.#opts.rootDir, 'docs', 'openapi.yaml'), 'utf8');
+      const document = parseYaml(raw);
+      await this.#auditSafely(auth, 'GET', '/api/openapi.json', 200, 'allowed', 'openapi.read');
+      json(res, 200, document);
+    } catch {
+      await this.#auditSafely(auth, 'GET', '/api/openapi.json', 500, 'denied', 'openapi unavailable');
+      json(res, 500, { ok: false, error: 'openapi unavailable' });
+    }
   }
 
   async #setupInit(res: ServerResponse, input: Record<string, unknown>, method: string, pathname: string): Promise<void> {

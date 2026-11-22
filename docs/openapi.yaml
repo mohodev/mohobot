@@ -1,0 +1,5346 @@
+openapi: 3.0.3
+info:
+  title: MohoBot Admin API
+  version: 1.0.0
+  description: MohoBot Admin API. Single source of truth for the admin HTTP API; see docs/OPENAPI.md for the standard. Paths,
+    methods, permissions, risk and confirmation are copied from src/admin/route-policy.ts and src/admin/server.ts, not invented.
+servers:
+- url: http://127.0.0.1:3210
+  description: Admin server (loopback only; use an HTTPS reverse proxy for remote access)
+tags:
+- name: Auth
+- name: Setup
+- name: Status
+- name: Bots
+- name: Models
+- name: Providers
+- name: Extensions
+- name: Memory
+- name: Knowledge
+- name: World
+- name: Device
+- name: Affinity
+- name: Tasks
+- name: Characters
+- name: MCP
+- name: Config
+- name: Admin
+- name: Ops
+- name: Guild
+- name: Debug
+security:
+- BearerAuth: []
+paths:
+  /api/admin/actions:
+    get:
+      tags:
+      - Admin
+      summary: admin.actions.read
+      operationId: admin.actions.read
+      x-moho-action: admin.actions.read
+      x-moho-permission: admin.actions.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/admin/audit:
+    get:
+      tags:
+      - Admin
+      summary: audit.read
+      operationId: audit.read
+      x-moho-action: audit.read
+      x-moho-permission: audit.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: outcome
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: method
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/admin/health:
+    get:
+      tags:
+      - Admin
+      summary: runtime.health
+      operationId: runtime.health
+      x-moho-action: runtime.health
+      x-moho-permission: status.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/admin/users:
+    get:
+      tags:
+      - Admin
+      summary: users.list
+      operationId: users.list
+      x-moho-action: users.list
+      x-moho-permission: users.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      tags:
+      - Admin
+      summary: users.create
+      operationId: users.create
+      x-moho-action: users.create
+      x-moho-permission: users.create
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/admin/users/{userId}:
+    patch:
+      tags:
+      - Admin
+      summary: users.update
+      operationId: users.update
+      x-moho-action: users.update
+      x-moho-permission: users.update
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/admin/users/{userId}/password:
+    post:
+      tags:
+      - Admin
+      summary: users.password.rotate
+      operationId: users.password.rotate
+      x-moho-action: users.password.rotate
+      x-moho-permission: users.credentials.rotate
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/affinity:
+    get:
+      tags:
+      - Affinity
+      summary: affinity.read
+      operationId: affinity.read
+      x-moho-action: affinity.read
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/affinity/adjust:
+    post:
+      tags:
+      - Affinity
+      summary: affinity.adjust
+      operationId: affinity.adjust
+      x-moho-action: affinity.adjust
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/auth/bootstrap/session:
+    post:
+      tags:
+      - Auth
+      summary: auth.bootstrap.session
+      operationId: auth.bootstrap.session
+      security: []
+      x-moho-action: auth.bootstrap.session
+      x-moho-permission: null
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTokenResponse'
+        '401':
+          description: Invalid master token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      description: Legacy alias of POST /api/auth/session. Same behaviour.
+  /api/auth/login:
+    post:
+      tags:
+      - Auth
+      summary: auth.login
+      operationId: auth.login
+      security: []
+      x-moho-action: auth.login
+      x-moho-permission: null
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTokenResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Account locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - username
+              - password
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  format: password
+  /api/auth/logout:
+    post:
+      tags:
+      - Auth
+      summary: auth.logout
+      operationId: auth.logout
+      x-moho-action: auth.logout
+      x-moho-permission: null
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/auth/me:
+    get:
+      tags:
+      - Auth
+      summary: auth.me
+      operationId: auth.me
+      x-moho-action: auth.me
+      x-moho-permission: null
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/auth/session:
+    post:
+      tags:
+      - Auth
+      summary: auth.session
+      operationId: auth.session
+      security: []
+      x-moho-action: auth.session
+      x-moho-permission: null
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTokenResponse'
+        '401':
+          description: Invalid master token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      description: Exchange the deployment master token (X-Admin-Token header) for a session token.
+  /api/auth/sessions:
+    get:
+      tags:
+      - Auth
+      summary: sessions.list
+      operationId: sessions.list
+      x-moho-action: sessions.list
+      x-moho-permission: sessions.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/auth/sessions/{sessionId}:
+    delete:
+      tags:
+      - Auth
+      summary: sessions.revoke
+      operationId: sessions.revoke
+      x-moho-action: sessions.revoke
+      x-moho-permission: sessions.revoke
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/auth/temporary-tokens:
+    get:
+      tags:
+      - Auth
+      summary: tokens.list
+      operationId: tokens.list
+      x-moho-action: tokens.list
+      x-moho-permission: tokens.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      tags:
+      - Auth
+      summary: tokens.create
+      operationId: tokens.create
+      x-moho-action: tokens.create
+      x-moho-permission: tokens.create
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/auth/temporary-tokens/{tokenId}:
+    delete:
+      tags:
+      - Auth
+      summary: tokens.revoke
+      operationId: tokens.revoke
+      x-moho-action: tokens.revoke
+      x-moho-permission: tokens.revoke
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: tokenId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/behavior/dry-run:
+    post:
+      tags:
+      - Memory
+      summary: behavior.dry-run
+      operationId: behavior.dry-run
+      x-moho-action: behavior.dry-run
+      x-moho-permission: behavior.dry-run
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/bots:
+    get:
+      tags:
+      - Bots
+      summary: bots.list
+      operationId: bots.list
+      x-moho-action: bots.list
+      x-moho-permission: gateway.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/bots/{botId}:
+    get:
+      tags:
+      - Bots
+      summary: bots.get
+      operationId: bots.get
+      x-moho-action: bots.get
+      x-moho-permission: gateway.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/bots/{botId}/gateway:
+    get:
+      tags:
+      - Bots
+      summary: gateway.read
+      operationId: gateway.read
+      x-moho-action: gateway.read
+      x-moho-permission: gateway.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/bots/{botId}/plugins:
+    get:
+      tags:
+      - Bots
+      summary: plugins.list
+      operationId: plugins.list
+      x-moho-action: plugins.list
+      x-moho-permission: plugin.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/bots/{botId}/plugins/{pluginId}/reload:
+    post:
+      tags:
+      - Bots
+      summary: plugin.reload
+      operationId: plugin.reload
+      x-moho-action: plugin.reload
+      x-moho-permission: plugin.reload
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: pluginId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/bots/{botId}/restart:
+    post:
+      tags:
+      - Bots
+      summary: runtime.restart
+      operationId: runtime.restart
+      x-moho-action: runtime.restart
+      x-moho-permission: runtime.restart
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/characters:
+    get:
+      tags:
+      - Characters
+      summary: characters.list
+      operationId: characters.list
+      x-moho-action: characters.list
+      x-moho-permission: characters.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      tags:
+      - Characters
+      summary: characters.save
+      operationId: characters.save
+      x-moho-action: characters.save
+      x-moho-permission: characters.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/characters/cross-chat:
+    post:
+      tags:
+      - Characters
+      summary: characters.crosschat
+      operationId: characters.crosschat
+      x-moho-action: characters.crosschat
+      x-moho-permission: characters.crosschat
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/characters/import:
+    post:
+      tags:
+      - Characters
+      summary: characters.import
+      operationId: characters.import
+      x-moho-action: characters.import
+      x-moho-permission: characters.import
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/characters/{characterId}:
+    get:
+      tags:
+      - Characters
+      summary: characters.get
+      operationId: characters.get
+      x-moho-action: characters.get
+      x-moho-permission: characters.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: characterId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags:
+      - Characters
+      summary: characters.update
+      operationId: characters.update
+      x-moho-action: characters.update
+      x-moho-permission: characters.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: characterId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/config/ack:
+    post:
+      tags:
+      - Config
+      summary: config.ack
+      operationId: config.ack
+      x-moho-action: config.ack
+      x-moho-permission: config.publish
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/config/activation-receipt:
+    post:
+      tags:
+      - Config
+      summary: config.activation.receipt.record
+      operationId: config.activation.receipt.record
+      x-moho-action: config.activation.receipt.record
+      x-moho-permission: config.publish
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/config/activation-receipts:
+    get:
+      tags:
+      - Config
+      summary: config.activation.receipts
+      operationId: config.activation.receipts
+      x-moho-action: config.activation.receipts
+      x-moho-permission: config.publish
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/config/publication:
+    get:
+      tags:
+      - Config
+      summary: config.read
+      operationId: config.read
+      x-moho-action: config.read
+      x-moho-permission: config.publish
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/config/publish:
+    post:
+      tags:
+      - Config
+      summary: config.publish
+      operationId: config.publish
+      x-moho-action: config.publish
+      x-moho-permission: config.publish
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/config/rollback:
+    post:
+      tags:
+      - Config
+      summary: config.rollback
+      operationId: config.rollback
+      x-moho-action: config.rollback
+      x-moho-permission: config.publish
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/confirmations:
+    post:
+      tags:
+      - Auth
+      summary: confirmation.issue
+      operationId: confirmation.issue
+      x-moho-action: confirmation.issue
+      x-moho-permission: null
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/debug/chat:
+    post:
+      tags:
+      - Debug
+      summary: debug.chat
+      operationId: debug.chat
+      x-moho-action: debug.chat
+      x-moho-permission: debug.chat
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/debug/chat/capabilities:
+    get:
+      tags:
+      - Debug
+      summary: debug.chat.capabilities
+      operationId: debug.chat.capabilities
+      x-moho-action: debug.chat.capabilities
+      x-moho-permission: debug.chat
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/device:
+    get:
+      tags:
+      - Device
+      summary: device.read
+      operationId: device.read
+      x-moho-action: device.read
+      x-moho-permission: device.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/device/transition:
+    post:
+      tags:
+      - Device
+      summary: device.write
+      operationId: device.write
+      x-moho-action: device.write
+      x-moho-permission: device.write
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/extensions:
+    get:
+      tags:
+      - Extensions
+      summary: extensions.list
+      operationId: extensions.list
+      x-moho-action: extensions.list
+      x-moho-permission: extensions.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/guild/apply:
+    post:
+      tags:
+      - Guild
+      summary: guild.apply
+      operationId: guild.apply
+      x-moho-action: guild.apply
+      x-moho-permission: guild.manage
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/guild/inventory:
+    get:
+      tags:
+      - Guild
+      summary: guild.inventory
+      operationId: guild.inventory
+      x-moho-action: guild.inventory
+      x-moho-permission: guild.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: guildId
+        in: query
+        required: true
+        schema:
+          type: string
+  /api/guild/plan:
+    post:
+      tags:
+      - Guild
+      summary: guild.plan
+      operationId: guild.plan
+      x-moho-action: guild.plan
+      x-moho-permission: guild.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/knowledge-bases:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.list
+      operationId: knowledge.list
+      x-moho-action: knowledge.list
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+    post:
+      tags:
+      - Knowledge
+      summary: knowledge.create
+      operationId: knowledge.create
+      x-moho-action: knowledge.create
+      x-moho-permission: knowledge.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/knowledge-bases/{knowledgeBaseId}:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.get
+      operationId: knowledge.get
+      x-moho-action: knowledge.get
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Knowledge
+      summary: knowledge.delete
+      operationId: knowledge.delete
+      x-moho-action: knowledge.delete
+      x-moho-permission: knowledge.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/knowledge-bases/{knowledgeBaseId}/bindings:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.bindings.list
+      operationId: knowledge.bindings.list
+      x-moho-action: knowledge.bindings.list
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Knowledge
+      summary: knowledge.bindings.create
+      operationId: knowledge.bindings.create
+      x-moho-action: knowledge.bindings.create
+      x-moho-permission: knowledge.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/knowledge-bases/{knowledgeBaseId}/bindings/{targetType}/{targetId}:
+    delete:
+      tags:
+      - Knowledge
+      summary: knowledge.bindings.delete
+      operationId: knowledge.bindings.delete
+      x-moho-action: knowledge.bindings.delete
+      x-moho-permission: knowledge.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: targetType
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: targetId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/knowledge-bases/{knowledgeBaseId}/documents:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.documents.list
+      operationId: knowledge.documents.list
+      x-moho-action: knowledge.documents.list
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+      - Knowledge
+      summary: knowledge.documents.upsert
+      operationId: knowledge.documents.upsert
+      x-moho-action: knowledge.documents.upsert
+      x-moho-permission: knowledge.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/knowledge-bases/{knowledgeBaseId}/documents/{documentId}:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.documents.get
+      operationId: knowledge.documents.get
+      x-moho-action: knowledge.documents.get
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Knowledge
+      summary: knowledge.documents.delete
+      operationId: knowledge.documents.delete
+      x-moho-action: knowledge.documents.delete
+      x-moho-permission: knowledge.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: documentId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/knowledge-bases/{knowledgeBaseId}/search:
+    get:
+      tags:
+      - Knowledge
+      summary: knowledge.search
+      operationId: knowledge.search
+      x-moho-action: knowledge.search
+      x-moho-permission: knowledge.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: knowledgeBaseId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
+  /api/logs:
+    get:
+      tags:
+      - Ops
+      summary: logs.read
+      operationId: logs.read
+      x-moho-action: logs.read
+      x-moho-permission: logs.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: level
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - trace
+          - debug
+          - info
+          - warn
+          - error
+          - fatal
+      - name: component
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: after
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/mcp/audit:
+    get:
+      tags:
+      - MCP
+      summary: mcp.audit.read
+      operationId: mcp.audit.read
+      x-moho-action: mcp.audit.read
+      x-moho-permission: mcp.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/mcp/call:
+    post:
+      tags:
+      - MCP
+      summary: mcp.call
+      operationId: mcp.call
+      x-moho-action: mcp.call
+      x-moho-permission: mcp.call
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/mcp/policy:
+    get:
+      tags:
+      - MCP
+      summary: mcp.policy.read
+      operationId: mcp.policy.read
+      x-moho-action: mcp.policy.read
+      x-moho-permission: mcp.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/mcp/tools:
+    get:
+      tags:
+      - MCP
+      summary: mcp.tools.read
+      operationId: mcp.tools.read
+      x-moho-action: mcp.tools.read
+      x-moho-permission: mcp.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/memory:
+    get:
+      tags:
+      - Memory
+      summary: memory.list
+      operationId: memory.list
+      x-moho-action: memory.list
+      x-moho-permission: memory.metadata.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: scope
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: userId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/memory/expressions:
+    get:
+      tags:
+      - Memory
+      summary: expressions.list
+      operationId: expressions.list
+      x-moho-action: expressions.list
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/memory/expressions/approve:
+    post:
+      tags:
+      - Memory
+      summary: expressions.approve
+      operationId: expressions.approve
+      x-moho-action: expressions.approve
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/expressions/bulk-delete:
+    post:
+      tags:
+      - Memory
+      summary: expressions.bulk-delete
+      operationId: expressions.bulk-delete
+      x-moho-action: expressions.bulk-delete
+      x-moho-permission: memory.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/expressions/export:
+    get:
+      tags:
+      - Memory
+      summary: expressions.export
+      operationId: expressions.export
+      x-moho-action: expressions.export
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/memory/expressions/recycle-bin:
+    get:
+      tags:
+      - Memory
+      summary: expressions.recycle-bin
+      operationId: expressions.recycle-bin
+      x-moho-action: expressions.recycle-bin
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/memory/expressions/reject:
+    post:
+      tags:
+      - Memory
+      summary: expressions.reject
+      operationId: expressions.reject
+      x-moho-action: expressions.reject
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/expressions/restore:
+    post:
+      tags:
+      - Memory
+      summary: expressions.restore
+      operationId: expressions.restore
+      x-moho-action: expressions.restore
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/jargon:
+    get:
+      tags:
+      - Memory
+      summary: jargon.list
+      operationId: jargon.list
+      x-moho-action: jargon.list
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/memory/jargon/approve:
+    post:
+      tags:
+      - Memory
+      summary: jargon.approve
+      operationId: jargon.approve
+      x-moho-action: jargon.approve
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/jargon/reject:
+    post:
+      tags:
+      - Memory
+      summary: jargon.reject
+      operationId: jargon.reject
+      x-moho-action: jargon.reject
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/semantic/bulk-delete:
+    post:
+      tags:
+      - Memory
+      summary: semantic-memory.bulk-delete
+      operationId: semantic-memory.bulk-delete
+      x-moho-action: semantic-memory.bulk-delete
+      x-moho-permission: memory.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/semantic/export:
+    get:
+      tags:
+      - Memory
+      summary: semantic-memory.export
+      operationId: semantic-memory.export
+      x-moho-action: semantic-memory.export
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/memory/semantic/import-dry-run:
+    post:
+      tags:
+      - Memory
+      summary: semantic-memory.import-dry-run
+      operationId: semantic-memory.import-dry-run
+      x-moho-action: semantic-memory.import-dry-run
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/semantic/recycle-bin:
+    get:
+      tags:
+      - Memory
+      summary: semantic-memory.recycle-bin
+      operationId: semantic-memory.recycle-bin
+      x-moho-action: semantic-memory.recycle-bin
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/memory/semantic/restore:
+    post:
+      tags:
+      - Memory
+      summary: semantic-memory.restore
+      operationId: semantic-memory.restore
+      x-moho-action: semantic-memory.restore
+      x-moho-permission: memory.write
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/memory/{memoryKey}:
+    get:
+      tags:
+      - Memory
+      summary: memory.get
+      operationId: memory.get
+      x-moho-action: memory.get
+      x-moho-permission: memory.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: memoryKey
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags:
+      - Memory
+      summary: memory.delete
+      operationId: memory.delete
+      x-moho-action: memory.delete
+      x-moho-permission: memory.delete
+      x-moho-risk: dangerous
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: memoryKey
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/metrics:
+    get:
+      tags:
+      - Status
+      summary: metrics.read
+      operationId: metrics.read
+      x-moho-action: metrics.read
+      x-moho-permission: metrics.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/models:
+    get:
+      tags:
+      - Models
+      summary: models.read
+      operationId: models.read
+      x-moho-action: models.read
+      x-moho-permission: models.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/models/dashboard:
+    get:
+      tags:
+      - Models
+      summary: models.dashboard
+      operationId: models.dashboard
+      x-moho-action: models.dashboard
+      x-moho-permission: models.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/models/health:
+    get:
+      tags:
+      - Models
+      summary: models.health
+      operationId: models.health
+      x-moho-action: models.health
+      x-moho-permission: models.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/models/health/{providerId}:
+    get:
+      tags:
+      - Models
+      summary: models.provider-health
+      operationId: models.provider-health
+      x-moho-action: models.provider-health
+      x-moho-permission: models.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: providerId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/models/usage/{botId}:
+    get:
+      tags:
+      - Models
+      summary: models.usage
+      operationId: models.usage
+      x-moho-action: models.usage
+      x-moho-permission: models.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/ops/chat-log:
+    get:
+      tags:
+      - Ops
+      summary: ops.chat-log.read
+      operationId: ops.chat-log.read
+      x-moho-action: ops.chat-log.read
+      x-moho-permission: sessions.chat.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/ops/discord-chat-log:
+    get:
+      tags:
+      - Ops
+      summary: ops.discord-chat-log.read
+      operationId: ops.discord-chat-log.read
+      x-moho-action: ops.discord-chat-log.read
+      x-moho-permission: chats.log.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: channelId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: direction
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - in
+          - out
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/ops/operator-audit:
+    get:
+      tags:
+      - Ops
+      summary: ops.operator-audit.read
+      operationId: ops.operator-audit.read
+      x-moho-action: ops.operator-audit.read
+      x-moho-permission: audit.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/ops/operator-tools:
+    get:
+      tags:
+      - Ops
+      summary: ops.operator-tools.read
+      operationId: ops.operator-tools.read
+      x-moho-action: ops.operator-tools.read
+      x-moho-permission: audit.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/ops/sessions:
+    get:
+      tags:
+      - Ops
+      summary: ops.sessions.read
+      operationId: ops.sessions.read
+      x-moho-action: ops.sessions.read
+      x-moho-permission: sessions.chat.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+  /api/ops/sessions/{sessionKey}:
+    delete:
+      tags:
+      - Ops
+      summary: ops.sessions.delete
+      operationId: ops.sessions.delete
+      x-moho-action: ops.sessions.delete
+      x-moho-permission: sessions.chat.delete
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: sessionKey
+        in: path
+        required: true
+        schema:
+          type: string
+  /api/providers:
+    get:
+      tags:
+      - Providers
+      summary: providers.list
+      operationId: providers.list
+      x-moho-action: providers.list
+      x-moho-permission: providers.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/providers/{providerId}/probe:
+    post:
+      tags:
+      - Providers
+      summary: providers.probe
+      operationId: providers.probe
+      x-moho-action: providers.probe
+      x-moho-permission: providers.probe
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: providerId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/setup/init:
+    post:
+      tags:
+      - Setup
+      summary: setup.init
+      operationId: setup.init
+      security: []
+      x-moho-action: setup.init
+      x-moho-permission: null
+      x-moho-risk: dangerous
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Deployment initialised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTokenResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Already initialised
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: First-deployment initialisation input (admin username/password). masterToken is returned once.
+  /api/setup/status:
+    get:
+      tags:
+      - Setup
+      summary: setup.status
+      operationId: setup.status
+      security: []
+      x-moho-action: setup.status
+      x-moho-permission: null
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+  /api/social/disclosure-audit:
+    get:
+      tags:
+      - Ops
+      summary: social.disclosure-audit.read
+      operationId: social.disclosure-audit.read
+      x-moho-action: social.disclosure-audit.read
+      x-moho-permission: audit.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/status:
+    get:
+      tags:
+      - Status
+      summary: runtime.status
+      operationId: runtime.status
+      x-moho-action: runtime.status
+      x-moho-permission: status.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/tasks:
+    get:
+      tags:
+      - Tasks
+      summary: tasks.read
+      operationId: tasks.read
+      x-moho-action: tasks.read
+      x-moho-permission: tasks.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/tasks/future:
+    get:
+      tags:
+      - Tasks
+      summary: future-tasks.list
+      operationId: future-tasks.list
+      x-moho-action: future-tasks.list
+      x-moho-permission: tasks.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - pending
+          - claimed
+          - completed
+          - failed
+          - expired
+          - uncertain
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: owner
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: type
+        in: query
+        required: false
+        schema:
+          type: string
+  /api/tasks/future/schedule:
+    post:
+      tags:
+      - Tasks
+      summary: future-tasks.schedule
+      operationId: future-tasks.schedule
+      x-moho-action: future-tasks.schedule
+      x-moho-permission: tasks.control
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/tasks/future/{taskId}/reconcile:
+    post:
+      tags:
+      - Tasks
+      summary: future-tasks.reconcile
+      operationId: future-tasks.reconcile
+      x-moho-action: future-tasks.reconcile
+      x-moho-permission: tasks.control
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/tasks/{taskId}/pause:
+    post:
+      tags:
+      - Tasks
+      summary: tasks.control.pause
+      operationId: tasks.control.pause
+      x-moho-action: tasks.control
+      x-moho-permission: tasks.control
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/tasks/{taskId}/resume:
+    post:
+      tags:
+      - Tasks
+      summary: tasks.control.resume
+      operationId: tasks.control.resume
+      x-moho-action: tasks.control
+      x-moho-permission: tasks.control
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/tasks/{taskId}/run:
+    post:
+      tags:
+      - Tasks
+      summary: tasks.control.run
+      operationId: tasks.control.run
+      x-moho-action: tasks.control
+      x-moho-permission: tasks.control
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: taskId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world:
+    get:
+      tags:
+      - World
+      summary: world.read
+      operationId: world.read
+      x-moho-action: world.read
+      x-moho-permission: world.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/world/day-plan:
+    get:
+      tags:
+      - World
+      summary: world.read.day-plan
+      operationId: world.read.day-plan
+      x-moho-action: world.read
+      x-moho-permission: world.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+  /api/world/events:
+    post:
+      tags:
+      - World
+      summary: world.write.events
+      operationId: world.write.events
+      x-moho-action: world.write
+      x-moho-permission: world.write
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world/schedule:
+    get:
+      tags:
+      - World
+      summary: world.schedule.read
+      operationId: world.schedule.read
+      x-moho-action: world.schedule.read
+      x-moho-permission: world.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+    post:
+      tags:
+      - World
+      summary: world.schedule
+      operationId: world.schedule
+      x-moho-action: world.schedule
+      x-moho-permission: world.write
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '201':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world/schedule/dry-run:
+    post:
+      tags:
+      - World
+      summary: world.schedule.dry-run
+      operationId: world.schedule.dry-run
+      x-moho-action: world.schedule.dry-run
+      x-moho-permission: world.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world/schedule/{scheduleId}/trust:
+    post:
+      tags:
+      - World
+      summary: world.schedule.confirm
+      operationId: world.schedule.confirm
+      x-moho-action: world.schedule.confirm
+      x-moho-permission: world.confirm
+      x-moho-risk: impact
+      x-moho-confirmation: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '409':
+          description: Confirmation required or conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: scheduleId
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world/tick:
+    post:
+      tags:
+      - World
+      summary: world.write.tick
+      operationId: world.write.tick
+      x-moho-action: world.write
+      x-moho-permission: world.write
+      x-moho-risk: reversible
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: JSON object body. Fields are handler-specific; see docs/OPENAPI.md section 5.
+  /api/world/trace:
+    get:
+      tags:
+      - World
+      summary: world.trace.read
+      operationId: world.trace.read
+      x-moho-action: world.trace.read
+      x-moho-permission: world.read
+      x-moho-risk: read
+      x-moho-confirmation: false
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OkResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '403':
+          description: Forbidden (no policy or no permission)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+      parameters:
+      - name: botId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: domainId
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: session token
+      description: Admin session token from POST /api/auth/login or POST /api/auth/session.
+  schemas:
+    ApiError:
+      type: object
+      required:
+      - ok
+      - error
+      properties:
+        ok:
+          type: boolean
+          enum:
+          - false
+        error:
+          type: string
+    OkResponse:
+      type: object
+      required:
+      - ok
+      properties:
+        ok:
+          type: boolean
+          enum:
+          - true
+      additionalProperties: true
+      description: 'Success envelope. Additional fields are operation-specific; see each operation. Unknown/complex domain
+        objects are returned as objects (additionalProperties: true) until their schemas are refined.'
+    SessionTokenResponse:
+      type: object
+      required:
+      - ok
+      - token
+      properties:
+        ok:
+          type: boolean
+          enum:
+          - true
+        token:
+          type: string
+        auth:
+          type: object
+          additionalProperties: true
+        masterToken:
+          type: string
+          description: Only returned by POST /api/setup/init, shown once.
+    Confirmation:
+      type: object
+      required:
+      - ok
+      - confirmation
+      properties:
+        ok:
+          type: boolean
+          enum:
+          - true
+        confirmation:
+          type: object
+          additionalProperties: true
+        target:
+          type: object
+          additionalProperties: true
