@@ -1,0 +1,9 @@
+.v-field--variant-outlined {
+  border-radius: var(--astrbot-radius-control);
+}
+
+// Outline segments inherit this shape through Vuetify's logical corner rules.
+.v-field--variant-outlined.rounded-md,
+.v-field--variant-outlined.rounded-lg {
+  border-radius: var(--astrbot-radius-control) !important;
+}

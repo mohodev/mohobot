@@ -1,0 +1,15 @@
+.v-tabs .v-tab {
+  border-radius: var(--astrbot-radius-control);
+}
+
+.theme-tab {
+  &.v-tabs {
+    .v-tab {
+      border-radius: var(--astrbot-radius-control) !important;
+      min-width: auto !important;
+      &.v-slide-group-item--active {
+        background: rgb(var(--v-theme-primary));
+      }
+    }
+  }
+}

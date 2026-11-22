@@ -1,0 +1,17 @@
+# NOTICE — dashboard/
+
+The files in this directory are derived from the AstrBot dashboard,
+originally developed by AstrBotDevs/AstrBot:
+
+  https://github.com/AstrBotDevs/AstrBot
+
+The AstrBot project as a whole is licensed under the GNU Affero General
+Public License v3.0 (AGPL-3.0). The `LICENSE` file kept alongside this
+notice is the MIT license of the underlying CodedThemes template that
+AstrBot's dashboard is built on; it does not replace the AGPL-3.0 terms
+that apply to AstrBot's own dashboard code.
+
+This copy has been adapted to run against the MohoBot Admin API
+(see `../docs/openapi.yaml`) instead of the AstrBot Python backend.
+MohoBot itself remains MIT licensed; the dashboard code in this
+directory is subject to the AGPL-3.0 terms of its AstrBot origin.

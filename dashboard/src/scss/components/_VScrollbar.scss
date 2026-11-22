@@ -1,0 +1,101 @@
+/* 自定义滚动条样式 - 跟随主题 */
+
+:root {
+  --astrbot-scrollbar-track: transparent;
+  --astrbot-scrollbar-thumb: rgba(var(--v-theme-primary), 0.72);
+  --astrbot-scrollbar-thumb-hover: rgba(var(--v-theme-primary), 0.84);
+  --astrbot-scrollbar-thumb-active: rgba(var(--v-theme-primary), 0.94);
+}
+
+/* Keep fading local to each scroll container, including nested scroll areas. */
+* {
+  --astrbot-scrollbar-opacity: 0;
+}
+
+/* 全局滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--astrbot-scrollbar-track);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-primary), calc(0.72 * var(--astrbot-scrollbar-opacity)));
+  border-radius: 5px;
+  border: none;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--astrbot-scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--astrbot-scrollbar-thumb-active);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 细滚动条变体 */
+.thin-scrollbar {
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+}
+
+/* 聊天区域滚动条 */
+.chat-scrollbar {
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--astrbot-scrollbar-track);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border-radius: 4px;
+    border: none;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--astrbot-scrollbar-thumb-hover);
+  }
+}
+
+/* 隐藏滚动条变体 */
+.hidden-scrollbar {
+  ::-webkit-scrollbar {
+    width: 0px;
+    height: 0px;
+  }
+  
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+/* Firefox only: setting these in WebKit/Blink makes them ignore
+   ::-webkit-scrollbar and fall back to native overlay scrollbars. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(var(--v-theme-primary), calc(0.72 * var(--astrbot-scrollbar-opacity))) transparent;
+  }
+}
+
+/* 平滑滚动 */
+html {
+  scroll-behavior: smooth;
+}
+
+/* 移动端触摸滚动优化 */
+* {
+  -webkit-overflow-scrolling: touch;
+}
