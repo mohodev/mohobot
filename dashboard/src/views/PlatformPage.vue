@@ -6,21 +6,20 @@
           <aside class="platform-workbench__sidebar">
             <div class="bot-list-panel">
               <div class="bot-list-panel__head">
-                <h3 class="bot-list-panel__title">
-                  {{ tm("workspace.listTitle") }}
-                </h3>
+                <h3 class="bot-list-panel__title">平台</h3>
                 <v-btn
                   color="primary"
-                  prepend-icon="mdi-plus"
+                  prepend-icon="mdi-refresh"
                   size="small"
                   variant="text"
                   rounded="xl"
-                  @click="showAddPlatformDialog = true"
+                  :loading="loading"
+                  @click="load"
                 >
-                  {{ tm("addAdapter") }}
+                  刷新
                 </v-btn>
                 <v-progress-linear
-                  v-if="loadingPlatforms"
+                  v-if="loading"
                   class="bot-list-panel__progress"
                   color="primary"
                   height="2"
@@ -28,25 +27,22 @@
                 />
               </div>
 
-              <div
-                v-if="platforms.length"
-                class="bot-list-panel__mobile-controls"
-              >
+              <div v-if="bots.length" class="bot-list-panel__mobile-controls">
                 <v-select
-                  v-model="selectedPlatformId"
-                  :items="platformOptions"
+                  v-model="selectedBotId"
+                  :items="botOptions"
                   item-title="title"
                   item-value="value"
                   density="compact"
                   variant="solo-filled"
                   flat
                   hide-details
-                  :placeholder="tm('workspace.selectHint')"
+                  placeholder="选择平台"
                 >
                   <template #selection="{ item }">
                     <div class="bot-mobile-selection">
                       <img
-                        :src="getPlatformIconFor(item.raw.platform)"
+                        :src="getBotIcon(item.raw.bot)"
                         class="bot-list-icon bot-list-icon--mobile"
                         alt="bot logo"
                       />
@@ -60,7 +56,7 @@
                     >
                       <template #prepend>
                         <img
-                          :src="getPlatformIconFor(item.raw.platform)"
+                          :src="getBotIcon(item.raw.bot)"
                           class="bot-list-icon bot-list-icon--mobile me-2"
                           alt="bot logo"
                         />
@@ -68,75 +64,52 @@
                     </v-list-item>
                   </template>
                 </v-select>
-                <v-btn
-                  v-if="selectedPlatform"
-                  icon="mdi-delete-outline"
-                  size="small"
-                  variant="text"
-                  :aria-label="tm('workspace.delete')"
-                  :title="tm('workspace.delete')"
-                  @click="platformToDelete = selectedPlatform"
-                />
               </div>
 
-              <div v-if="platforms.length" class="bot-list">
+              <div v-if="bots.length" class="bot-list">
                 <div
-                  v-for="platform in platforms"
-                  :key="platform.id"
+                  v-for="bot in bots"
+                  :key="bot.id"
                   class="bot-list-item"
                   :class="{
-                    'bot-list-item--active': selectedPlatformId === platform.id,
+                    'bot-list-item--active': selectedBotId === bot.id,
                   }"
                 >
                   <button
                     type="button"
                     class="bot-list-item__main"
-                    @click="selectedPlatformId = platform.id"
+                    @click="selectedBotId = bot.id"
                   >
                     <img
-                      :src="getPlatformIconFor(platform)"
+                      :src="getBotIcon(bot)"
                       class="bot-list-icon"
                       alt="bot logo"
                     />
                     <div class="bot-list-item__copy">
-                      <div class="bot-list-item__title">{{ platform.id }}</div>
+                      <div class="bot-list-item__title">
+                        {{ bot.name || bot.id }}
+                      </div>
                       <div class="bot-list-item__subtitle">
                         <span
                           class="bot-list-item__status-dot"
-                          :class="getPlatformStatusClass(platform)"
+                          :class="getBotStatusClass(bot)"
                         ></span>
-                        <span>{{ getPlatformStatusLabel(platform) }}</span>
-                        <span v-if="platform.type">· {{ platform.type }}</span>
+                        <span>{{ getBotStatusLabel(bot) }}</span>
+                        <span v-if="bot.adapter">· {{ bot.adapter }}</span>
                       </div>
                     </div>
                   </button>
-                  <div class="bot-list-item__actions">
-                    <v-btn
-                      icon="mdi-delete-outline"
-                      size="small"
-                      variant="text"
-                      :aria-label="tm('workspace.delete')"
-                      :title="tm('workspace.delete')"
-                      @click="platformToDelete = platform"
-                    />
-                  </div>
                 </div>
               </div>
 
-              <div v-else-if="!loadingPlatforms" class="bot-list-empty">
+              <div v-else-if="!loading" class="bot-list-empty">
                 <v-icon size="42" color="grey-lighten-1"
                   >mdi-robot-outline</v-icon
                 >
-                <p>{{ tm("workspace.empty") }}</p>
-                <v-btn
-                  color="primary"
-                  prepend-icon="mdi-plus"
-                  size="small"
-                  variant="tonal"
-                  @click="showAddPlatformDialog = true"
-                >
-                  {{ tm("addAdapter") }}
-                </v-btn>
+                <p>暂无已配置的平台</p>
+                <p class="text-caption">
+                  平台在配置文件中定义，新增与编辑请走配置发布。
+                </p>
               </div>
             </div>
           </aside>
@@ -144,170 +117,134 @@
           <div class="platform-workbench__divider"></div>
 
           <main class="platform-workbench__main">
-            <PlatformEditor
-              v-if="selectedPlatform"
-              :key="selectedPlatform.id"
-              :platform="selectedPlatform"
-              :metadata="metadata"
-              :runtime-stat="getPlatformStat(selectedPlatform.id)"
-              :has-qr-payload="hasQrPayload(selectedPlatform.id)"
-              @saved="handlePlatformSaved"
-              @show-toast="showToast"
-              @show-error="showErrorDetails(selectedPlatform)"
-              @show-qr="openPlatformQrDialog(selectedPlatform.id)"
-              @show-webhook="openWebhookDialog"
-            />
+            <div v-if="selectedBot" class="platform-detail">
+              <div class="platform-detail__head">
+                <img
+                  :src="getBotIcon(selectedBot)"
+                  class="platform-detail__icon"
+                  alt="bot logo"
+                />
+                <div class="platform-detail__copy">
+                  <h2 class="platform-detail__title">
+                    {{ selectedBot.name || selectedBot.id }}
+                  </h2>
+                  <div class="platform-detail__subtitle">
+                    {{ selectedBot.id }} · 适配器 {{ selectedBot.adapter }}
+                  </div>
+                </div>
+                <v-chip
+                  size="small"
+                  :color="selectedBot.running ? 'success' : 'default'"
+                >
+                  {{ selectedBot.running ? "运行中" : "已停止" }}
+                </v-chip>
+                <v-btn
+                  size="small"
+                  variant="tonal"
+                  color="warning"
+                  :loading="restarting"
+                  @click="restart(selectedBot)"
+                >
+                  重启
+                </v-btn>
+              </div>
+
+              <v-alert
+                v-if="error"
+                type="error"
+                variant="tonal"
+                class="mb-4"
+                closable
+                @click:close="error = ''"
+              >
+                {{ error }}
+              </v-alert>
+
+              <v-card variant="outlined" class="mb-4">
+                <v-card-title>网关</v-card-title>
+                <v-card-text>
+                  <v-table density="compact">
+                    <tbody>
+                      <tr>
+                        <td class="text-medium-emphasis">连接状态</td>
+                        <td>
+                          {{
+                            selectedGateway?.connected ? "已连接" : "未连接"
+                          }}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td class="text-medium-emphasis">延迟</td>
+                        <td>
+                          {{
+                            selectedGateway?.ping !== undefined &&
+                            selectedGateway.ping >= 0
+                              ? `${selectedGateway.ping} ms`
+                              : "—"
+                          }}
+                        </td>
+                      </tr>
+                      <tr v-if="selectedGateway?.username">
+                        <td class="text-medium-emphasis">用户名</td>
+                        <td>{{ selectedGateway.username }}</td>
+                      </tr>
+                      <tr v-if="selectedGateway?.guilds !== undefined">
+                        <td class="text-medium-emphasis">服务器数</td>
+                        <td>{{ selectedGateway.guilds }}</td>
+                      </tr>
+                      <tr>
+                        <td class="text-medium-emphasis">重连次数</td>
+                        <td>{{ selectedGateway?.reconnects ?? "—" }}</td>
+                      </tr>
+                    </tbody>
+                  </v-table>
+                </v-card-text>
+              </v-card>
+
+              <v-card
+                v-if="selectedBot.plugins?.length"
+                variant="outlined"
+                class="mb-4"
+              >
+                <v-card-title>插件</v-card-title>
+                <v-data-table
+                  :headers="pluginHeaders"
+                  :items="selectedBot.plugins"
+                  density="compact"
+                  :items-per-page="20"
+                />
+              </v-card>
+
+              <v-card
+                v-if="selectedBot.modelHealth !== undefined"
+                variant="outlined"
+                class="mb-4"
+              >
+                <v-card-title>模型健康</v-card-title>
+                <v-card-text>
+                  <pre
+                    class="text-body-2"
+                    style="white-space: pre-wrap"
+                    >{{ JSON.stringify(selectedBot.modelHealth, null, 2) }}</pre
+                  >
+                </v-card-text>
+              </v-card>
+
+              <v-alert type="info" variant="tonal">
+                平台的新增、编辑与删除暂无独立接口，通过配置发布管理（见配置页）。
+              </v-alert>
+            </div>
 
             <div v-else class="platform-empty-state">
               <v-icon size="48" color="grey-lighten-1"
                 >mdi-cursor-default-click</v-icon
               >
-              <p>{{ tm("workspace.selectHint") }}</p>
+              <p>选择一个平台查看网关状态</p>
             </div>
           </main>
         </div>
       </div>
     </v-container>
-
-    <AddNewPlatform
-      v-model:show="showAddPlatformDialog"
-      :metadata="metadata"
-      :config_data="configData"
-      :updating-mode="false"
-      @show-toast="showToast"
-      @refresh-config="handlePlatformCreated"
-    />
-
-    <DeletePlatformDialog
-      v-model:platform="platformToDelete"
-      @deleted="handlePlatformDeleted"
-    />
-
-    <v-dialog v-model="showWebhookDialog" max-width="600">
-      <v-card>
-        <v-card-title class="text-h3 pa-4 pb-0 pl-6 d-flex align-center">
-          <v-icon class="me-2" color="primary">mdi-webhook</v-icon>
-          {{ tm("webhookDialog.title") }}
-        </v-card-title>
-        <v-card-text class="px-4 pb-2">
-          <p class="text-body-2 text-medium-emphasis mb-3">
-            {{ tm("webhookDialog.description") }}
-          </p>
-          <v-text-field
-            :model-value="currentWebhookUrl"
-            readonly
-            variant="outlined"
-            hide-details
-          >
-            <template #append-inner>
-              <v-btn
-                icon="mdi-content-copy"
-                size="small"
-                variant="text"
-                @click="copyWebhookUrl(currentWebhookUuid)"
-              />
-            </template>
-          </v-text-field>
-        </v-card-text>
-        <v-card-actions class="pa-4 pt-2">
-          <v-spacer />
-          <v-btn
-            variant="tonal"
-            color="primary"
-            @click="showWebhookDialog = false"
-          >
-            {{ tm("webhookDialog.close") }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
-    <v-dialog v-model="showQrDialog" max-width="480">
-      <v-card>
-        <v-card-title class="text-h3 pa-4 pb-0 pl-6 d-flex align-center">
-          <v-icon class="me-2">mdi-qrcode</v-icon>
-          {{ tm("platformQr.title") }}
-        </v-card-title>
-        <v-card-text class="px-4 pb-4">
-          <div class="platform-qr-status">
-            {{ tm("platformQr.status") }}:
-            {{
-              getPlatformQrLoginStat(currentQrPlatformId)?.qr_status ||
-              tm("platformQr.waiting")
-            }}
-          </div>
-          <QrCodeViewer
-            :value="
-              getPlatformQrLoginStat(currentQrPlatformId)?.qrcode_img_content ||
-              getPlatformQrLoginStat(currentQrPlatformId)?.qrcode ||
-              ''
-            "
-            :alt="tm('platformQr.title')"
-          />
-        </v-card-text>
-        <v-card-actions class="pa-4 pt-0">
-          <v-spacer />
-          <v-btn variant="tonal" color="primary" @click="showQrDialog = false">
-            {{ tm("platformQr.close") }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-
-    <v-dialog v-model="showErrorDialog" max-width="700">
-      <v-card>
-        <v-card-title class="text-h3 pa-4 pb-0 pl-6 d-flex align-center">
-          <v-icon class="me-2" color="error">mdi-alert-circle</v-icon>
-          {{ tm("errorDialog.title") }}
-        </v-card-title>
-        <v-card-text v-if="currentErrorPlatform" class="px-4 pb-4">
-          <div class="mb-3">
-            <strong>{{ tm("errorDialog.platformId") }}:</strong>
-            {{ currentErrorPlatform.id }}
-          </div>
-          <div class="mb-3">
-            <strong>{{ tm("errorDialog.errorCount") }}:</strong>
-            {{ currentErrorPlatform.error_count }}
-          </div>
-          <div v-if="currentErrorPlatform.last_error" class="error-details">
-            <div class="mb-2">
-              <strong>{{ tm("errorDialog.lastError") }}:</strong>
-            </div>
-            <v-alert type="error" variant="tonal" class="mb-3">
-              <div class="error-message">
-                {{ currentErrorPlatform.last_error.message }}
-              </div>
-              <div class="error-time text-caption text-medium-emphasis mt-1">
-                {{ tm("errorDialog.occurredAt") }}:
-                {{
-                  new Date(
-                    currentErrorPlatform.last_error.timestamp,
-                  ).toLocaleString()
-                }}
-              </div>
-            </v-alert>
-            <div v-if="currentErrorPlatform.last_error.traceback">
-              <div class="mb-2">
-                <strong>{{ tm("errorDialog.traceback") }}:</strong>
-              </div>
-              <pre class="traceback-box">{{
-                currentErrorPlatform.last_error.traceback
-              }}</pre>
-            </div>
-          </div>
-        </v-card-text>
-        <v-card-actions class="pa-4 pt-0">
-          <v-spacer />
-          <v-btn
-            variant="tonal"
-            color="primary"
-            @click="showErrorDialog = false"
-          >
-            {{ tm("errorDialog.close") }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
 
     <v-snackbar
       v-model="snackbar.show"
@@ -321,237 +258,157 @@
   </div>
 </template>
 
-<script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { botApi, fileApi, systemConfigApi } from "@/api/v1";
-import AddNewPlatform from "@/components/platform/AddNewPlatform.vue";
-import DeletePlatformDialog from "@/components/platform/DeletePlatformDialog.vue";
-import PlatformEditor from "@/components/platform/PlatformEditor.vue";
-import QrCodeViewer from "@/components/shared/QrCodeViewer.vue";
-import { mergeDynamicTranslations, useModuleI18n } from "@/i18n/composables";
-import { copyToClipboard } from "@/utils/clipboard";
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { confirmed, mohoApi } from "@/api/moho";
 import { getPlatformIcon } from "@/utils/platformUtils";
 
-const { tm } = useModuleI18n("features/platform");
+interface GatewayView {
+  connected?: boolean;
+  ping?: number;
+  username?: string;
+  guilds?: number;
+  reconnects?: number;
+}
 
-const configData = ref({});
-const metadata = ref({});
-const loadingPlatforms = ref(true);
-const selectedPlatformId = ref(null);
-const showAddPlatformDialog = ref(false);
-const platformToDelete = ref(null);
-const platformStats = ref({});
-const showWebhookDialog = ref(false);
-const currentWebhookUuid = ref("");
-const showQrDialog = ref(false);
-const currentQrPlatformId = ref("");
-const showErrorDialog = ref(false);
-const currentErrorPlatform = ref(null);
+interface BotRow {
+  id: string;
+  name?: string;
+  adapter?: string;
+  running?: boolean;
+  gateway?: GatewayView;
+  plugins?: { id: string; state: string; errors: number }[];
+  modelHealth?: unknown;
+  [key: string]: unknown;
+}
+
+const loading = ref(false);
+const restarting = ref(false);
+const error = ref("");
+const bots = ref<BotRow[]>([]);
+const selectedBotId = ref<string | null>(null);
+const selectedGateway = ref<GatewayView | null>(null);
 const snackbar = ref({ show: false, message: "", color: "success" });
-let statsRefreshInterval = null;
+let refreshInterval: number | null = null;
 
-const platforms = computed(() => configData.value.platform || []);
-
-const selectedPlatform = computed(
-  () =>
-    platforms.value.find(
-      (platform) => platform.id === selectedPlatformId.value,
-    ) || null,
+const selectedBot = computed(
+  () => bots.value.find((bot) => bot.id === selectedBotId.value) || null,
 );
 
-const platformOptions = computed(() =>
-  platforms.value.map((platform) => ({
-    title: platform.id,
-    subtitle: `${getPlatformStatusLabel(platform)} · ${platform.type || ""}`,
-    value: platform.id,
-    platform,
+const botOptions = computed(() =>
+  bots.value.map((bot) => ({
+    title: bot.name || bot.id,
+    subtitle: `${getBotStatusLabel(bot)} · ${bot.adapter || ""}`,
+    value: bot.id,
+    bot,
   })),
 );
 
-const currentWebhookUrl = computed(() =>
-  getWebhookUrl(currentWebhookUuid.value),
-);
+const pluginHeaders = [
+  { title: "ID", key: "id" },
+  { title: "状态", key: "state" },
+  { title: "错误", key: "errors" },
+];
 
 onMounted(() => {
-  getConfig();
-  getPlatformStats();
-  statsRefreshInterval = window.setInterval(getPlatformStats, 5000);
-  window.addEventListener("astrbot-locale-changed", handleLocaleChange);
+  load();
+  refreshInterval = window.setInterval(load, 5000);
 });
 
 onBeforeUnmount(() => {
-  if (statsRefreshInterval) {
-    window.clearInterval(statsRefreshInterval);
+  if (refreshInterval) {
+    window.clearInterval(refreshInterval);
   }
-  window.removeEventListener("astrbot-locale-changed", handleLocaleChange);
 });
 
-async function getConfig(preferredPlatformId = null) {
-  loadingPlatforms.value = true;
+watch(selectedBotId, () => {
+  loadGateway();
+});
+
+async function load() {
+  loading.value = true;
   try {
-    const response = await systemConfigApi.runtime();
-    configData.value = response.data.data.config;
-    metadata.value = response.data.data.metadata;
-
-    const platformI18n = response.data.data.platform_i18n_translations;
-    if (platformI18n && typeof platformI18n === "object") {
-      mergeDynamicTranslations("features.config-metadata", platformI18n);
+    const res = await mohoApi.botsList();
+    const d = (res.data ?? {}) as Record<string, unknown>;
+    const list = Array.isArray(d.bots) ? (d.bots as BotRow[]) : [];
+    bots.value = list;
+    if (
+      selectedBotId.value &&
+      !list.some((bot) => bot.id === selectedBotId.value)
+    ) {
+      selectedBotId.value = null;
     }
-
-    const nextSelectedId = preferredPlatformId || selectedPlatformId.value;
-    if (platforms.value.some((platform) => platform.id === nextSelectedId)) {
-      selectedPlatformId.value = nextSelectedId;
-    } else {
-      selectedPlatformId.value = platforms.value[0]?.id || null;
+    if (!selectedBotId.value && list.length) {
+      selectedBotId.value = list[0].id;
     }
-  } catch (error) {
-    showError(error);
+    if (selectedBotId.value) {
+      await loadGateway();
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "读取平台列表失败";
   } finally {
-    loadingPlatforms.value = false;
+    loading.value = false;
   }
 }
 
-async function getPlatformStats() {
+async function loadGateway() {
+  const botId = selectedBotId.value;
+  if (!botId) {
+    selectedGateway.value = null;
+    return;
+  }
   try {
-    const response = await botApi.stats();
-    if (response.data.status !== "ok") return;
-    platformStats.value = Object.fromEntries(
-      (response.data.data.platforms || []).map((platform) => [
-        platform.id,
-        platform,
-      ]),
+    const res = await mohoApi.gatewayRead({ path: { botId } });
+    const d = (res.data ?? {}) as Record<string, unknown>;
+    selectedGateway.value = (d.gateway ?? d) as GatewayView;
+  } catch (e) {
+    console.warn("Failed to load gateway status:", e);
+    selectedGateway.value = selectedBot.value?.gateway ?? null;
+  }
+}
+
+async function restart(bot: BotRow) {
+  restarting.value = true;
+  error.value = "";
+  try {
+    await confirmed(
+      `重启机器人 ${bot.name || bot.id}`,
+      "POST",
+      `/api/bots/${encodeURIComponent(bot.id)}/restart`,
+      {},
+      (h) => mohoApi.runtimeRestart({ path: { botId: bot.id }, headers: h }),
     );
-  } catch (error) {
-    console.warn("Failed to load bot runtime status:", error);
+    showToast("机器人重启请求已发送。", "success");
+    await load();
+  } catch (e) {
+    if (e instanceof Error && e.message === "操作已取消") return;
+    error.value = e instanceof Error ? e.message : "重启失败";
+  } finally {
+    restarting.value = false;
   }
 }
 
-function handleLocaleChange() {
-  getConfig(selectedPlatformId.value);
+function getBotIcon(bot: BotRow | null | undefined) {
+  return getPlatformIcon(bot?.adapter || bot?.id || "") || "/favicon.svg";
 }
 
-function getPlatformIconFor(platform) {
-  const templates =
-    metadata.value["platform_group"]?.metadata?.platform?.config_template || {};
-  const template =
-    templates[platform?.type] ||
-    templates[platform?.id] ||
-    Object.values(templates).find((item) => item?.type === platform?.type);
-  if (template?.logo_token) {
-    return fileApi.tokenUrl(template.logo_token);
-  }
-  return getPlatformIcon(platform?.type || platform?.id);
+function getBotStatusLabel(bot: BotRow) {
+  if (!bot.running) return "已停止";
+  return bot.gateway?.connected ? "运行中 · 已连接" : "运行中 · 未连接";
 }
 
-function getPlatformStat(platformId) {
-  return platformStats.value[platformId] || null;
+function getBotStatusClass(bot: BotRow) {
+  if (!bot.running) return "bot-list-item__status-dot--disabled";
+  if (bot.gateway?.connected) return "bot-list-item__status-dot--success";
+  return "bot-list-item__status-dot--warning";
 }
 
-function getPlatformStatusLabel(platform) {
-  if (platform.enable === false) {
-    return tm("workspace.disabled");
-  }
-  const status = getPlatformStat(platform.id)?.status || "unknown";
-  return tm(`runtimeStatus.${status}`);
-}
-
-function getPlatformStatusClass(platform) {
-  if (platform.enable === false) return "bot-list-item__status-dot--disabled";
-  const status = getPlatformStat(platform.id)?.status;
-  if (status === "running") return "bot-list-item__status-dot--success";
-  if (status === "error") return "bot-list-item__status-dot--error";
-  if (status === "pending") return "bot-list-item__status-dot--warning";
-  return "bot-list-item__status-dot--disabled";
-}
-
-async function handlePlatformDeleted(platformId) {
-  if (selectedPlatformId.value === platformId) {
-    selectedPlatformId.value = null;
-  }
-  await getConfig();
-  showSuccess(tm("messages.deleteSuccess"));
-}
-
-function handlePlatformCreated(platformId) {
-  getConfig(platformId || null);
-  getPlatformStats();
-}
-
-function handlePlatformSaved(platformId) {
-  getConfig(platformId);
-  getPlatformStats();
-}
-
-function getPlatformQrLoginStat(platformId) {
-  const stat = getPlatformStat(platformId);
-  if (stat?.weixin_oc) return stat.weixin_oc;
-  if (stat && typeof stat === "object") {
-    return Object.values(stat).find(
-      (value) =>
-        value &&
-        typeof value === "object" &&
-        ("qrcode_img_content" in value || "qrcode" in value),
-    );
-  }
-  return null;
-}
-
-function hasQrPayload(platformId) {
-  const stat = getPlatformQrLoginStat(platformId);
-  return Boolean(stat?.qrcode_img_content || stat?.qrcode);
-}
-
-function openPlatformQrDialog(platformId) {
-  currentQrPlatformId.value = platformId;
-  showQrDialog.value = true;
-}
-
-function showErrorDetails(platform) {
-  const stat = getPlatformStat(platform.id);
-  if (!stat || stat.error_count <= 0) return;
-  currentErrorPlatform.value = stat;
-  showErrorDialog.value = true;
-}
-
-function getWebhookUrl(webhookUuid) {
-  const callbackBase =
-    configData.value.callback_api_base || "http(s)://<your-domain-or-ip>";
-  return `${callbackBase.replace(
-    /\/$/,
-    "",
-  )}/api/v1/webhooks/platforms/${webhookUuid}`;
-}
-
-function openWebhookDialog(webhookUuid) {
-  currentWebhookUuid.value = webhookUuid;
-  showWebhookDialog.value = true;
-}
-
-async function copyWebhookUrl(webhookUuid) {
-  const copied = await copyToClipboard(getWebhookUrl(webhookUuid));
-  if (copied) {
-    showSuccess(tm("webhookCopied"));
-  } else {
-    showError(tm("webhookCopyFailed"));
-  }
-}
-
-function showToast({ message, type }) {
+function showToast(message: string, type: "success" | "error") {
   snackbar.value = {
     show: true,
     message,
     color: type === "error" ? "error" : "success",
   };
-}
-
-function showSuccess(message) {
-  showToast({ message, type: "success" });
-}
-
-function showError(error) {
-  const message =
-    error?.response?.data?.message || error?.message || String(error);
-  showToast({ message, type: "error" });
 }
 </script>
 
@@ -764,19 +621,6 @@ function showError(error) {
   background: rgb(var(--v-theme-warning));
 }
 
-.bot-list-item__actions {
-  align-items: center;
-  display: flex;
-  flex: 0 0 auto;
-  opacity: 0;
-  padding-right: 4px;
-}
-
-.bot-list-item:hover .bot-list-item__actions,
-.bot-list-item--active .bot-list-item__actions {
-  opacity: 1;
-}
-
 .bot-list-empty,
 .platform-empty-state {
   align-items: center;
@@ -800,27 +644,49 @@ function showError(error) {
   min-height: 420px;
 }
 
-.platform-qr-status {
-  color: rgba(var(--v-theme-on-surface), 0.7);
-  font-size: 13px;
-  margin-bottom: 10px;
+.platform-detail {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px;
 }
 
-.error-message {
-  word-break: break-word;
+.platform-detail__head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
-.traceback-box {
-  background: #1e1e1e;
-  border-radius: 8px;
-  color: #d4d4d4;
+.platform-detail__icon {
+  flex: 0 0 auto;
+  height: 36px;
+  object-fit: contain;
+  width: 36px;
+}
+
+.platform-detail__copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.platform-detail__title {
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-detail__subtitle {
+  color: rgba(var(--v-theme-on-surface), 0.54);
   font-size: 12px;
-  line-height: 1.5;
-  max-height: 300px;
-  overflow: auto;
-  padding: 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 960px) {
