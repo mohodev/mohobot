@@ -3,7 +3,7 @@
 每天做一件，做完在对应行打勾并写上日期和提交 SHA，再提交推送。
 顺序按下面来，做完 5 件就停，等 Billy 给新任务。
 
-- [ ] 1. 平台页（Platforms）：把 AstrBot 的 PlatformPage 接到 MohoBot 的平台/网关接口上，验证构建和类型检查，提交并推送。
+- [x] 1. 平台页（Platforms）：把 AstrBot 的 PlatformPage 接到 MohoBot 的平台/网关接口上，验证构建和类型检查，提交并推送。—— 2026-11-23，e9aa3a0
 - [ ] 2. 人设页（Persona）：把 AstrBot 的 PersonaPage 接到 MohoBot 的角色接口上，验证构建和类型检查，提交并推送。
 - [ ] 3. 知识库页（Knowledge-base）：把 AstrBot 的知识库页接到 MohoBot 的知识库接口上，验证构建和类型检查，提交并推送。
 - [ ] 4. 配置发布（Config publishing）：把 AstrBot 的配置页接到 MohoBot 的配置发布接口上，验证构建和类型检查，提交并推送。
